@@ -53,6 +53,34 @@ class ClipboardController(QObject):
         except Exception as e:
             logger.error(f"清空历史记录时发生错误: {str(e)}")
     
+    def delete_item(self, index: int) -> None:
+        """删除指定索引的历史记录项"""
+        try:
+            self.service.delete_item(index)
+            self.history_updated.emit()
+            logger.info(f"已删除索引为 {index} 的历史记录项")
+        except Exception as e:
+            logger.error(f"删除历史记录项时发生错误: {str(e)}")
+    
     def get_history(self):
         """获取历史记录"""
-        return self.service.get_history() 
+        return self.service.get_history()
+    
+    def export_history(self, file_path: str) -> bool:
+        """导出历史记录到文件"""
+        try:
+            return self.service.export_history(file_path)
+        except Exception as e:
+            logger.error(f"导出历史记录时发生错误: {str(e)}")
+            return False
+    
+    def import_history(self, file_path: str) -> bool:
+        """从文件导入历史记录"""
+        try:
+            success = self.service.import_history(file_path)
+            if success:
+                self.history_updated.emit()
+            return success
+        except Exception as e:
+            logger.error(f"导入历史记录时发生错误: {str(e)}")
+            return False 

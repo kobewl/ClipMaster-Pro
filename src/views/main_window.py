@@ -9,7 +9,9 @@ from PyQt6.QtGui import QShortcut, QKeySequence
 from views.components.search_bar import SearchBar
 from views.components.history_list import HistoryList
 from views.components.tray_icon import TrayIcon
-from views.styles.main_style import MainStyle
+from views.components.settings_dialog import SettingsDialog
+from views.components.data_dialog import DataDialog
+from views.styles.main_style import MainStyle, DarkStyle, StyleManager
 from controllers.clipboard_controller import ClipboardController
 from controllers.hotkey_controller import HotkeyController
 from config.settings import Settings
@@ -29,6 +31,9 @@ class MainWindow(QMainWindow):
         self._start_geometry = None
         self._is_moving = False
         self.is_top = False
+        
+        # 加载主题设置
+        self.is_dark_mode = Settings.get("dark_mode", False)
         
         self._init_window()
         self._init_ui()
@@ -91,7 +96,7 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.history_list)
         
         # 设置样式
-        self.setStyleSheet(MainStyle.get_all_styles())
+        self._apply_theme()
         
         # 创建系统托盘图标
         self.tray_icon = TrayIcon(self)
@@ -109,6 +114,27 @@ class MainWindow(QMainWindow):
         
         # 添加弹性空间
         layout.addStretch()
+        
+        # 数据管理按钮
+        self.data_button = QPushButton("📊")
+        self.data_button.setObjectName("dataButton")
+        self.data_button.setFixedSize(32, 32)
+        self.data_button.setToolTip("数据管理")
+        layout.addWidget(self.data_button)
+        
+        # 设置按钮
+        self.settings_button = QPushButton("⚙️")
+        self.settings_button.setObjectName("settingsButton")
+        self.settings_button.setFixedSize(32, 32)
+        self.settings_button.setToolTip("设置")
+        layout.addWidget(self.settings_button)
+        
+        # 主题切换按钮
+        self.theme_button = QPushButton("🌓")
+        self.theme_button.setObjectName("themeButton")
+        self.theme_button.setFixedSize(32, 32)
+        self.theme_button.setToolTip("切换主题")
+        layout.addWidget(self.theme_button)
         
         # 关闭按钮
         close_button = QPushButton("×")
@@ -134,6 +160,7 @@ class MainWindow(QMainWindow):
         self.top_button.setObjectName("topButton")
         self.top_button.setCheckable(True)
         self.top_button.setFixedSize(32, 32)
+        self.top_button.setToolTip("窗口置顶")
         layout.addWidget(self.top_button)
         
         layout.addStretch()
@@ -150,12 +177,26 @@ class MainWindow(QMainWindow):
             
             # 历史记录列表连接
             self.history_list.itemCopied.connect(self._handle_item_copy)
+            self.history_list.itemDeleted.connect(self._handle_item_delete)
             
             # 置顶按钮连接
             self.top_button.clicked.connect(self.toggle_top_window)
             
+            # 主题切换按钮连接
+            self.theme_button.clicked.connect(self.toggle_theme)
+            
+            # 设置按钮连接
+            self.settings_button.clicked.connect(self.show_settings)
+            
+            # 数据管理按钮连接
+            self.data_button.clicked.connect(self.show_data_dialog)
+            
             # 托盘图标连接
             self.tray_icon.showWindowRequested.connect(self.show_and_activate)
+            self.tray_icon.clearHistoryRequested.connect(self.clipboard_controller.clear_history)
+            self.tray_icon.toggleThemeRequested.connect(self.toggle_theme)
+            self.tray_icon.settingsRequested.connect(self.show_settings)
+            self.tray_icon.dataManagementRequested.connect(self.show_data_dialog)
             self.tray_icon.quitRequested.connect(self.quit_application)
             
             # 初始加载历史记录
@@ -168,16 +209,18 @@ class MainWindow(QMainWindow):
         """初始化热键"""
         try:
             # 注册显示窗口的快捷键
-            self.show_shortcut = QShortcut(QKeySequence("Ctrl+O"), self)
+            show_key = Settings.get("hotkeys", {}).get("show_window", "Ctrl+O")
+            self.show_shortcut = QShortcut(QKeySequence(show_key), self)
             self.show_shortcut.activated.connect(self.show_and_activate)
             self.show_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-            logger.info("已注册 Ctrl+O 快捷键")
+            logger.info(f"已注册 {show_key} 快捷键")
             
             # 注册清空历史的快捷键
-            self.clear_shortcut = QShortcut(QKeySequence("Ctrl+Shift+C"), self)
+            clear_key = Settings.get("hotkeys", {}).get("clear_history", "Ctrl+Shift+C")
+            self.clear_shortcut = QShortcut(QKeySequence(clear_key), self)
             self.clear_shortcut.activated.connect(self.clipboard_controller.clear_history)
             self.clear_shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)
-            logger.info("已注册 Ctrl+Shift+C 快捷键")
+            logger.info(f"已注册 {clear_key} 快捷键")
         except Exception as e:
             logger.error(f"注册快捷键时发生错误: {str(e)}")
     
@@ -193,6 +236,10 @@ class MainWindow(QMainWindow):
     def _handle_item_copy(self, text: str):
         """处理项目复制"""
         self.clipboard_controller.copy_text(text)
+    
+    def _handle_item_delete(self, index: int):
+        """处理项目删除"""
+        self.clipboard_controller.delete_item(index)
     
     def show_and_activate(self):
         """显示并激活窗口"""
@@ -221,6 +268,18 @@ class MainWindow(QMainWindow):
         self.show()
         self.activateWindow()
     
+    def toggle_theme(self):
+        """切换主题"""
+        self.is_dark_mode = not self.is_dark_mode
+        Settings.set("dark_mode", self.is_dark_mode)
+        self._apply_theme()
+        logger.info(f"已切换到{'暗色' if self.is_dark_mode else '亮色'}主题")
+    
+    def _apply_theme(self):
+        """应用主题"""
+        style = StyleManager.get_style(self.is_dark_mode)
+        self.setStyleSheet(style)
+    
     def quit_application(self):
         """退出应用程序"""
         try:
@@ -238,6 +297,47 @@ class MainWindow(QMainWindow):
             import sys
             sys.exit(0)
     
+    def show_settings(self):
+        """显示设置对话框"""
+        try:
+            settings_dialog = SettingsDialog(self)
+            settings_dialog.settingsChanged.connect(self._apply_settings)
+            settings_dialog.exec()
+        except Exception as e:
+            logger.error(f"显示设置对话框时发生错误: {str(e)}")
+    
+    def show_data_dialog(self):
+        """显示数据管理对话框"""
+        try:
+            data_dialog = DataDialog(self.clipboard_controller, self)
+            data_dialog.dataChanged.connect(self._update_history)
+            data_dialog.exec()
+        except Exception as e:
+            logger.error(f"显示数据管理对话框时发生错误: {str(e)}")
+    
+    def _apply_settings(self):
+        """应用设置"""
+        try:
+            # 应用主题
+            self.is_dark_mode = Settings.get("dark_mode", False)
+            self._apply_theme()
+            
+            # 更新最大历史记录数
+            max_history = Settings.get("max_history", 100)
+            self.clipboard_controller.service.set_max_history(max_history)
+            
+            # 更新自动保存间隔
+            auto_save_interval = Settings.get("auto_save_interval", 60)
+            self.clipboard_controller.service.update_auto_save_interval(auto_save_interval)
+            
+            # 更新历史记录保留天数
+            retention_days = Settings.get("retention_days", 10)
+            self.clipboard_controller.service.set_retention_days(retention_days)
+            
+            logger.info("已应用新设置")
+        except Exception as e:
+            logger.error(f"应用设置时发生错误: {str(e)}")
+    
     # 窗口拖动和调整大小相关方法
     def mousePressEvent(self, event: QMouseEvent):
         """处理鼠标按下事件"""
@@ -248,16 +348,14 @@ class MainWindow(QMainWindow):
     
     def mouseMoveEvent(self, event: QMouseEvent):
         """处理鼠标移动事件"""
-        try:
-            if self._is_moving and self._start_pos:
-                # 计算移动距离
-                delta = event.globalPosition().toPoint() - self._start_pos
-                # 更新窗口位置
-                self.move(self.x() + delta.x(), self.y() + delta.y())
-                # 更新起始位置
-                self._start_pos = event.globalPosition().toPoint()
-        except Exception as e:
-            logger.error(f"窗口移动失败: {str(e)}")
+        # 处理窗口拖动
+        if self._is_moving and self._start_pos:
+            # 计算移动的距离
+            delta = event.globalPosition().toPoint() - self._start_pos
+            # 更新窗口位置
+            self.move(self.x() + delta.x(), self.y() + delta.y())
+            # 更新起始位置
+            self._start_pos = event.globalPosition().toPoint()
     
     def mouseReleaseEvent(self, event: QMouseEvent):
         """处理鼠标释放事件"""
@@ -267,7 +365,5 @@ class MainWindow(QMainWindow):
     
     def leaveEvent(self, event):
         """处理鼠标离开事件"""
-        try:
-            self.setCursor(Qt.CursorShape.ArrowCursor)
-        except Exception as e:
-            logger.error(f"鼠标离开事件处理错误: {str(e)}") 
+        self._is_moving = False
+        self._start_pos = None 

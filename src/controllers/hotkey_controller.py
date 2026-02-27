@@ -1,47 +1,76 @@
-from PyQt6.QtCore import QObject
-from PyQt6.QtGui import QKeySequence, QShortcut
-from PyQt6.QtWidgets import QApplication
+import keyboard
+from PyQt6.QtCore import QObject, pyqtSignal
 from utils.logger import logger
 
 class HotkeyController(QObject):
-    """热键控制器"""
+    """全局热键控制器"""
+    
+    # 定义信号以安全地向主线程派发回调
+    on_hotkey_triggered = pyqtSignal(str)
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self.shortcuts = {}
-        self.app = QApplication.instance()
+        
+        # 将接收到的信号与其对应的实际回调关联起来
+        self.callbacks = {}
+        self.on_hotkey_triggered.connect(self._handle_signal)
+    
+    def _convert_key_sequence(self, qkey_sequence: str) -> str:
+        """将 QKeySequence (如 Ctrl+O) 转换为 keyboard (如 ctrl+o)"""
+        if not qkey_sequence:
+            return ""
+        return qkey_sequence.lower().replace("ctrl", "ctrl").replace("shift", "shift").replace("alt", "alt")
     
     def register_shortcut(self, key_sequence: str, callback) -> bool:
         """注册全局热键"""
         try:
-            if key_sequence in self.shortcuts:
+            if not key_sequence:
                 return False
+                
+            kb_sequence = self._convert_key_sequence(key_sequence)
             
-            # 创建全局快捷键
-            shortcut = QShortcut(QKeySequence(key_sequence), self.parent())
-            shortcut.setContext(Qt.ShortcutContext.ApplicationShortcut)  # 设置为应用程序级快捷键
-            shortcut.activated.connect(callback)
-            self.shortcuts[key_sequence] = shortcut
+            if kb_sequence in self.shortcuts:
+                self.unregister_shortcut(key_sequence)
             
-            logger.info(f"已注册热键: {key_sequence}")
+            # 采用 lambda 表达式发出绑定了原本按键字符的信号
+            hook = keyboard.add_hotkey(kb_sequence, lambda: self.on_hotkey_triggered.emit(key_sequence), suppress=True)
+            
+            self.shortcuts[kb_sequence] = hook
+            self.callbacks[key_sequence] = callback
+            
+            logger.info(f"已注册全局热键: {key_sequence} -> {kb_sequence}")
             return True
             
         except Exception as e:
-            logger.error(f"注册热键时发生错误: {str(e)}")
+            logger.error(f"注册全局热键时发生错误: {str(e)}")
             return False
     
     def unregister_shortcut(self, key_sequence: str) -> bool:
         """注销热键"""
         try:
-            if key_sequence not in self.shortcuts:
+            if not key_sequence:
                 return False
                 
-            shortcut = self.shortcuts.pop(key_sequence)
-            shortcut.setEnabled(False)
-            shortcut.deleteLater()
+            kb_sequence = self._convert_key_sequence(key_sequence)
             
-            logger.info(f"已注销热键: {key_sequence}")
-            return True
+            if kb_sequence in self.shortcuts:
+                # 移除热键
+                keyboard.remove_hotkey(self.shortcuts[kb_sequence])
+                del self.shortcuts[kb_sequence]
+                
+                if key_sequence in self.callbacks:
+                    del self.callbacks[key_sequence]
+                
+                logger.info(f"已注销旧热键: {key_sequence}")
+                return True
+            return False
         except Exception as e:
             logger.error(f"注销热键时发生错误: {str(e)}")
             return False 
+
+    def _handle_signal(self, key_sequence: str):
+        """由于全局热键在非主线程触发，在这里接管回主线程"""
+        callback = self.callbacks.get(key_sequence)
+        if callback:
+            callback()

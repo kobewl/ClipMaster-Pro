@@ -194,6 +194,7 @@ class HistoryList(QListWidget):
         super().__init__(parent)
         self._items = []  # ClipboardItem 列表
         self._item_widgets = {}  # content_hash -> widget
+        self._prev_selected_row = -1  # 上一次选中的行号
         self._init_ui()
         
         # 延迟加载定时器
@@ -264,48 +265,45 @@ class HistoryList(QListWidget):
         """过滤列表项（支持模糊搜索）"""
         text = text.lower().strip()
         
+        items_by_hash = {it.content_hash: it for it in self._items}
+        
         for i in range(self.count()):
             list_item = self.item(i)
             content_hash = list_item.data(Qt.ItemDataRole.UserRole)
-            
-            # 找到对应的 ClipboardItem
-            item = None
-            for it in self._items:
-                if it.content_hash == content_hash:
-                    item = it
-                    break
+            item = items_by_hash.get(content_hash)
             
             if item is None:
                 list_item.setHidden(True)
                 continue
             
-            # 检查收藏过滤
             if favorites_only and not item.is_favorite:
                 list_item.setHidden(True)
                 continue
             
-            # 检查搜索文本
             if text:
-                # 搜索内容、标签
                 searchable = item.content.lower()
                 if item.tags:
                     searchable += ' ' + ' '.join(item.tags).lower()
-                
-                # 模糊匹配
-                match = text in searchable
-                list_item.setHidden(not match)
+                list_item.setHidden(text not in searchable)
             else:
                 list_item.setHidden(False)
     
     def _on_selection_changed(self, current_row: int):
-        """当选中行变化时，更新所有 item widget 的选中状态边框"""
-        for i in range(self.count()):
-            list_item = self.item(i)
-            if list_item:
-                content_hash = list_item.data(Qt.ItemDataRole.UserRole)
-                widget = self._item_widgets.get(content_hash)
-                if widget:
-                    widget.set_selected(i == current_row)
+        """当选中行变化时，只更新旧选中项和新选中项的样式"""
+        prev = self._prev_selected_row
+        if prev == current_row:
+            return
+        
+        for row in (prev, current_row):
+            if 0 <= row < self.count():
+                list_item = self.item(row)
+                if list_item:
+                    content_hash = list_item.data(Qt.ItemDataRole.UserRole)
+                    widget = self._item_widgets.get(content_hash)
+                    if widget:
+                        widget.set_selected(row == current_row)
+        
+        self._prev_selected_row = current_row
     
     def _handle_item_click(self, list_item: QListWidgetItem):
         """处理项目点击 (仅选中，不做复制)"""

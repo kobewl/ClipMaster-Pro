@@ -30,6 +30,15 @@ class DatabaseManager:
             self._local.connection = sqlite3.connect(self.db_path, check_same_thread=False)
             self._local.connection.row_factory = sqlite3.Row
         return self._local.connection
+
+    def close(self):
+        """关闭当前线程的数据库连接"""
+        if hasattr(self._local, 'connection') and self._local.connection is not None:
+            try:
+                self._local.connection.close()
+            except Exception:
+                pass
+            self._local.connection = None
     
     def _init_db(self):
         """初始化数据库"""

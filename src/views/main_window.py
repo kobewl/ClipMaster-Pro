@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QLabel, QFrame, QApplication, QSizePolicy
 )
-from PyQt6.QtCore import Qt, QPoint, QTimer, QTimer
+from PyQt6.QtCore import Qt, QPoint, QTimer
 from PyQt6.QtGui import QMouseEvent, QScreen, QShortcut, QKeySequence
 import keyboard
 
@@ -40,11 +40,23 @@ class MainWindow(QMainWindow):
         self._init_connections()
         self._init_hotkeys()
         
+        # 防抖定时器：合并短时间内的多次 _update_history 请求
+        self._update_debounce = QTimer(self)
+        self._update_debounce.setSingleShot(True)
+        self._update_debounce.setInterval(150)
+        self._update_debounce.timeout.connect(self._do_update_history)
+        
+        # 搜索防抖定时器
+        self._search_debounce = QTimer(self)
+        self._search_debounce.setSingleShot(True)
+        self._search_debounce.setInterval(300)
+        self._search_debounce.timeout.connect(self._do_update_history)
+        
         # 窗口居中显示
         self.center_window()
         
         # 延迟加载历史记录
-        QTimer.singleShot(100, self._update_history)
+        QTimer.singleShot(100, self._do_update_history)
     
     def _init_window(self):
         """初始化窗口属性"""
@@ -267,7 +279,12 @@ class MainWindow(QMainWindow):
             logger.error(f"注册全局热键时发生错误: {str(e)}")
     
     def _update_history(self):
-        """更新历史记录列表"""
+        """请求更新历史记录列表（防抖，合并短时间内的多次调用）"""
+        self._update_debounce.stop()
+        self._update_debounce.start()
+
+    def _do_update_history(self):
+        """实际执行历史记录列表更新"""
         try:
             search_text = self.search_bar.text()
             history = self.clipboard_controller.get_history(
@@ -277,7 +294,6 @@ class MainWindow(QMainWindow):
             )
             self.history_list.update_items(history)
             
-            # 更新状态栏
             count = self.clipboard_controller.get_count()
             self.status_bar.setText(f"共 {count} 条记录")
             
@@ -296,8 +312,9 @@ class MainWindow(QMainWindow):
         self.status_bar.setText(f"共 {count} 条记录 | 刚刚添加新内容")
     
     def _on_search_changed(self, text: str):
-        """搜索文本变化"""
-        self._update_history()
+        """搜索文本变化（使用独立的300ms防抖，避免每次按键都查询数据库）"""
+        self._search_debounce.stop()
+        self._search_debounce.start()
     
     def _on_fav_filter_changed(self, checked: bool):
         """收藏筛选变化"""
@@ -424,8 +441,10 @@ class MainWindow(QMainWindow):
         self.setStyleSheet(style)
     
     def quit_application(self):
-        """退出应用程序"""
+        """退出应用程序，清理所有资源"""
         try:
+            self.hotkey_controller.unregister_all()
+            self.clipboard_controller.service.db.close()
             self.tray_icon.hide()
             app = QApplication.instance()
             if app:

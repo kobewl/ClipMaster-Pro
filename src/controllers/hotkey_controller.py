@@ -34,7 +34,7 @@ class HotkeyController(QObject):
                 self.unregister_shortcut(key_sequence)
             
             # 采用 lambda 表达式发出绑定了原本按键字符的信号
-            hook = keyboard.add_hotkey(kb_sequence, lambda: self.on_hotkey_triggered.emit(key_sequence), suppress=True)
+            hook = keyboard.add_hotkey(kb_sequence, lambda: self.on_hotkey_triggered.emit(key_sequence), suppress=False)
             
             self.shortcuts[kb_sequence] = hook
             self.callbacks[key_sequence] = callback
@@ -68,6 +68,16 @@ class HotkeyController(QObject):
         except Exception as e:
             logger.error(f"注销热键时发生错误: {str(e)}")
             return False 
+
+    def unregister_all(self):
+        """注销所有已注册的热键"""
+        for kb_sequence, hook in list(self.shortcuts.items()):
+            try:
+                keyboard.remove_hotkey(hook)
+            except Exception as e:
+                logger.warning(f"注销热键 {kb_sequence} 时出错: {e}")
+        self.shortcuts.clear()
+        self.callbacks.clear()
 
     def _handle_signal(self, key_sequence: str):
         """由于全局热键在非主线程触发，在这里接管回主线程"""

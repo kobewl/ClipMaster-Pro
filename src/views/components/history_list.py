@@ -1,11 +1,11 @@
 from PyQt6.QtWidgets import (
-    QListWidget, QAbstractItemView, QMenu, 
-    QApplication, QMessageBox, QTextEdit,
-    QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-    QPushButton, QListWidgetItem
+   QListWidget, QAbstractItemView, QMenu,
+   QApplication, QMessageBox, QTextEdit,
+   QWidget, QHBoxLayout, QVBoxLayout, QLabel,
+   QPushButton, QListWidgetItem
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QSize, QTimer
-from PyQt6.QtGui import QAction, QFont, QIcon, QColor
+from PyQt6.QtGui import QAction, QFont, QIcon, QColor, QPixmap, QImage
 
 from models.clipboard_item import ClipboardItem, ContentType
 from utils.logger import logger
@@ -14,68 +14,173 @@ from utils.logger import logger
 class HistoryListItem(QWidget):
     """自定义历史列表项"""
     
+    # 亮色主题颜色
+    _LIGHT = {
+        "border": "#93C5FD",
+        "selected_border": "#FF8C00",
+        "selected_bg": "#FFF3E0",
+        "favorite_bg": "rgba(254, 243, 199, 0.5)",
+    }
+    # 暗色主题颜色
+    _DARK = {
+        "border": "#1E3A8A",
+        "selected_border": "#FF8C00",
+        "selected_bg": "#4A3525",
+        "favorite_bg": "rgba(74, 53, 37, 0.5)",
+    }
+    
+    # 图片缩略图尺寸
+    _THUMB_W = 60
+    _THUMB_H = 44
+
     def __init__(self, item: ClipboardItem, parent=None):
         super().__init__(parent)
         self.item_data = item
+        self._selected = False
+        self._thumbnail: QPixmap | None = None  # 缩略图缓存
+        # 允许 QWidget 渲染 stylesheet 中的 background 和 border
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._init_ui()
-    
+
     def _init_ui(self):
         """初始化UI"""
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
-        layout.setSpacing(12)
-        
-        # 图标
-        self.icon_label = QLabel(self.item_data.get_icon())
-        self.icon_label.setStyleSheet("font-size: 18px;")
+        layout.setContentsMargins(10, 8, 10, 8)
+        layout.setSpacing(10)
+
+        # 左侧：图标或缩略图
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self.icon_label)
-        
+
         # 内容区域
         content_layout = QVBoxLayout()
-        content_layout.setSpacing(4)
-        
-        # 预览文本
-        preview = self.item_data.preview_text(60)
-        self.text_label = QLabel(preview)
+        content_layout.setSpacing(3)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+
+        self.text_label = QLabel()
         self.text_label.setWordWrap(False)
+        self.text_label.setStyleSheet("border: none; background: transparent;")
         font = QFont("Segoe UI", 10)
         font.setWeight(QFont.Weight.Medium)
         self.text_label.setFont(font)
         content_layout.addWidget(self.text_label)
-        
-        # 时间戳
-        time_str = self.item_data.timestamp.strftime("%m-%d %H:%M")
-        self.time_label = QLabel(time_str)
-        self.time_label.setStyleSheet("color: #9CA3AF; font-size: 11px;")
+
+        self.time_label = QLabel()
+        self.time_label.setStyleSheet(
+            "color: #9CA3AF; font-size: 11px; border: none; background: transparent;"
+        )
         content_layout.addWidget(self.time_label)
-        
+
         layout.addLayout(content_layout, 1)
-        
+
         # 收藏按钮
-        self.fav_button = QPushButton("⭐" if self.item_data.is_favorite else "☆")
+        self.fav_button = QPushButton()
         self.fav_button.setObjectName("iconButton")
         self.fav_button.setFixedSize(32, 32)
         self.fav_button.setStyleSheet("border: none; background: transparent; font-size: 16px;")
         layout.addWidget(self.fav_button)
-        
-        # 根据收藏状态调整样式
-        self._update_favorite_style()
-    
-    def _update_favorite_style(self):
-        """更新收藏样式"""
-        if self.item_data.is_favorite:
-            self.setStyleSheet("background-color: rgba(254, 243, 199, 0.5);")
+
+        self._refresh_display()
+        self._update_style()
+
+    # ── 缩略图生成 ────────────────────────────────────────────
+    def _make_thumbnail(self) -> QPixmap | None:
+        """将 base64 图片内容解码并缩放为缩略图，结果缓存"""
+        if self._thumbnail is not None:
+            return self._thumbnail
+        try:
+            content = self.item_data.content
+            if content.startswith('data:image'):
+                import base64 as _b64
+                raw = _b64.b64decode(content.split(',', 1)[1])
+                img = QImage()
+                if img.loadFromData(raw) and not img.isNull():
+                    pix = QPixmap.fromImage(img)
+                    self._thumbnail = pix.scaled(
+                        self._THUMB_W, self._THUMB_H,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    return self._thumbnail
+        except Exception as e:
+            logger.warning(f"生成缩略图失败: {e}")
+        return None
+
+    # ── 内容刷新 ──────────────────────────────────────────────
+    def _refresh_display(self):
+        """刷新图标/缩略图、文字、时间、收藏按钮"""
+        item = self.item_data
+
+        if item.content_type == ContentType.IMAGE:
+            # 图片：显示缩略图
+            self.icon_label.setFixedSize(self._THUMB_W, self._THUMB_H)
+            thumb = self._make_thumbnail()
+            if thumb:
+                self.icon_label.setPixmap(thumb)
+                self.icon_label.setText("")
+                self.icon_label.setStyleSheet(
+                    "border: none; background: transparent; border-radius: 4px;"
+                )
+            else:
+                self.icon_label.setPixmap(QPixmap())
+                self.icon_label.setText("🖼️")
+                self.icon_label.setStyleSheet(
+                    "font-size: 20px; border: none; background: transparent;"
+                )
         else:
-            self.setStyleSheet("")
+            # 其他类型：emoji 图标
+            self.icon_label.setFixedSize(28, 28)
+            self.icon_label.setPixmap(QPixmap())
+            self.icon_label.setText(item.get_icon())
+            self.icon_label.setStyleSheet("font-size: 18px; border: none; background: transparent;")
+
+        self.text_label.setText(item.preview_text(60))
+        self.time_label.setText(item.timestamp.strftime("%m-%d %H:%M"))
+        self.fav_button.setText("⭐" if item.is_favorite else "☆")
+    
+    def _update_style(self):
+        """根据选中状态和收藏状态更新边框与背景"""
+        from views.styles.main_style import StyleManager
+        c = self._DARK if StyleManager.is_dark_mode() else self._LIGHT
+        
+        if self._selected:
+            self.setStyleSheet(
+                f"HistoryListItem {{"
+                f"background-color: {c['selected_bg']};"
+                f"border: 2px solid {c['selected_border']};"
+                f"border-radius: 6px;"
+                f"}}"
+            )
+        elif self.item_data.is_favorite:
+            self.setStyleSheet(
+                f"HistoryListItem {{"
+                f"background-color: {c['favorite_bg']};"
+                f"border: 2px solid {c['border']};"
+                f"border-radius: 6px;"
+                f"}}"
+            )
+        else:
+            self.setStyleSheet(
+                f"HistoryListItem {{"
+                f"background-color: transparent;"
+                f"border: 2px solid {c['border']};"
+                f"border-radius: 6px;"
+                f"}}"
+            )
+    
+    def set_selected(self, selected: bool):
+        """由 HistoryList 调用，更新选中状态样式"""
+        if self._selected != selected:
+            self._selected = selected
+            self._update_style()
     
     def update_item(self, item: ClipboardItem):
         """更新显示"""
         self.item_data = item
-        self.icon_label.setText(item.get_icon())
-        self.text_label.setText(item.preview_text(60))
-        self.time_label.setText(item.timestamp.strftime("%m-%d %H:%M"))
-        self.fav_button.setText("⭐" if item.is_favorite else "☆")
-        self._update_favorite_style()
+        self._thumbnail = None  # 清除旧缩略图缓存
+        self._refresh_display()
+        self._update_style()
 
 
 class HistoryList(QListWidget):
@@ -109,6 +214,7 @@ class HistoryList(QListWidget):
         self.itemClicked.connect(self._handle_item_click)
         self.itemDoubleClicked.connect(self._handle_item_double_click)
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
+        self.currentRowChanged.connect(self._on_selection_changed)
     
     def _on_scroll(self):
         """滚动时延迟加载"""
@@ -134,7 +240,9 @@ class HistoryList(QListWidget):
         for i, item in enumerate(items):
             list_item = QListWidgetItem()
             list_item.setData(Qt.ItemDataRole.UserRole, item.content_hash)
-            list_item.setSizeHint(QSize(self.width() - 20, 70))
+            # 图片项目稍高，容纳缩略图
+            item_height = 76 if item.content_type == ContentType.IMAGE else 70
+            list_item.setSizeHint(QSize(self.width() - 20, item_height))
             
             self.addItem(list_item)
             
@@ -188,6 +296,16 @@ class HistoryList(QListWidget):
                 list_item.setHidden(not match)
             else:
                 list_item.setHidden(False)
+    
+    def _on_selection_changed(self, current_row: int):
+        """当选中行变化时，更新所有 item widget 的选中状态边框"""
+        for i in range(self.count()):
+            list_item = self.item(i)
+            if list_item:
+                content_hash = list_item.data(Qt.ItemDataRole.UserRole)
+                widget = self._item_widgets.get(content_hash)
+                if widget:
+                    widget.set_selected(i == current_row)
     
     def _handle_item_click(self, list_item: QListWidgetItem):
         """处理项目点击 (仅选中，不做复制)"""

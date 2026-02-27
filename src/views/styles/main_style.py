@@ -169,13 +169,10 @@ class MainStyle:
         }
         
         #historyList::item {
-            padding: 10px 12px;
-            border-radius: 6px;
             margin: 2px 4px;
-            font-size: 13px;
-            color: #1A1A1A;
+            border-radius: 6px;
             background-color: transparent;
-            border: 2px solid #93C5FD; /* 亮蓝色边框，未选中时 */
+            border: none;
             min-height: 36px;
         }
         
@@ -184,19 +181,8 @@ class MainStyle:
         }
         
         #historyList::item:selected {
-            background-color: #FFF3E0;
-            border: 2px solid #FF8C00;
-        }
-        
-        #historyList::item:favorite {
-            border-left: 3px solid #9D5D00;
             background-color: transparent;
-        }
-        
-        #historyList::item:favorite:selected {
-            background-color: #FFF3E0;
-            border: 2px solid #FF8C00;
-            border-left: 4px solid #FF8C00;
+            border: none;
         }
         
         QScrollBar:vertical {
@@ -456,13 +442,10 @@ class DarkStyle:
         }
         
         #historyList::item {
-            padding: 10px 12px;
-            border-radius: 6px;
             margin: 2px 4px;
-            font-size: 13px;
-            color: #FFFFFF;
+            border-radius: 6px;
             background-color: transparent;
-            border: 2px solid #1E3A8A; /* 深蓝色边框，未选中时 */
+            border: none;
             min-height: 36px;
         }
         
@@ -471,19 +454,8 @@ class DarkStyle:
         }
         
         #historyList::item:selected {
-            background-color: #4A3525;
-            border: 2px solid #FF8C00;
-        }
-        
-        #historyList::item:favorite {
-            border-left: 3px solid #FCE100;
             background-color: transparent;
-        }
-        
-        #historyList::item:favorite:selected {
-            background-color: #4A3525;
-            border: 2px solid #FF8C00;
-            border-left: 4px solid #FF8C00;
+            border: none;
         }
         
         QScrollBar:vertical {

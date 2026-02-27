@@ -1,3 +1,21 @@
+# ClipMaster Pro 依赖项
+# Python 3.8+ required
+
+# GUI框架
 PyQt6>=6.4.0
-pywin32>=305
-keyboard 
+PyQt6-Qt6>=6.4.0
+
+# Windows系统集成
+pywin32>=305; platform_system=="Windows"
+
+# 全局热键支持
+keyboard>=0.13.5
+
+# 数据处理和压缩
+# （使用Python标准库：sqlite3, gzip, json）
+
+# 可选：图片处理优化
+# Pillow>=9.0.0  # 如需更高级的图片处理功能
+
+# 可选：性能监控
+# psutil>=5.9.0  # 如需系统资源监控

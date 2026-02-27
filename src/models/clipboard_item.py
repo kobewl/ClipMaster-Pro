@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from typing import Dict, Optional, Literal
 from enum import Enum
 import hashlib
+import re
 
 class ContentType(Enum):
     """内容类型"""
@@ -75,7 +76,9 @@ class ClipboardItem:
         if self.content_type == ContentType.TEXT:
             return self.content
         elif self.content_type == ContentType.IMAGE:
-            return f"[图片] {self.metadata.get('width', '?')}x{self.metadata.get('height', '?')}"
+            w = self.metadata.get('width', '?')
+            h = self.metadata.get('height', '?')
+            return f"{w} × {h} 像素"
         elif self.content_type == ContentType.FILE:
             files = self.metadata.get('files', [])
             if len(files) == 1:
@@ -83,7 +86,10 @@ class ClipboardItem:
             else:
                 return f"[文件] {len(files)} 个文件"
         elif self.content_type == ContentType.HTML:
-            return "[HTML 内容]"
+            # 去除 HTML 标签，提取纯文本
+            text = re.sub(r'<[^>]+>', ' ', self.content)
+            text = ' '.join(text.split())
+            return text if text.strip() else "[HTML 内容]"
         elif self.content_type == ContentType.RTF:
             return "[RTF 内容]"
         return self.content

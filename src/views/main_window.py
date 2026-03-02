@@ -14,6 +14,7 @@ from views.components.data_dialog import DataDialog
 from views.styles.main_style import StyleManager
 from controllers.clipboard_controller import ClipboardController
 from controllers.hotkey_controller import HotkeyController
+from services.prediction_engine import PredictionEngine
 from config.settings import Settings
 from utils.logger import logger
 
@@ -25,6 +26,9 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.clipboard_controller = clipboard_controller
         self.hotkey_controller = HotkeyController(self)
+        self.prediction_engine = PredictionEngine(
+            clipboard_controller.service, parent=self
+        )
         
         # 窗口拖动相关变量
         self._start_pos = None
@@ -255,26 +259,31 @@ class MainWindow(QMainWindow):
         """初始化全局热键"""
         try:
             hotkeys = Settings.get("hotkeys", {})
-            
+
             # 记录当前热键，用于后续配置更改时注销
             self.current_show_key = hotkeys.get("show_window", "Ctrl+O")
             self.current_clear_key = hotkeys.get("clear_history", "Ctrl+Shift+C")
             self.current_search_key = hotkeys.get("search", "Ctrl+F")
-            
+
+            # 保存回调引用，防止被垃圾回收
+            self._clear_history_callback = lambda: self.clipboard_controller.clear_history(keep_favorites=True)
+
             # 注册显示窗口的快捷键
-            self.hotkey_controller.register_shortcut(self.current_show_key, self.toggle_window_visibility)
-            
+            result1 = self.hotkey_controller.register_shortcut(self.current_show_key, self.toggle_window_visibility)
+            logger.info(f"热键注册: 显示窗口 [{self.current_show_key}] = {'成功' if result1 else '失败'}")
+
             # 注册清空历史的快捷键
-            self.hotkey_controller.register_shortcut(self.current_clear_key, 
-                lambda: self.clipboard_controller.clear_history(keep_favorites=True))
-            
+            result2 = self.hotkey_controller.register_shortcut(self.current_clear_key, self._clear_history_callback)
+            logger.info(f"热键注册: 清空历史 [{self.current_clear_key}] = {'成功' if result2 else '失败'}")
+
             # 注册搜索快捷键
-            self.hotkey_controller.register_shortcut(self.current_search_key, self.show_and_focus_search)
-            
+            result3 = self.hotkey_controller.register_shortcut(self.current_search_key, self.show_and_focus_search)
+            logger.info(f"热键注册: 搜索 [{self.current_search_key}] = {'成功' if result3 else '失败'}")
+
             # 注册ESC关闭窗口 (局部热键即可)
             self.esc_shortcut = QShortcut(QKeySequence("Esc"), self)
             self.esc_shortcut.activated.connect(self.hide)
-            
+
         except Exception as e:
             logger.error(f"注册全局热键时发生错误: {str(e)}")
     
@@ -443,6 +452,7 @@ class MainWindow(QMainWindow):
     def quit_application(self):
         """退出应用程序，清理所有资源"""
         try:
+            self.prediction_engine.stop()
             self.hotkey_controller.unregister_all()
             self.clipboard_controller.service.db.close()
             self.tray_icon.hide()
@@ -459,6 +469,7 @@ class MainWindow(QMainWindow):
         try:
             settings_dialog = SettingsDialog(self)
             settings_dialog.settingsChanged.connect(self._apply_settings)
+            settings_dialog.aiSettingsChanged.connect(self._apply_ai_settings)
             settings_dialog.exec()
         except Exception as e:
             logger.error(f"显示设置对话框时发生错误: {str(e)}")
@@ -478,33 +489,68 @@ class MainWindow(QMainWindow):
             # 应用主题
             self.is_dark_mode = Settings.get("dark_mode", False)
             self._apply_theme()
-            
-            # 注销旧热键
-            if hasattr(self, 'current_show_key'):
-                self.hotkey_controller.unregister_shortcut(self.current_show_key)
-                self.hotkey_controller.unregister_shortcut(self.current_clear_key)
-                self.hotkey_controller.unregister_shortcut(self.current_search_key)
-            
+
             # 更新热键
             hotkeys = Settings.get("hotkeys", {})
-            self.current_show_key = hotkeys.get("show_window", "Ctrl+O")
-            self.current_clear_key = hotkeys.get("clear_history", "Ctrl+Shift+C")
-            self.current_search_key = hotkeys.get("search", "Ctrl+F")
-            
-            self.hotkey_controller.register_shortcut(self.current_show_key, self.toggle_window_visibility)
-            self.hotkey_controller.register_shortcut(self.current_clear_key, lambda: self.clipboard_controller.clear_history(keep_favorites=True))
-            self.hotkey_controller.register_shortcut(self.current_search_key, self.show_and_focus_search)
-            
+            new_show_key = hotkeys.get("show_window", "Ctrl+O")
+            new_clear_key = hotkeys.get("clear_history", "Ctrl+Shift+C")
+            new_search_key = hotkeys.get("search", "Ctrl+F")
+
+            # 更新清空历史回调引用
+            self._clear_history_callback = lambda: self.clipboard_controller.clear_history(keep_favorites=True)
+
+            # 注销并重新注册有变化的热键
+            if hasattr(self, 'current_show_key') and self.current_show_key != new_show_key:
+                self.hotkey_controller.unregister_shortcut(self.current_show_key)
+                result = self.hotkey_controller.register_shortcut(new_show_key, self.toggle_window_visibility)
+                logger.info(f"热键更新: 显示窗口 [{new_show_key}] = {'成功' if result else '失败'}")
+            elif not hasattr(self, 'current_show_key'):
+                result = self.hotkey_controller.register_shortcut(new_show_key, self.toggle_window_visibility)
+                logger.info(f"热键注册: 显示窗口 [{new_show_key}] = {'成功' if result else '失败'}")
+
+            if hasattr(self, 'current_clear_key') and self.current_clear_key != new_clear_key:
+                self.hotkey_controller.unregister_shortcut(self.current_clear_key)
+                result = self.hotkey_controller.register_shortcut(new_clear_key, self._clear_history_callback)
+                logger.info(f"热键更新: 清空历史 [{new_clear_key}] = {'成功' if result else '失败'}")
+            elif not hasattr(self, 'current_clear_key'):
+                result = self.hotkey_controller.register_shortcut(new_clear_key, self._clear_history_callback)
+                logger.info(f"热键注册: 清空历史 [{new_clear_key}] = {'成功' if result else '失败'}")
+
+            if hasattr(self, 'current_search_key') and self.current_search_key != new_search_key:
+                self.hotkey_controller.unregister_shortcut(self.current_search_key)
+                result = self.hotkey_controller.register_shortcut(new_search_key, self.show_and_focus_search)
+                logger.info(f"热键更新: 搜索 [{new_search_key}] = {'成功' if result else '失败'}")
+            elif not hasattr(self, 'current_search_key'):
+                result = self.hotkey_controller.register_shortcut(new_search_key, self.show_and_focus_search)
+                logger.info(f"热键注册: 搜索 [{new_search_key}] = {'成功' if result else '失败'}")
+
+            # 更新当前热键记录
+            self.current_show_key = new_show_key
+            self.current_clear_key = new_clear_key
+            self.current_search_key = new_search_key
+
             # 更新设置
             max_history = Settings.get("max_history", 1000)
             retention_days = Settings.get("retention_days", 30)
             self.clipboard_controller.update_settings(max_history, retention_days)
-            
+
             self._update_history()
             logger.info("已应用新设置")
             self.status_bar.setText("设置已更新")
         except Exception as e:
             logger.error(f"应用设置时发生错误: {str(e)}")
+    
+    def _apply_ai_settings(self):
+        """Reload prediction engine after AI settings change."""
+        try:
+            self.prediction_engine.reload_settings()
+            ai = Settings.get("ai", {})
+            if ai.get("enabled"):
+                self.status_bar.setText("AI 智能预测已启用")
+            else:
+                self.status_bar.setText("AI 智能预测已关闭")
+        except Exception as e:
+            logger.error(f"应用AI设置时发生错误: {str(e)}")
     
     # 窗口拖动相关方法
     def mousePressEvent(self, event: QMouseEvent):

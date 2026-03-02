@@ -42,6 +42,17 @@ class Settings:
             "window_opacity": 1.0,
             "animation_enabled": True,
             "show_preview": True
+        },
+        "ai": {
+            "enabled": False,
+            "provider": "openai",
+            "api_url": "",
+            "api_key": "",
+            "model": "gpt-3.5-turbo",
+            "max_tokens": 100,
+            "temperature": 0.3,
+            "trigger_delay": 150,
+            "max_context_items": 10
         }
     }
     

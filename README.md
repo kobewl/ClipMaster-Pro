@@ -32,7 +32,8 @@
 - **自动清理** - 自动清理过期历史记录
 - **保留收藏** - 清理时保留收藏的项目
 - **开机启动** - 支持开机自启动
-- **全局热键** - 可自定义快捷键
+- **全局热键** - 可自定义快捷键（支持双模式注册）
+- **热键冲突检测** - 自动检测并提示热键被占用情况
 - **数据导入导出** - JSON格式备份和恢复
 
 ## 📦 安装说明
@@ -65,13 +66,28 @@ python src/main.py
 
 | 操作 | 说明 |
 |------|------|
-| **Ctrl + O** | 显示/隐藏主窗口 |
-| **Ctrl + Shift + C** | 清空历史记录 |
-| **Ctrl + F** | 聚焦搜索框 |
+| **Ctrl + O** | 显示/隐藏主窗口（可自定义） |
+| **Ctrl + Shift + C** | 清空历史记录（可自定义） |
+| **Ctrl + F** | 聚焦搜索框（可自定义） |
 | **ESC** | 隐藏窗口 |
 | **点击项目** | 复制到剪贴板 |
 | **双击项目** | 查看完整内容 |
 | **右键项目** | 打开操作菜单 |
+
+### 自定义热键
+
+1. 点击主窗口右上角的 **⚙️ 设置** 按钮
+2. 切换到 **"热键"** 选项卡
+3. 点击要修改的热键旁边的 **"设置热键"** 按钮
+4. 按钮变为 **"捕获中..."**，此时按下你想要的快捷键组合
+5. 热键会被自动捕获并显示
+6. 点击 **"确定"** 保存设置
+
+**热键设置说明：**
+- 热键必须包含至少一个修饰键（Ctrl、Alt、Shift、Win）
+- 支持字母、数字、F1-F12、符号键等
+- 如果热键被其他程序占用，会自动使用备用模式注册
+- 推荐避免与常用软件（如截图工具、IDE）冲突的热键组合
 
 ### 界面说明
 
@@ -110,13 +126,16 @@ ClipMaster-Pro/
 │   ├── controllers/              # 控制器层
 │   │   ├── __init__.py
 │   │   ├── clipboard_controller.py   # 剪贴板控制
-│   │   └── hotkey_controller.py      # 热键管理
+│   │   ├── hotkey_controller.py      # 热键管理（双模式：RegisterHotKey + keyboard库）
+│   │   └── input_monitor.py          # 输入监控（AI预测用）
 │   ├── models/                   # 数据模型层
 │   │   ├── __init__.py
 │   │   └── clipboard_item.py    # 剪贴板项模型
 │   ├── services/                 # 服务层
 │   │   ├── __init__.py
-│   │   └── clipboard_service.py # 核心业务逻辑
+│   │   ├── clipboard_service.py # 核心业务逻辑
+│   │   ├── ai_service.py        # AI服务
+│   │   └── prediction_engine.py # 智能预测引擎
 │   ├── utils/                    # 工具类
 │   │   ├── __init__.py
 │   │   ├── logger.py            # 日志系统
@@ -128,8 +147,9 @@ ClipMaster-Pro/
 │   │   │   ├── __init__.py
 │   │   │   ├── data_dialog.py   # 数据管理对话框
 │   │   │   ├── history_list.py  # 历史列表组件
+│   │   │   ├── prediction_overlay.py  # AI预测浮层
 │   │   │   ├── search_bar.py    # 搜索栏组件
-│   │   │   ├── settings_dialog.py  # 设置对话框
+│   │   │   ├── settings_dialog.py     # 设置对话框（热键捕获）
 │   │   │   └── tray_icon.py     # 托盘图标
 │   │   └── styles/              # 样式定义
 │   │       ├── __init__.py
@@ -153,8 +173,52 @@ ClipMaster-Pro/
 - **PyQt6** - GUI框架
 - **SQLite** - 本地数据存储
 - **gzip** - 数据压缩
+- **keyboard** - 全局热键支持
+- **langchain** - AI智能预测（可选）
+- **pywin32** - Windows系统集成
+
+## ❓ 常见问题
+
+### 热键无法使用
+**问题：** 设置的热键没有反应
+
+**解决方案：**
+1. 检查是否有其他程序占用了该热键（如截图工具、输入法）
+2. 在设置中更换为其他热键组合（推荐 `Ctrl+Alt+O`、`F1`、`F10` 等）
+3. 查看日志确认热键是否注册成功
+
+### 热键设置捕获失败
+**问题：** 点击"设置热键"后按快捷键没有反应
+
+**解决方案：**
+1. 确保热键包含修饰键（Ctrl、Alt、Shift、Win 之一）
+2. 按 Esc 取消后重新捕获
+3. 重启程序后重试
+
+### 程序启动慢
+**问题：** 启动时间较长
+
+**解决方案：**
+1. 历史记录过多时，程序会延迟加载数据
+2. 在设置中减少"最大历史记录数"
+3. 开启"启动时最小化到托盘"选项
+
+### 数据库损坏
+**问题：** 程序无法启动或报错
+
+**解决方案：**
+1. 备份 `%APPDATA%/ClipMasterPro/data/` 目录
+2. 删除或重命名 `clipboard.db` 文件
+3. 重启程序会自动创建新数据库
 
 ## 📝 更新日志
+
+### v2.0.1 (2026-03-02)
+- 🔧 修复热键注册问题，支持双模式注册（RegisterHotKey + keyboard库）
+- 🎯 优化热键设置界面，添加捕获按钮模式
+- 🐛 修复设置热键时程序崩溃的问题
+- 📝 完善 VK 键码映射，支持更多特殊键
+- ✨ 添加热键冲突检测和自动降级机制
 
 ### v2.0.0 (2026-02-27)
 - ✨ 全新UI设计，现代化界面
@@ -175,6 +239,39 @@ ClipMaster-Pro/
 ### v1.0.0 (2025-06-01)
 - 初始版本发布
 - 实现基本的剪贴板历史管理功能
+
+## 🛠️ 开发说明
+
+### 本地开发
+
+```bash
+# 创建虚拟环境
+python -m venv venv
+
+# 激活虚拟环境
+venv\Scripts\activate  # Windows
+source venv/bin/activate  # macOS/Linux
+
+# 安装开发依赖
+pip install -r requirements.txt
+
+# 运行程序
+python run.py
+# 或
+python src/main.py
+```
+
+### 打包为可执行文件
+
+```bash
+# 安装打包工具
+pip install pyinstaller
+
+# 运行打包脚本
+python build.py
+```
+
+打包后的文件位于 `dist/ClipMasterPro.exe`
 
 ## 📄 许可证
 

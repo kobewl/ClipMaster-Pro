@@ -1,21 +1,23 @@
-# ClipMaster Pro 依赖项
-# Python 3.8+ required
+# ClipMaster Pro Dependencies
+# Python 3.10+ required (LangChain requirement)
 
-# GUI框架
+# GUI framework
 PyQt6>=6.4.0
 PyQt6-Qt6>=6.4.0
 
-# Windows系统集成
+# Windows integration
 pywin32>=305; platform_system=="Windows"
 
-# 全局热键支持
+# Global hotkey support
 keyboard>=0.13.5
 
-# 数据处理和压缩
-# （使用Python标准库：sqlite3, gzip, json）
+# ── AI / LangChain (core – always required for AI features) ──
+langchain>=1.2.0
+langchain-core>=1.2.0
+langchain-openai>=1.1.0          # OpenAI + any custom OpenAI-compatible endpoint
 
-# 可选：图片处理优化
-# Pillow>=9.0.0  # 如需更高级的图片处理功能
-
-# 可选：性能监控
-# psutil>=5.9.0  # 如需系统资源监控
+# ── Optional provider packages (install the ones you need) ──
+# pip install langchain-anthropic      # Anthropic Claude
+# pip install langchain-google-genai   # Google Gemini
+# pip install langchain-ollama         # Ollama (local models)
+# pip install langchain-deepseek       # DeepSeek

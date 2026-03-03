@@ -253,34 +253,32 @@ def _create_llm(provider: str, model: str, api_key: str,
 # ── Prompt Builder ───────────────────────────────────────────────────
 
 SYSTEM_PROMPT = (
-    "You are a real-time text-prediction engine (like GitHub Copilot, but for general "
-    "text). You run inside a smart clipboard manager.\n\n"
-    "## Your Two Inputs\n"
-    "1. **CLIPBOARD HISTORY** — the user's personal knowledge base: names, addresses, "
-    "URLs, code snippets, templates, and frequently used phrases.\n"
-    "2. **LIVE TYPING CONTEXT** — what the user is typing RIGHT NOW, character by "
-    "character. THIS IS THE PRIMARY INPUT. The cursor is at the end of this text.\n\n"
-    "## Your Task\n"
-    "Predict the text the user will type NEXT — the characters that would come "
-    "immediately after the cursor position. Your prediction should feel like a "
-    "natural, seamless continuation of what the user is currently writing.\n\n"
-    "## Strategy (in priority order)\n"
-    "1. READ the live typing context carefully. Understand WHAT the user is doing "
-    "(email? code? form? chat? document?) and WHERE in the sentence the cursor is.\n"
-    "2. If the typing context PARTIALLY MATCHES a clipboard item, complete with "
-    "the clipboard data (e.g. user typed 'Dear Mr. W' and clipboard has "
-    "'Wang Liang' → predict 'ang Liang').\n"
-    "3. If the user is composing free text, predict the most natural continuation "
-    "based on the sentence so far AND any relevant clipboard data.\n"
-    "4. If clipboard has structured data (address, phone, ID, URL) and the user "
-    "seems to need it, suggest that data as the continuation.\n"
-    "5. For code: predict the next statement, argument, or expression.\n\n"
-    "## Output Rules\n"
-    "- Output ONLY the continuation text — no quotes, no explanation, no prefix.\n"
-    "- The continuation must start EXACTLY where the user's cursor is.\n"
-    "- Predict a meaningful chunk (5-40 words), not just one word.\n"
-    "- Do NOT repeat any text the user already typed.\n"
-    "- If you truly cannot predict anything useful, output exactly: [NONE]"
+    "You are a real-time text prediction engine (like GitHub Copilot for everyday text). "
+    "Your job is to predict the exact text the user will type next.\n\n"
+    "## Context You Receive\n"
+    "- CLIPBOARD HISTORY: Recent copied items (may contain relevant info)\n"
+    "- CURRENT TYPING: What user is typing RIGHT NOW, cursor at END\n\n"
+    "## Your Goal\n"
+    "Predict the next 5-30 characters that naturally continue what the user is typing.\n\n"
+    "## Key Scenarios\n"
+    "1. PARTIAL WORD COMPLETION: If user typed 'he' and clipboard has 'hello', predict 'llo'\n"
+    "2. INFORMATION INSERTION: If typing email and clipboard has email address, insert it\n"
+    "3. PHRASE COMPLETION: 'How are' → ' you doing?' | 'Thank you' → ' very much'\n"
+    "4. CODE COMPLETION: Predict next token, parameter, or closing bracket\n"
+    "5. SENTENCE FLOW: Continue naturally based on grammar and context\n\n"
+    "## Output Rules (CRITICAL)\n"
+    "- Output ONLY the continuation text, nothing else\n"
+    "- NO quotes, NO explanations, NO 'you might type' prefixes\n"
+    "- Do NOT repeat what user already typed\n"
+    "- Start exactly where the cursor is\n"
+    "- Keep it short: 5-30 characters for real-time feel\n"
+    "- Output [NONE] if you have no confident prediction\n\n"
+    "## Examples\n"
+    "Input: 'Dear Mr.' | Clipboard: 'Mr. Wang Liang' → Output: ' Wang Liang'\n"
+    "Input: 'my email is ' | Clipboard: 'user@example.com' → Output: 'user@example.com'\n"
+    "Input: 'How are' | (no relevant clipboard) → Output: ' you?'\n"
+    "Input: 'print(' | (coding context) → Output: ')' or a parameter\n"
+    "Input: 'xyz123' | (nonsense/no context) → Output: [NONE]"
 )
 
 
@@ -292,27 +290,55 @@ def _build_messages(typing_context: str, clipboard_items: list) -> list:
     except ImportError:
         SysMsg, UsrMsg = _SystemMsg, _HumanMsg
 
+    # Filter and format clipboard items - only include text items
     clip_lines = ""
-    for i, item in enumerate(clipboard_items[:10], 1):
-        preview = item.content[:300].replace("\n", " ")
+    relevant_items = []
+    for item in clipboard_items:
+        if hasattr(item, 'content_type') and item.content_type.value == "text":
+            content = item.content.strip()
+            if content and len(content) >= 3:
+                relevant_items.append(content)
+        elif isinstance(item, dict) and item.get("type") == "text":
+            content = item.get("content", "").strip()
+            if content and len(content) >= 3:
+                relevant_items.append(content)
+        if len(relevant_items) >= 8:
+            break
+
+    for i, content in enumerate(relevant_items, 1):
+        # Truncate long content and clean up
+        preview = content[:200].replace("\n", " ").replace("\r", " ")
+        if len(content) > 200:
+            preview += "..."
         clip_lines += f"{i}. {preview}\n"
 
-    # Extract the last few lines for emphasis — this is what the user
-    # is actively writing RIGHT NOW
-    trimmed = typing_context[-800:] if len(typing_context) > 800 else typing_context
+    if not clip_lines:
+        clip_lines = "(No recent clipboard items)\n"
+
+    # Extract typing context - focus on current activity
+    trimmed = typing_context[-600:] if len(typing_context) > 600 else typing_context
     lines = trimmed.split("\n")
+
+    # Get current line and recent context
     current_line = lines[-1] if lines else trimmed
-    recent_lines = "\n".join(lines[-5:]) if len(lines) > 5 else trimmed
+    prev_lines = lines[-4:-1] if len(lines) > 4 else lines[:-1]
+
+    # Build context display
+    context_display = ""
+    if prev_lines:
+        context_display += "Previous lines:\n"
+        for line in prev_lines:
+            context_display += f"  {line}\n"
+    context_display += f"Current line: {current_line}"
 
     user_content = (
-        f"## Clipboard Knowledge Base\n{clip_lines}\n"
-        f"## Live Typing Context (most recent text the user has typed)\n"
-        f"```\n{recent_lines}\n```\n\n"
-        f"## Cursor Position\n"
-        f"The cursor is at the END of this line:\n"
-        f">>> {current_line}◂\n\n"
-        f"Predict the text that comes IMMEDIATELY after the ◂ cursor:"
+        f"## CLIPBOARD HISTORY (recent copied items)\n"
+        f"{clip_lines}\n"
+        f"## CURRENT TYPING\n"
+        f"{context_display}[CURSOR]\n\n"
+        f"Predict what comes after [CURSOR]. Output ONLY the continuation:"
     )
+
     return [
         SysMsg(content=SYSTEM_PROMPT),
         UsrMsg(content=user_content),

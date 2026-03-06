@@ -2,7 +2,7 @@ from PyQt6.QtWidgets import (
    QListWidget, QAbstractItemView, QMenu,
    QApplication, QMessageBox, QTextEdit,
    QWidget, QHBoxLayout, QVBoxLayout, QLabel,
-   QPushButton, QListWidgetItem
+    QPushButton, QListWidgetItem
 )
 from PyQt6.QtCore import pyqtSignal, Qt, QSize, QTimer
 from PyQt6.QtGui import QAction, QFont, QIcon, QColor, QPixmap, QImage
@@ -66,11 +66,25 @@ class HistoryListItem(QWidget):
         self.text_label.setFont(font)
         content_layout.addWidget(self.text_label)
 
+        # 时间和来源在一行
+        info_layout = QHBoxLayout()
+        info_layout.setSpacing(8)
+        info_layout.setContentsMargins(0, 0, 0, 0)
+
         self.time_label = QLabel()
         self.time_label.setStyleSheet(
             "color: #9CA3AF; font-size: 11px; border: none; background: transparent;"
         )
-        content_layout.addWidget(self.time_label)
+        info_layout.addWidget(self.time_label)
+
+        self.source_label = QLabel()
+        self.source_label.setStyleSheet(
+            "color: #60A5FA; font-size: 10px; border: none; background: transparent;"
+        )
+        info_layout.addWidget(self.source_label)
+        info_layout.addStretch()
+
+        content_layout.addLayout(info_layout)
 
         layout.addLayout(content_layout, 1)
 
@@ -137,6 +151,15 @@ class HistoryListItem(QWidget):
 
         self.text_label.setText(item.preview_text(60))
         self.time_label.setText(item.timestamp.strftime("%m-%d %H:%M"))
+
+        # 显示来源
+        source_display = item.get_source_display()
+        if source_display and source_display != "未知来源":
+            self.source_label.setText(f"📍 {source_display}")
+            self.source_label.setToolTip(item.get_source_tooltip())
+        else:
+            self.source_label.setText("")
+
         self.fav_button.setText("⭐" if item.is_favorite else "☆")
     
     def _update_style(self):
@@ -226,6 +249,17 @@ class HistoryList(QListWidget):
         """加载可见项（虚拟滚动优化）"""
         # 可以在这里实现更复杂的虚拟滚动逻辑
         pass
+
+    def _item_size_hint(self, item: ClipboardItem) -> QSize:
+        item_height = 76 if item.content_type == ContentType.IMAGE else 70
+        item_width = max(self.viewport().width() - 8, 0)
+        return QSize(item_width, item_height)
+
+    def _refresh_item_sizes(self):
+        for row, item in enumerate(self._items):
+            list_item = self.item(row)
+            if list_item:
+                list_item.setSizeHint(self._item_size_hint(item))
     
     def update_items(self, items: list[ClipboardItem]):
         """更新列表项（使用增量更新）"""
@@ -241,9 +275,7 @@ class HistoryList(QListWidget):
         for i, item in enumerate(items):
             list_item = QListWidgetItem()
             list_item.setData(Qt.ItemDataRole.UserRole, item.content_hash)
-            # 图片项目稍高，容纳缩略图
-            item_height = 76 if item.content_type == ContentType.IMAGE else 70
-            list_item.setSizeHint(QSize(self.width() - 20, item_height))
+            list_item.setSizeHint(self._item_size_hint(item))
             
             self.addItem(list_item)
             
@@ -260,6 +292,8 @@ class HistoryList(QListWidget):
             self.setCurrentRow(current_row)
         elif len(items) > 0:
             self.setCurrentRow(0)
+
+        QTimer.singleShot(0, self._refresh_item_sizes)
     
     def filter_items(self, text: str, favorites_only: bool = False):
         """过滤列表项（支持模糊搜索）"""
@@ -417,3 +451,11 @@ class HistoryList(QListWidget):
         if widget:
             widget.item_data.is_favorite = is_favorite
             widget.update_item(widget.item_data)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._refresh_item_sizes()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._refresh_item_sizes)

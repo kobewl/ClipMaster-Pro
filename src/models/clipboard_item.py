@@ -113,3 +113,64 @@ class ClipboardItem:
         if self.is_favorite:
             return "⭐"
         return icons.get(self.content_type, "📋")
+
+    def get_source_info(self) -> dict:
+        """获取来源信息"""
+        source = self.metadata.get('source', {})
+        return {
+            'url': source.get('url', ''),
+            'title': source.get('title', ''),
+            'app_name': source.get('app_name', ''),
+            'domain': source.get('domain', ''),
+            'type': source.get('type', 'unknown')
+        }
+
+    def get_source_display(self) -> str:
+        """获取用于显示的来源名称"""
+        source = self.metadata.get('source', {})
+
+        # 优先显示域名（网页来源）
+        domain = source.get('domain', '')
+        if domain:
+            return domain
+
+        # 其次显示应用名称
+        app_name = source.get('app_name', '')
+        if app_name:
+            return app_name
+
+        # 最后显示窗口标题
+        title = source.get('title', '')
+        if title and len(title) < 40:
+            return title
+
+        # 默认返回
+        url = source.get('url', '')
+        if url:
+            return url[:30] + '...' if len(url) > 30 else url
+
+        return "未知来源"
+
+    def get_source_tooltip(self) -> str:
+        """获取来源的详细提示信息"""
+        source = self.metadata.get('source', {})
+
+        parts = []
+
+        url = source.get('url', '')
+        if url:
+            parts.append(f"URL: {url}")
+
+        title = source.get('title', '')
+        if title:
+            parts.append(f"标题: {title}")
+
+        app_name = source.get('app_name', '')
+        if app_name:
+            parts.append(f"应用: {app_name}")
+
+        domain = source.get('domain', '')
+        if domain and not url:
+            parts.append(f"域名: {domain}")
+
+        return "\n".join(parts) if parts else "来源信息不可用"

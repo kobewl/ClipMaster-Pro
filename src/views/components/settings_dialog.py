@@ -10,6 +10,7 @@ from PyQt6.QtGui import QKeySequence
 
 from config.settings import Settings
 from utils.logger import logger
+from utils.platform_utils import IS_MACOS, SUPPORTS_INPUT_MONITOR
 from utils.startup import StartupManager
 
 
@@ -192,6 +193,13 @@ class SettingsDialog(QDialog):
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #6B7280; font-size: 12px;")
         eg_layout.addWidget(desc)
+        if not SUPPORTS_INPUT_MONITOR:
+            self.ai_enabled_cb.setChecked(False)
+            self.ai_enabled_cb.setEnabled(False)
+            unsupported_label = QLabel("当前平台暂不支持实时输入预测，先提供剪贴板历史和全局快捷键。")
+            unsupported_label.setWordWrap(True)
+            unsupported_label.setStyleSheet("color: #C2410C; font-size: 12px;")
+            eg_layout.addWidget(unsupported_label)
         layout.addWidget(enable_group)
 
         # --- Provider / API configuration ---
@@ -311,7 +319,7 @@ class SettingsDialog(QDialog):
     def _persist_ai_fields(self):
         """Write AI-related fields into Settings (used by test & save)."""
         ai = Settings.get("ai", {})
-        ai["enabled"] = self.ai_enabled_cb.isChecked()
+        ai["enabled"] = self.ai_enabled_cb.isChecked() if SUPPORTS_INPUT_MONITOR else False
         ai["provider"] = self.ai_provider_combo.currentData()
         ai["api_url"] = self.ai_api_url.text().strip()
         ai["api_key"] = self.ai_api_key.text().strip()
@@ -372,6 +380,8 @@ class SettingsDialog(QDialog):
             self.show_window_hotkey.setText(hotkeys.get("show_window", "Ctrl+O"))
             self.clear_history_hotkey.setText(hotkeys.get("clear_history", "Ctrl+Shift+C"))
             self.search_hotkey.setText(hotkeys.get("search", "Ctrl+F"))
+            if IS_MACOS:
+                self.capture_status_label.setText("macOS 可使用 Command 作为快捷键修饰键。")
 
             self.retention_days_spinbox.setValue(Settings.get("retention_days", 30))
             self.display_limit_spinbox.setValue(Settings.get("display_limit", 100))

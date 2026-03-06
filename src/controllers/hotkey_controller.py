@@ -26,6 +26,7 @@ import ctypes.wintypes as wt
 from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter, QTimer
 from PyQt6.QtWidgets import QApplication
 from utils.logger import logger
+from utils.platform_utils import IS_MACOS
 
 # Try to import keyboard library for fallback
 try:
@@ -128,6 +129,16 @@ def _parse_hotkey(key_sequence: str):
 def _to_keyboard_format(key_sequence: str) -> str:
     """Convert 'Ctrl+Shift+C' to 'ctrl+shift+c' format for keyboard library."""
     parts = [p.strip().lower() for p in key_sequence.split("+")]
+    if IS_MACOS:
+        converted = []
+        for part in parts:
+            if part == "meta":
+                converted.append("command")
+            elif part == "ctrl":
+                converted.append("ctrl")
+            else:
+                converted.append(part)
+        parts = converted
     return "+".join(parts)
 
 

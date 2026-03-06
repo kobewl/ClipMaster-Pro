@@ -17,6 +17,7 @@ from controllers.hotkey_controller import HotkeyController
 from services.prediction_engine import PredictionEngine
 from config.settings import Settings
 from utils.logger import logger
+from utils.platform_utils import SUPPORTS_INPUT_MONITOR, paste_shortcut
 
 
 class BorderFrame(QFrame):
@@ -62,9 +63,11 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.clipboard_controller = clipboard_controller
         self.hotkey_controller = HotkeyController(self)
-        self.prediction_engine = PredictionEngine(
-            clipboard_controller.service, parent=self
-        )
+        self.prediction_engine = None
+        if SUPPORTS_INPUT_MONITOR:
+            self.prediction_engine = PredictionEngine(
+                clipboard_controller.service, parent=self
+            )
         
         # 窗口拖动相关变量
         self._start_pos = None
@@ -394,8 +397,8 @@ class MainWindow(QMainWindow):
         # 隐藏窗口
         self.hide()
         
-        # 尽量延长一点点延迟以保证 Windows 焦点平滑切回到上方的真实业务窗口
-        QTimer.singleShot(300, lambda: keyboard.send('ctrl+v'))
+        # Give focus time to return to the previous app before pasting.
+        QTimer.singleShot(300, lambda: keyboard.send(paste_shortcut()))
     
     def _handle_item_delete(self, content_hash: str):
         """处理项目删除"""
@@ -649,6 +652,14 @@ class MainWindow(QMainWindow):
     def _apply_ai_settings(self):
         """Reload prediction engine after AI settings change."""
         try:
+            if not self.prediction_engine:
+                ai = Settings.get("ai", {})
+                if ai.get("enabled"):
+                    ai["enabled"] = False
+                    Settings.set("ai", ai)
+                self.status_bar.setText("AI prediction is only available on Windows for now")
+                return
+
             self.prediction_engine.reload_settings()
             ai = Settings.get("ai", {})
             if ai.get("enabled"):

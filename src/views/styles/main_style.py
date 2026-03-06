@@ -21,16 +21,26 @@ class MainStyle:
     
     MAIN_WIDGET = """
         QMainWindow {
-            background-color: transparent;
-        }
-        
-        #mainWidget {
             background-color: #FAFAFA;
-            border: 1px solid #E5E5E5;
+        }
+
+        #mainWidget {
+            background-color: transparent;
+            border: none;
+        }
+
+        #borderFrame {
+            background-color: #FFFFFF;
+            border: none;
             border-radius: 8px;
         }
+
+        #contentWidget {
+            background-color: transparent;
+            border: none;
+        }
     """
-    
+
     TITLE_BAR = """
         #titleBar {
             background-color: transparent;
@@ -293,16 +303,26 @@ class DarkStyle:
     
     MAIN_WIDGET = """
         QMainWindow {
-            background-color: transparent;
-        }
-        
-        #mainWidget {
             background-color: #202020;
-            border: 1px solid #333333;
+        }
+
+        #mainWidget {
+            background-color: transparent;
+            border: none;
+        }
+
+        #borderFrame {
+            background-color: #2D2D2D;
+            border: none;
             border-radius: 8px;
         }
+
+        #contentWidget {
+            background-color: transparent;
+            border: none;
+        }
     """
-    
+
     TITLE_BAR = """
         #titleBar {
             background-color: transparent;

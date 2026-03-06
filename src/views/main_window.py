@@ -3,7 +3,7 @@ from PyQt6.QtWidgets import (
     QPushButton, QLabel, QFrame, QApplication, QSizePolicy
 )
 from PyQt6.QtCore import Qt, QPoint, QTimer
-from PyQt6.QtGui import QMouseEvent, QScreen, QShortcut, QKeySequence
+from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QScreen, QShortcut, QKeySequence
 import keyboard
 
 from views.components.search_bar import SearchBar
@@ -17,6 +17,42 @@ from controllers.hotkey_controller import HotkeyController
 from services.prediction_engine import PredictionEngine
 from config.settings import Settings
 from utils.logger import logger
+
+
+class BorderFrame(QFrame):
+    """Draw the outer rounded border explicitly to avoid delayed QSS rendering."""
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+
+        colors = StyleManager.get_colors()
+        border_color = QColor(colors.get("border", "#A0A0A0"))
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(border_color, 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
+
+
+class BorderOverlay(QWidget):
+    """Top-most overlay that keeps the outer border visible after child repaints."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground, True)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+    def paintEvent(self, event):
+        colors = StyleManager.get_colors()
+        border_color = QColor(colors.get("border", "#A0A0A0"))
+
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(QPen(border_color, 2))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawRoundedRect(self.rect().adjusted(1, 1, -1, -1), 8, 8)
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +97,12 @@ class MainWindow(QMainWindow):
         
         # 延迟加载历史记录
         QTimer.singleShot(100, self._do_update_history)
+
+        # 延迟强制刷新样式，确保边框正确显示
+        # 多个时间点刷新，确保样式完全应用
+        QTimer.singleShot(50, self._force_style_refresh)
+        QTimer.singleShot(200, self._force_style_refresh)
+        QTimer.singleShot(500, self._force_style_refresh)
     
     def _init_window(self):
         """初始化窗口属性"""
@@ -88,13 +130,23 @@ class MainWindow(QMainWindow):
         main_widget = QWidget()
         main_widget.setObjectName("mainWidget")
         self.setCentralWidget(main_widget)
-        
-        # 主布局
+
+        # 主布局 - 无边距
         layout = QVBoxLayout(main_widget)
         layout.setSpacing(0)
-        layout.setContentsMargins(1, 1, 1, 1)
-        
-        # 内容容器（带圆角）
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        # 边框容器 - 使用QFrame实现可靠边框渲染
+        self.border_frame = BorderFrame()
+        self.border_frame.setObjectName("borderFrame")
+        # 关键：启用样式背景，否则样式表的background-color不会生效
+        self.border_frame.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # 不设置FrameShape，让样式表完全控制边框
+        border_layout = QVBoxLayout(self.border_frame)
+        border_layout.setSpacing(0)
+        border_layout.setContentsMargins(2, 2, 2, 2)  # 边框内边距
+
+        # 内容容器
         content_widget = QWidget()
         content_widget.setObjectName("contentWidget")
         content_layout = QVBoxLayout(content_widget)
@@ -117,8 +169,12 @@ class MainWindow(QMainWindow):
         self.status_bar = self._create_status_bar()
         content_layout.addWidget(self.status_bar)
         
-        layout.addWidget(content_widget)
-        
+        border_layout.addWidget(content_widget)
+        layout.addWidget(self.border_frame)
+
+        self._border_overlay = BorderOverlay(self)
+        self._sync_border_overlay()
+         
         # 设置样式
         self._apply_theme()
         
@@ -406,7 +462,10 @@ class MainWindow(QMainWindow):
             # 默认选中第一项
             if self.history_list.count() > 0:
                 self.history_list.setCurrentRow(0)
-                
+
+            # 强制刷新样式，确保边框正确显示
+            QTimer.singleShot(10, self._force_style_refresh)
+
             logger.info("窗口已显示并激活")
         except Exception as e:
             logger.error(f"显示窗口时发生错误: {str(e)}")
@@ -448,6 +507,53 @@ class MainWindow(QMainWindow):
         """应用主题"""
         style = StyleManager.get_style(self.is_dark_mode)
         self.setStyleSheet(style)
+
+        # 强制样式立即更新，避免边框延迟显示
+        self._force_style_refresh()
+
+    def _force_style_refresh(self):
+        """强制刷新样式，确保边框正确渲染"""
+        # 刷新主窗口
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+        # 刷新主部件
+        main_widget = self.centralWidget()
+        if main_widget:
+            main_widget.style().unpolish(main_widget)
+            main_widget.style().polish(main_widget)
+            main_widget.update()
+
+            # 确保布局边距正确
+            layout = main_widget.layout()
+            if layout:
+                layout.invalidate()
+                layout.activate()
+
+        # 刷新边框容器 - 关键：确保边框样式正确应用
+        if hasattr(self, 'border_frame') and self.border_frame:
+            self.border_frame.style().unpolish(self.border_frame)
+            self.border_frame.style().polish(self.border_frame)
+            self.border_frame.update()
+
+        self._sync_border_overlay()
+
+        # 递归刷新所有子部件
+        self._recursive_style_refresh(self)
+
+    def _sync_border_overlay(self):
+        if hasattr(self, "_border_overlay") and self._border_overlay:
+            self._border_overlay.setGeometry(self.rect())
+            self._border_overlay.raise_()
+            self._border_overlay.update()
+
+    def _recursive_style_refresh(self, widget):
+        """递归刷新所有子部件的样式"""
+        for child in widget.findChildren(QWidget):
+            child.style().unpolish(child)
+            child.style().polish(child)
+            child.update()
     
     def quit_application(self):
         """退出应用程序，清理所有资源"""
@@ -578,3 +684,11 @@ class MainWindow(QMainWindow):
         """处理鼠标离开事件"""
         self._is_moving = False
         self._start_pos = None
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sync_border_overlay()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        QTimer.singleShot(0, self._sync_border_overlay)

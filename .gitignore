@@ -15,6 +15,7 @@ venv.bak/
 # IDE
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 
@@ -41,4 +42,8 @@ coverage.xml
 .hypothesis/
 .pytest_cache/
 cover/ 
+
+# Local diagnostics / temporary files
+test_*.py
+langcha
 nul

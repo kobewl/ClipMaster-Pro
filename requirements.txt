@@ -11,6 +11,9 @@ pywin32>=305; platform_system=="Windows"
 # Global hotkey support
 keyboard>=0.13.5
 
+# Process information for source tracking
+psutil>=5.9.0
+
 # ── AI / LangChain (core – always required for AI features) ──
 langchain>=1.2.0
 langchain-core>=1.2.0

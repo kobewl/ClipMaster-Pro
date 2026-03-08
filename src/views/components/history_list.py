@@ -16,17 +16,27 @@ class HistoryListItem(QWidget):
     
     # 亮色主题颜色
     _LIGHT = {
-        "border": "#93C5FD",
-        "selected_border": "#FF8C00",
-        "selected_bg": "#FFF3E0",
-        "favorite_bg": "rgba(254, 243, 199, 0.5)",
+        "border": "#D8E3EE",
+        "selected_border": "#0A84FF",
+        "selected_bg": "rgba(10, 132, 255, 0.12)",
+        "favorite_bg": "rgba(255, 204, 102, 0.14)",
+        "card_bg": "rgba(255, 255, 255, 0.75)",
+        "hover_bg": "rgba(248, 251, 255, 0.95)",
+        "text": "#152033",
+        "meta": "#7D8EA3",
+        "source": "#0A84FF",
     }
     # 暗色主题颜色
     _DARK = {
-        "border": "#1E3A8A",
-        "selected_border": "#FF8C00",
-        "selected_bg": "#4A3525",
-        "favorite_bg": "rgba(74, 53, 37, 0.5)",
+        "border": "#29415B",
+        "selected_border": "#4CC2FF",
+        "selected_bg": "rgba(76, 194, 255, 0.14)",
+        "favorite_bg": "rgba(255, 190, 92, 0.16)",
+        "card_bg": "rgba(24, 33, 47, 0.76)",
+        "hover_bg": "rgba(32, 51, 71, 0.92)",
+        "text": "#F5F9FF",
+        "meta": "#9FB3C8",
+        "source": "#4CC2FF",
     }
     
     # 图片缩略图尺寸
@@ -61,7 +71,8 @@ class HistoryListItem(QWidget):
         self.text_label = QLabel()
         self.text_label.setWordWrap(False)
         self.text_label.setStyleSheet("border: none; background: transparent;")
-        font = QFont("Segoe UI", 10)
+        font = QFont()
+        font.setPointSize(10)
         font.setWeight(QFont.Weight.Medium)
         self.text_label.setFont(font)
         content_layout.addWidget(self.text_label)
@@ -72,15 +83,9 @@ class HistoryListItem(QWidget):
         info_layout.setContentsMargins(0, 0, 0, 0)
 
         self.time_label = QLabel()
-        self.time_label.setStyleSheet(
-            "color: #9CA3AF; font-size: 11px; border: none; background: transparent;"
-        )
         info_layout.addWidget(self.time_label)
 
         self.source_label = QLabel()
-        self.source_label.setStyleSheet(
-            "color: #60A5FA; font-size: 10px; border: none; background: transparent;"
-        )
         info_layout.addWidget(self.source_label)
         info_layout.addStretch()
 
@@ -166,29 +171,48 @@ class HistoryListItem(QWidget):
         """根据选中状态和收藏状态更新边框与背景"""
         from views.styles.main_style import StyleManager
         c = self._DARK if StyleManager.is_dark_mode() else self._LIGHT
+
+        self.text_label.setStyleSheet(
+            f"color: {c['text']}; border: none; background: transparent;"
+        )
+        self.time_label.setStyleSheet(
+            f"color: {c['meta']}; font-size: 11px; border: none; background: transparent;"
+        )
+        self.source_label.setStyleSheet(
+            f"color: {c['source']}; font-size: 10px; border: none; background: transparent;"
+        )
+        self.fav_button.setStyleSheet(
+            f"border: none; background: transparent; font-size: 16px; color: {c['source']};"
+        )
         
         if self._selected:
             self.setStyleSheet(
                 f"HistoryListItem {{"
                 f"background-color: {c['selected_bg']};"
-                f"border: 2px solid {c['selected_border']};"
-                f"border-radius: 6px;"
+                f"border: 1px solid {c['selected_border']};"
+                f"border-radius: 12px;"
                 f"}}"
             )
         elif self.item_data.is_favorite:
             self.setStyleSheet(
                 f"HistoryListItem {{"
                 f"background-color: {c['favorite_bg']};"
-                f"border: 2px solid {c['border']};"
-                f"border-radius: 6px;"
+                f"border: 1px solid {c['border']};"
+                f"border-radius: 12px;"
+                f"}}"
+                f"HistoryListItem:hover {{"
+                f"background-color: {c['hover_bg']};"
                 f"}}"
             )
         else:
             self.setStyleSheet(
                 f"HistoryListItem {{"
-                f"background-color: transparent;"
-                f"border: 2px solid {c['border']};"
-                f"border-radius: 6px;"
+                f"background-color: {c['card_bg']};"
+                f"border: 1px solid {c['border']};"
+                f"border-radius: 12px;"
+                f"}}"
+                f"HistoryListItem:hover {{"
+                f"background-color: {c['hover_bg']};"
                 f"}}"
             )
     
@@ -370,22 +394,47 @@ class HistoryList(QListWidget):
                 return
             
             menu = QMenu(self)
-            menu.setStyleSheet("""
-                QMenu {
-                    background-color: white;
-                    border: 1px solid #E5E7EB;
-                    border-radius: 8px;
-                    padding: 8px;
-                }
-                QMenu::item {
-                    padding: 8px 24px;
-                    border-radius: 6px;
-                }
-                QMenu::item:selected {
-                    background-color: #EEF2FF;
-                    color: #4F46E5;
-                }
-            """)
+            dark = False
+            try:
+                from views.styles.main_style import StyleManager
+                dark = StyleManager.is_dark_mode()
+            except Exception:
+                dark = False
+            if dark:
+                menu.setStyleSheet("""
+                    QMenu {
+                        background-color: #18212F;
+                        border: 1px solid #29415B;
+                        border-radius: 10px;
+                        padding: 8px;
+                        color: white;
+                    }
+                    QMenu::item {
+                        padding: 8px 24px;
+                        border-radius: 7px;
+                    }
+                    QMenu::item:selected {
+                        background-color: #203347;
+                        color: #4CC2FF;
+                    }
+                """)
+            else:
+                menu.setStyleSheet("""
+                    QMenu {
+                        background-color: white;
+                        border: 1px solid #D8E3EE;
+                        border-radius: 10px;
+                        padding: 8px;
+                    }
+                    QMenu::item {
+                        padding: 8px 24px;
+                        border-radius: 7px;
+                    }
+                    QMenu::item:selected {
+                        background-color: #EAF4FF;
+                        color: #0A84FF;
+                    }
+                """)
             
             # 复制
             copy_action = QAction("📋 复制", self)

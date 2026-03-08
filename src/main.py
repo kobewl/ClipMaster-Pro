@@ -11,8 +11,11 @@ def get_resource_path(relative_path):
 
 # 添加src目录到Python路径
 src_path = get_resource_path('src')
-if src_path not in sys.path:
+if os.path.isdir(src_path) and src_path not in sys.path:
     sys.path.insert(0, src_path)
+elif hasattr(sys, '_MEIPASS') and sys._MEIPASS not in sys.path:
+    # Frozen app bundles import modules from _MEIPASS directly.
+    sys.path.insert(0, sys._MEIPASS)
 
 # 设置高DPI支持（必须在创建QApplication之前）
 os.environ["QT_ENABLE_HIGHDPI_SCALING"] = "1"
@@ -38,7 +41,8 @@ def setup_application():
     app.setOrganizationName("ClipMaster")
     
     # 设置全局字体
-    font = QFont("Segoe UI", 10)
+    font_family = "PingFang SC" if sys.platform == "darwin" else "Segoe UI"
+    font = QFont(font_family, 10)
     font.setStyleHint(QFont.StyleHint.SansSerif)
     app.setFont(font)
     

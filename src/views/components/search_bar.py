@@ -1,6 +1,7 @@
 from PyQt6.QtWidgets import QWidget, QHBoxLayout, QLineEdit, QLabel
 from PyQt6.QtCore import pyqtSignal, Qt
 from PyQt6.QtGui import QKeyEvent
+from config.settings import Settings
 
 
 class SearchBar(QWidget):
@@ -27,7 +28,8 @@ class SearchBar(QWidget):
         
         # 搜索输入框
         self.search_input = CustomLineEdit()
-        self.search_input.setPlaceholderText("搜索剪贴板内容... (Ctrl+F)")
+        search_hotkey = Settings.get("hotkeys", {}).get("search", Settings.DEFAULT_HOTKEYS["search"])
+        self.search_input.setPlaceholderText(f"搜索剪贴板内容... ({search_hotkey})")
         self.search_input.textChanged.connect(self.textChanged.emit)
         self.search_input.keyPressed.connect(self.keyNavigationRequested.emit)
         layout.addWidget(self.search_input)

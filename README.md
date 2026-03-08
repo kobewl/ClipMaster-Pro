@@ -78,6 +78,20 @@ python3 -m venv .venv
 2. 给 `Terminal`、`iTerm` 或你实际运行 ClipMaster Pro 的宿主应用开启权限
 3. 重新启动 ClipMaster Pro
 
+### macOS 打包
+
+项目内置了 macOS 打包脚本，可直接生成 `.app`：
+
+```bash
+.venv/bin/python build_macos.py
+```
+
+打包完成后产物位于：
+
+```bash
+dist/ClipMasterPro.app
+```
+
 ## 🚀 使用指南
 
 ### 基本操作

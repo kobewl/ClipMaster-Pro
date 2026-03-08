@@ -2,9 +2,17 @@ from pathlib import Path
 import os
 import json
 import threading
+import platform
 
 class Settings:
     """应用程序设置 - 线程安全版本"""
+
+    _IS_MAC = platform.system() == "Darwin"
+    DEFAULT_HOTKEYS = {
+        "show_window": "Command+`" if _IS_MAC else "Ctrl+O",
+        "clear_history": "Command+Shift+C" if _IS_MAC else "Ctrl+Shift+C",
+        "search": "Command+F" if _IS_MAC else "Ctrl+F",
+    }
     
     # 应用程序信息
     APP_NAME = "ClipMaster Pro"
@@ -33,11 +41,7 @@ class Settings:
         "retention_days": 30,
         "display_limit": 100,
         "auto_save_interval": 60,
-        "hotkeys": {
-            "show_window": "Ctrl+O",
-            "clear_history": "Ctrl+Shift+C",
-            "search": "Ctrl+F"
-        },
+        "hotkeys": DEFAULT_HOTKEYS.copy(),
         "ui": {
             "window_opacity": 1.0,
             "animation_enabled": True,
@@ -156,3 +160,9 @@ class Settings:
         except Exception as e:
             print(f"迁移旧版本数据时出错: {str(e)}")
         return False
+    _IS_MAC = platform.system() == "Darwin"
+    DEFAULT_HOTKEYS = {
+        "show_window": "Command+`" if _IS_MAC else "Ctrl+O",
+        "clear_history": "Command+Shift+C" if _IS_MAC else "Ctrl+Shift+C",
+        "search": "Command+F" if _IS_MAC else "Ctrl+F",
+    }

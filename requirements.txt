@@ -1,5 +1,5 @@
 # ClipMaster Pro Dependencies
-# Python 3.10+ required (LangChain requirement)
+# Python 3.10+ recommended
 
 # GUI framework
 PyQt6>=6.4.0
@@ -8,16 +8,17 @@ PyQt6-Qt6>=6.4.0
 # Windows integration
 pywin32>=305; platform_system=="Windows"
 
-# Global hotkey support
-keyboard>=0.13.5
-
 # Process information for source tracking
 psutil>=5.9.0
+pynput>=1.7.7
 
-# ── AI / LangChain (core – always required for AI features) ──
-langchain>=1.2.0
-langchain-core>=1.2.0
-langchain-openai>=1.1.0          # OpenAI + any custom OpenAI-compatible endpoint
+# ── Optional AI packages ───────────────────────────────────────────
+# Base app startup does not require LangChain.
+# Install these only if you want richer AI provider integrations.
+# keyboard>=0.13.5              # Global hotkeys / AI typing monitor on macOS needs Accessibility permission
+# langchain>=1.2.0
+# langchain-core>=1.2.0
+# langchain-openai>=1.1.0          # OpenAI + any custom OpenAI-compatible endpoint
 
 # ── Optional provider packages (install the ones you need) ──
 # pip install langchain-anthropic      # Anthropic Claude

@@ -11,7 +11,12 @@ zero mutex, zero cross-thread anything.  A QTimer polls the deque every 16 ms
 """
 
 from collections import deque
-import keyboard as kb_lib
+try:
+    import keyboard as kb_lib
+    _KEYBOARD_IMPORT_ERROR = None
+except ImportError as e:
+    kb_lib = None
+    _KEYBOARD_IMPORT_ERROR = e
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 from utils.logger import logger
 
@@ -85,6 +90,9 @@ class InputMonitor(QObject):
     def start(self):
         if self._enabled:
             return
+        if kb_lib is None:
+            logger.warning(f"Input monitor unavailable: {_KEYBOARD_IMPORT_ERROR}")
+            return
         self._enabled = True
         try:
             self._hook = kb_lib.on_press(self._on_raw_key, suppress=False)
@@ -128,6 +136,9 @@ class InputMonitor(QObject):
 
     def set_intercept_tab(self, intercept: bool):
         self._intercept_tab = intercept
+
+    def is_available(self) -> bool:
+        return kb_lib is not None
 
     # ── Keyboard hook (background thread — ABSOLUTE MINIMUM work) ────
 

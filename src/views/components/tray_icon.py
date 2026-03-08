@@ -138,7 +138,9 @@ class TrayIcon(QSystemTrayIcon):
     def _show_welcome(self):
         """显示欢迎消息"""
         try:
-            hotkey = Settings.get("hotkeys", {}).get("show_window", "Ctrl+O")
+            hotkey = Settings.get("hotkeys", {}).get(
+                "show_window", Settings.DEFAULT_HOTKEYS["show_window"]
+            )
             self.showMessage(
                 f"✅ {Settings.APP_NAME} 已启动",
                 f"程序已在后台运行\n使用 {hotkey} 快速打开主窗口",

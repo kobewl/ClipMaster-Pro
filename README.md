@@ -40,8 +40,9 @@
 ## 📦 安装说明
 
 ### 环境要求
-- Python 3.8 或更高版本
-- Windows 10/11 (其他平台支持开发中)
+- Python 3.10 或更高版本
+- Windows 10/11
+- macOS 13+（Apple Silicon / Intel，已支持基础使用、全局热键、窗口置顶）
 
 ### 安装步骤
 
@@ -61,6 +62,22 @@ pip install -r requirements.txt
 python src/main.py
 ```
 
+### macOS 运行说明
+
+推荐使用虚拟环境：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python src/main.py
+```
+
+如果你要使用全局热键和 AI 输入监听，需要在 macOS 中授予当前运行应用的辅助功能权限：
+
+1. 打开 `系统设置 -> 隐私与安全性 -> 辅助功能`
+2. 给 `Terminal`、`iTerm` 或你实际运行 ClipMaster Pro 的宿主应用开启权限
+3. 重新启动 ClipMaster Pro
+
 ## 🚀 使用指南
 
 ### 基本操作
@@ -75,6 +92,14 @@ python src/main.py
 | **双击项目** | 查看完整内容 |
 | **右键项目** | 打开操作菜单 |
 
+macOS 默认热键：
+
+| 操作 | 说明 |
+|------|------|
+| **Command + `** | 显示/隐藏主窗口 |
+| **Command + Shift + C** | 清空历史记录 |
+| **Command + F** | 聚焦搜索框 |
+
 ### 自定义热键
 
 1. 点击主窗口右上角的 **⚙️ 设置** 按钮
@@ -85,10 +110,11 @@ python src/main.py
 6. 点击 **"确定"** 保存设置
 
 **热键设置说明：**
-- 热键必须包含至少一个修饰键（Ctrl、Alt、Shift、Win）
+- 热键必须包含至少一个修饰键（Ctrl、Alt、Shift、Win / Command）
 - 支持字母、数字、F1-F12、符号键等
 - 如果热键被其他程序占用，会自动使用备用模式注册
 - 推荐避免与常用软件（如截图工具、IDE）冲突的热键组合
+- macOS 上热键依赖辅助功能权限；未授权时日志会提示监听不可用
 
 ### 界面说明
 
@@ -127,7 +153,7 @@ ClipMaster-Pro/
 │   ├── controllers/              # 控制器层
 │   │   ├── __init__.py
 │   │   ├── clipboard_controller.py   # 剪贴板控制
-│   │   ├── hotkey_controller.py      # 热键管理（双模式：RegisterHotKey + keyboard库）
+│   │   ├── hotkey_controller.py      # 热键管理（Windows: RegisterHotKey；macOS: pynput）
 │   │   └── input_monitor.py          # 输入监控（AI预测用）
 │   ├── models/                   # 数据模型层
 │   │   ├── __init__.py
@@ -174,7 +200,8 @@ ClipMaster-Pro/
 - **PyQt6** - GUI框架
 - **SQLite** - 本地数据存储
 - **gzip** - 数据压缩
-- **keyboard** - 全局热键支持
+- **keyboard** - Windows/Linux 键盘监听兼容层
+- **pynput** - macOS 全局热键支持
 - **langchain** - AI智能预测（可选）
 - **pywin32** - Windows系统集成
 
@@ -187,6 +214,7 @@ ClipMaster-Pro/
 1. 检查是否有其他程序占用了该热键（如截图工具、输入法）
 2. 在设置中更换为其他热键组合（推荐 `Ctrl+Alt+O`、`F1`、`F10` 等）
 3. 查看日志确认热键是否注册成功
+4. macOS 请确认已给终端或宿主应用开启辅助功能权限
 
 ### 热键设置捕获失败
 **问题：** 点击"设置热键"后按快捷键没有反应
@@ -203,6 +231,14 @@ ClipMaster-Pro/
 1. 历史记录过多时，程序会延迟加载数据
 2. 在设置中减少"最大历史记录数"
 3. 开启"启动时最小化到托盘"选项
+
+### macOS 窗口置顶不生效
+**问题：** 点击置顶按钮后窗口没有保持在最前面
+
+**解决方案：**
+1. 升级到包含 macOS 原生窗口层级修复的版本
+2. 该版本会同时设置 Qt 置顶标志和 macOS `NSWindow` 原生层级
+3. 如果仍异常，重启应用后再次测试，并查看日志中的 `macOS 原生窗口层级已设置` 提示
 
 ### JetBrains 系列 IDE 复制内容未进入历史
 **问题：** 在 IntelliJ IDEA、PyCharm 等工具中复制文本后，历史记录里找不到。

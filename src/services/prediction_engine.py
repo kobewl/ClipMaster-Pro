@@ -11,7 +11,12 @@ SAFETY-FIRST design:
 """
 
 import threading
-import keyboard
+try:
+    import keyboard
+    _KEYBOARD_IMPORT_ERROR = None
+except ImportError as e:
+    keyboard = None
+    _KEYBOARD_IMPORT_ERROR = e
 from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from services.ai_service import AIService
@@ -89,6 +94,9 @@ class PredictionEngine(QObject):
     # ── Lifecycle ────────────────────────────────────────────────────
 
     def start(self):
+        if not self.is_available():
+            logger.warning("Prediction engine unavailable on this platform or environment")
+            return
         if not self.ai_service.is_configured():
             logger.warning("AI service not configured; prediction engine idle")
             return
@@ -107,6 +115,12 @@ class PredictionEngine(QObject):
         self._do_dismiss()
         self.status_changed.emit("AI prediction OFF")
         logger.info("Prediction engine stopped")
+
+    def is_available(self) -> bool:
+        if keyboard is None:
+            logger.debug(f"Prediction engine keyboard dependency unavailable: {_KEYBOARD_IMPORT_ERROR}")
+            return False
+        return self.input_monitor.is_available()
 
     def reload_settings(self):
         was_running = self.input_monitor._enabled
@@ -379,6 +393,8 @@ class PredictionEngine(QObject):
 
         def _write_in_bg():
             try:
+                if keyboard is None:
+                    raise RuntimeError("keyboard module is unavailable")
                 keyboard.write(prediction, delay=0.005)
             except Exception as e:
                 logger.error(f"keyboard.write failed: {e}")

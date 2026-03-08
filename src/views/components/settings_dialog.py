@@ -7,10 +7,14 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, pyqtSignal, QTimer, QEvent
 from PyQt6.QtGui import QKeySequence
+import platform
 
 from config.settings import Settings
 from utils.logger import logger
 from utils.startup import StartupManager
+
+
+_IS_MAC = platform.system() == "Darwin"
 
 
 class SettingsDialog(QDialog):
@@ -369,9 +373,9 @@ class SettingsDialog(QDialog):
             self.max_history_spinbox.setValue(Settings.get("max_history", 1000))
 
             hotkeys = Settings.get("hotkeys", {})
-            self.show_window_hotkey.setText(hotkeys.get("show_window", "Ctrl+O"))
-            self.clear_history_hotkey.setText(hotkeys.get("clear_history", "Ctrl+Shift+C"))
-            self.search_hotkey.setText(hotkeys.get("search", "Ctrl+F"))
+            self.show_window_hotkey.setText(hotkeys.get("show_window", Settings.DEFAULT_HOTKEYS["show_window"]))
+            self.clear_history_hotkey.setText(hotkeys.get("clear_history", Settings.DEFAULT_HOTKEYS["clear_history"]))
+            self.search_hotkey.setText(hotkeys.get("search", Settings.DEFAULT_HOTKEYS["search"]))
 
             self.retention_days_spinbox.setValue(Settings.get("retention_days", 30))
             self.display_limit_spinbox.setValue(Settings.get("display_limit", 100))
@@ -409,9 +413,9 @@ class SettingsDialog(QDialog):
             Settings.set("max_history", self.max_history_spinbox.value())
 
             hotkeys = Settings.get("hotkeys", {})
-            hotkeys["show_window"] = self.show_window_hotkey.text() or "Ctrl+O"
-            hotkeys["clear_history"] = self.clear_history_hotkey.text() or "Ctrl+Shift+C"
-            hotkeys["search"] = self.search_hotkey.text() or "Ctrl+F"
+            hotkeys["show_window"] = self.show_window_hotkey.text() or Settings.DEFAULT_HOTKEYS["show_window"]
+            hotkeys["clear_history"] = self.clear_history_hotkey.text() or Settings.DEFAULT_HOTKEYS["clear_history"]
+            hotkeys["search"] = self.search_hotkey.text() or Settings.DEFAULT_HOTKEYS["search"]
             Settings.set("hotkeys", hotkeys)
 
             Settings.set("retention_days", self.retention_days_spinbox.value())
@@ -455,7 +459,7 @@ class SettingsDialog(QDialog):
                                              Qt.KeyboardModifier.MetaModifier))
 
             if not has_modifier:
-                self.capture_status_label.setText("热键必须包含 Ctrl、Alt、Shift 或 Win 键")
+                self.capture_status_label.setText("热键必须包含 Ctrl、Alt、Shift 或 Command 键")
                 QTimer.singleShot(2000, lambda: self.capture_status_label.setText("请按下快捷键组合... (按 Esc 取消)"))
                 return True
 
@@ -496,7 +500,7 @@ class SettingsDialog(QDialog):
         if event.modifiers() & Qt.KeyboardModifier.ShiftModifier:
             parts.append("Shift")
         if event.modifiers() & Qt.KeyboardModifier.MetaModifier:
-            parts.append("Meta")
+            parts.append("Command" if _IS_MAC else "Meta")
 
         # Add key name
         key = event.key()
@@ -553,10 +557,17 @@ class SettingsDialog(QDialog):
         if key in key_map:
             parts.append(key_map[key])
         else:
+            text = event.text().strip()
+            if text:
+                if text == "·" and _IS_MAC:
+                    parts.append("`")
+                elif text not in parts:
+                    parts.append(text.upper() if len(text) == 1 and text.isalpha() else text)
+            else:
             # Try to get key from QKeySequence
-            seq = QKeySequence(key)
-            txt = seq.toString()
-            if txt and txt not in parts:
-                parts.append(txt)
+                seq = QKeySequence(key)
+                txt = seq.toString()
+                if txt and txt not in parts:
+                    parts.append(txt)
 
         return "+".join(parts) if len(parts) > 1 else ""

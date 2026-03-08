@@ -27,14 +27,26 @@ from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter, QTimer
 from PyQt6.QtWidgets import QApplication
 from utils.logger import logger
 
-# Try to import keyboard library for fallback
+# Try to import keyboard library for Windows fallback
 try:
     import keyboard
     _KEYBOARD_AVAILABLE = True
+    _KEYBOARD_IMPORT_ERROR = None
 except ImportError:
     _KEYBOARD_AVAILABLE = False
+    _KEYBOARD_IMPORT_ERROR = "keyboard not installed"
+
+try:
+    from pynput import keyboard as pynput_keyboard
+    _PYNPUT_AVAILABLE = True
+    _PYNPUT_IMPORT_ERROR = None
+except ImportError:
+    pynput_keyboard = None
+    _PYNPUT_AVAILABLE = False
+    _PYNPUT_IMPORT_ERROR = "pynput not installed"
 
 _IS_WINDOWS = platform.system() == "Windows"
+_IS_MAC = platform.system() == "Darwin"
 
 WM_HOTKEY = 0x0312
 MOD_ALT = 0x0001
@@ -127,8 +139,79 @@ def _parse_hotkey(key_sequence: str):
 
 def _to_keyboard_format(key_sequence: str) -> str:
     """Convert 'Ctrl+Shift+C' to 'ctrl+shift+c' format for keyboard library."""
-    parts = [p.strip().lower() for p in key_sequence.split("+")]
+    parts = [_normalize_key_token(p) for p in key_sequence.split("+")]
     return "+".join(parts)
+
+
+def _to_pynput_format(key_sequence: str) -> str:
+    """Convert hotkeys to pynput format such as '<ctrl>+<shift>+c'."""
+    converted = []
+    for raw_part in key_sequence.split("+"):
+        part = _normalize_key_token(raw_part)
+        if not part:
+            continue
+
+        special = {
+            "ctrl": "<ctrl>",
+            "alt": "<alt>",
+            "shift": "<shift>",
+            "command": "<cmd>",
+            "windows": "<cmd>" if _IS_MAC else "<super>",
+            "escape": "<esc>",
+            "enter": "<enter>",
+            "tab": "<tab>",
+            "space": "<space>",
+            "backspace": "<backspace>",
+            "delete": "<delete>",
+            "home": "<home>",
+            "end": "<end>",
+            "pageup": "<page_up>",
+            "pagedown": "<page_down>",
+            "left": "<left>",
+            "right": "<right>",
+            "up": "<up>",
+            "down": "<down>",
+            "`": "`",
+        }
+        converted.append(special.get(part, part))
+
+    return "+".join(converted)
+
+
+def _normalize_key_token(part: str) -> str:
+    token = part.strip().lower()
+    if not token:
+        return ""
+
+    aliases = {
+        "control": "ctrl",
+        "option": "alt",
+        "cmd": "command",
+        "command": "command",
+        "meta": "command" if _IS_MAC else "windows",
+        "win": "windows",
+        "windows": "windows",
+        "esc": "escape",
+        "return": "enter",
+        "pageup": "page up",
+        "pagedown": "page down",
+        "pgup": "page up",
+        "pgdn": "page down",
+        "spacebar": "space",
+        "plus": "+",
+        "comma": ",",
+        "period": ".",
+        "slash": "/",
+        "semicolon": ";",
+        "apostrophe": "'",
+        "backtick": "`",
+        "grave": "`",
+        "quoteleft": "`",
+        "⌘": "command",
+        "⎋": "escape",
+        "·": "`" if _IS_MAC else "·",
+    }
+    return aliases.get(token, token)
 
 
 class _POINT(ctypes.Structure):
@@ -185,6 +268,8 @@ class HotkeyController(QObject):
 
         # Track which hotkeys use fallback (keyboard library)
         self._fallback_hotkeys: dict[str, object] = {}  # norm -> keyboard hotkey handle
+        self._pynput_hotkeys: dict[str, object] = {}
+        self._pynput_listener = None
 
         # Install native event filter for RegisterHotKey
         self._filter = _HotkeyFilter(self._on_wm_hotkey)
@@ -204,7 +289,10 @@ class HotkeyController(QObject):
     def _convert_key_sequence(self, qkey_sequence: str) -> str:
         if not qkey_sequence:
             return ""
-        return qkey_sequence.lower().replace(" ", "")
+        normalized_parts = [
+            _normalize_key_token(part) for part in qkey_sequence.split("+")
+        ]
+        return "+".join(part.replace(" ", "") for part in normalized_parts if part)
 
     def register_shortcut(self, key_sequence: str, callback) -> bool:
         """Register a global hotkey. Returns True on success."""
@@ -237,8 +325,25 @@ class HotkeyController(QObject):
                         err = ctypes.get_last_error()
                         logger.warning(f"RegisterHotKey failed for '{key_sequence}': win32 error {err}")
 
+            # macOS / Linux fallback via pynput (does not require admin)
+            if not _IS_WINDOWS and _PYNPUT_AVAILABLE:
+                try:
+                    self._ensure_pynput_listener()
+                    parsed = pynput_keyboard.HotKey.parse(_to_pynput_format(norm))
+                    hotkey = pynput_keyboard.HotKey(
+                        parsed, lambda n=norm: self._queue_callback(n)
+                    )
+                    self._pynput_hotkeys[norm] = hotkey
+                    self.callbacks[norm] = callback
+                    logger.info(f"✓ Registered via pynput: {key_sequence} (format={_to_pynput_format(norm)})")
+                    return True
+                except Exception as e:
+                    logger.error(f"pynput hotkey registration failed for '{key_sequence}': {e}")
+            elif not _IS_WINDOWS:
+                logger.error(f"pynput unavailable for '{key_sequence}': {_PYNPUT_IMPORT_ERROR}")
+
             # Fallback to keyboard library
-            if _KEYBOARD_AVAILABLE:
+            if _IS_WINDOWS and _KEYBOARD_AVAILABLE:
                 try:
                     kb_format = _to_keyboard_format(norm)
                     # Use a wrapper to queue callback to main thread
@@ -255,6 +360,8 @@ class HotkeyController(QObject):
                         return True
                 except Exception as e:
                     logger.error(f"keyboard.add_hotkey failed for '{key_sequence}': {e}")
+            elif _IS_WINDOWS:
+                logger.error(f"keyboard fallback unavailable for '{key_sequence}': {_KEYBOARD_IMPORT_ERROR}")
 
             logger.error(f"✗ Failed to register hotkey: {key_sequence}")
             return False
@@ -304,6 +411,14 @@ class HotkeyController(QObject):
                 logger.info(f"✓ Unregistered from keyboard library: {key_sequence}")
                 return True
 
+            hotkey = self._pynput_hotkeys.pop(norm, None)
+            if hotkey is not None:
+                self.callbacks.pop(norm, None)
+                if not self._pynput_hotkeys:
+                    self._stop_pynput_listener()
+                logger.info(f"✓ Unregistered from pynput: {key_sequence}")
+                return True
+
             return False
 
         except Exception as e:
@@ -330,9 +445,12 @@ class HotkeyController(QObject):
                 except Exception as e:
                     logger.warning(f"Error removing keyboard hotkey: {e}")
 
+        self._stop_pynput_listener()
+
         self._id_to_key.clear()
         self._key_to_id.clear()
         self._fallback_hotkeys.clear()
+        self._pynput_hotkeys.clear()
         self.callbacks.clear()
         logger.info("All hotkeys unregistered")
 
@@ -358,4 +476,46 @@ class HotkeyController(QObject):
     def is_registered(self, key_sequence: str) -> bool:
         """Check if a hotkey is registered."""
         norm = self._convert_key_sequence(key_sequence)
-        return norm in self._key_to_id or norm in self._fallback_hotkeys
+        return (
+            norm in self._key_to_id
+            or norm in self._fallback_hotkeys
+            or norm in self._pynput_hotkeys
+        )
+
+    def _ensure_pynput_listener(self):
+        if self._pynput_listener is not None:
+            return
+        if not _PYNPUT_AVAILABLE:
+            raise RuntimeError("pynput is unavailable")
+
+        def on_press(key):
+            listener = self._pynput_listener
+            if listener is None:
+                return
+            canonical = listener.canonical(key)
+            for hotkey in list(self._pynput_hotkeys.values()):
+                hotkey.press(canonical)
+
+        def on_release(key):
+            listener = self._pynput_listener
+            if listener is None:
+                return
+            canonical = listener.canonical(key)
+            for hotkey in list(self._pynput_hotkeys.values()):
+                hotkey.release(canonical)
+
+        self._pynput_listener = pynput_keyboard.Listener(
+            on_press=on_press,
+            on_release=on_release,
+        )
+        self._pynput_listener.start()
+        logger.info("pynput hotkey listener started")
+
+    def _stop_pynput_listener(self):
+        if self._pynput_listener is None:
+            return
+        try:
+            self._pynput_listener.stop()
+        except Exception as e:
+            logger.warning(f"Error stopping pynput listener: {e}")
+        self._pynput_listener = None

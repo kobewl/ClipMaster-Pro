@@ -2,8 +2,12 @@ import os
 import sys
 import platform
 from pathlib import Path
-import winreg
 import shutil
+
+if platform.system() == "Windows":
+    import winreg
+else:
+    winreg = None
 
 from config.settings import Settings
 from utils.logger import logger

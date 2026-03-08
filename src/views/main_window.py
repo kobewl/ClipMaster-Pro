@@ -4,7 +4,30 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import Qt, QPoint, QTimer
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen, QScreen, QShortcut, QKeySequence
-import keyboard
+import platform
+
+try:
+    import keyboard
+    _KEYBOARD_IMPORT_ERROR = None
+except ImportError as e:
+    keyboard = None
+    _KEYBOARD_IMPORT_ERROR = e
+
+if platform.system() == "Darwin":
+    try:
+        import objc
+        from AppKit import NSFloatingWindowLevel, NSNormalWindowLevel
+        _MAC_NATIVE_WINDOW_LEVEL_AVAILABLE = True
+    except ImportError:
+        objc = None
+        NSFloatingWindowLevel = None
+        NSNormalWindowLevel = None
+        _MAC_NATIVE_WINDOW_LEVEL_AVAILABLE = False
+else:
+    objc = None
+    NSFloatingWindowLevel = None
+    NSNormalWindowLevel = None
+    _MAC_NATIVE_WINDOW_LEVEL_AVAILABLE = False
 
 from views.components.search_bar import SearchBar
 from views.components.history_list import HistoryList
@@ -71,6 +94,7 @@ class MainWindow(QMainWindow):
         self._is_moving = False
         self.is_top = False
         self.show_favorites_only = False
+        self._platform = platform.system()
         
         # 加载主题设置
         self.is_dark_mode = Settings.get("dark_mode", False)
@@ -108,10 +132,47 @@ class MainWindow(QMainWindow):
         """初始化窗口属性"""
         self.setWindowTitle(Settings.APP_NAME)
         self.setFixedSize(Settings.WINDOW_WIDTH, Settings.WINDOW_HEIGHT)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool)
+        self._apply_window_flags()
         
         # 设置窗口阴影效果（使用样式）
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
+
+    def _build_window_flags(self):
+        flags = Qt.WindowType.FramelessWindowHint
+        if self._platform == "Darwin":
+            flags |= Qt.WindowType.Window
+        else:
+            flags |= Qt.WindowType.Tool
+        if self.is_top:
+            flags |= Qt.WindowType.WindowStaysOnTopHint
+        return flags
+
+    def _apply_window_flags(self):
+        was_visible = self.isVisible()
+        current_pos = self.pos()
+        self.setWindowFlags(self._build_window_flags())
+        self.move(current_pos)
+        if was_visible:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        self._apply_native_topmost_state()
+
+    def _apply_native_topmost_state(self):
+        if self._platform != "Darwin" or not _MAC_NATIVE_WINDOW_LEVEL_AVAILABLE:
+            return
+        try:
+            if not self.winId():
+                return
+            native_view = objc.objc_object(c_void_p=int(self.winId()))
+            native_window = native_view.window()
+            if native_window is None:
+                return
+            level = NSFloatingWindowLevel if self.is_top else NSNormalWindowLevel
+            native_window.setLevel_(level)
+            logger.info(f"macOS 原生窗口层级已设置: {'floating' if self.is_top else 'normal'}")
+        except Exception as e:
+            logger.error(f"设置 macOS 原生窗口层级失败: {e}")
     
     def center_window(self):
         """将窗口居中显示"""
@@ -317,9 +378,9 @@ class MainWindow(QMainWindow):
             hotkeys = Settings.get("hotkeys", {})
 
             # 记录当前热键，用于后续配置更改时注销
-            self.current_show_key = hotkeys.get("show_window", "Ctrl+O")
-            self.current_clear_key = hotkeys.get("clear_history", "Ctrl+Shift+C")
-            self.current_search_key = hotkeys.get("search", "Ctrl+F")
+            self.current_show_key = hotkeys.get("show_window", Settings.DEFAULT_HOTKEYS["show_window"])
+            self.current_clear_key = hotkeys.get("clear_history", Settings.DEFAULT_HOTKEYS["clear_history"])
+            self.current_search_key = hotkeys.get("search", Settings.DEFAULT_HOTKEYS["search"])
 
             # 保存回调引用，防止被垃圾回收
             self._clear_history_callback = lambda: self.clipboard_controller.clear_history(keep_favorites=True)
@@ -335,6 +396,11 @@ class MainWindow(QMainWindow):
             # 注册搜索快捷键
             result3 = self.hotkey_controller.register_shortcut(self.current_search_key, self.show_and_focus_search)
             logger.info(f"热键注册: 搜索 [{self.current_search_key}] = {'成功' if result3 else '失败'}")
+
+            if self._platform == "Darwin":
+                logger.info("macOS 平台：全局热键依赖 pynput 与辅助功能权限")
+            elif self._platform != "Windows":
+                logger.info("非 Windows 平台：全局热键依赖额外后端支持")
 
             # 注册ESC关闭窗口 (局部热键即可)
             self.esc_shortcut = QShortcut(QKeySequence("Esc"), self)
@@ -393,9 +459,20 @@ class MainWindow(QMainWindow):
         
         # 隐藏窗口
         self.hide()
-        
-        # 尽量延长一点点延迟以保证 Windows 焦点平滑切回到上方的真实业务窗口
-        QTimer.singleShot(300, lambda: keyboard.send('ctrl+v'))
+
+        if keyboard is None:
+            logger.info(f"自动粘贴不可用: {_KEYBOARD_IMPORT_ERROR}")
+            return
+
+        paste_hotkey = "ctrl+v" if self._platform == "Windows" else "command+v"
+
+        def _send_paste():
+            try:
+                keyboard.send(paste_hotkey)
+            except Exception as e:
+                logger.error(f"自动粘贴失败: {e}")
+
+        QTimer.singleShot(300, _send_paste)
     
     def _handle_item_delete(self, content_hash: str):
         """处理项目删除"""
@@ -455,6 +532,7 @@ class MainWindow(QMainWindow):
             if self.isMinimized():
                 self.showNormal()
             self.show()
+            self._apply_native_topmost_state()
             self.activateWindow()
             self.raise_()
             self.search_bar.focus_search()
@@ -478,18 +556,14 @@ class MainWindow(QMainWindow):
     def toggle_top_window(self):
         """切换窗口置顶状态"""
         self.is_top = not self.is_top
-        current_pos = self.pos()
-        
+
+        self.top_button.setChecked(self.is_top)
+        self._apply_window_flags()
+
         if self.is_top:
-            self.setWindowFlags(self.windowFlags() | Qt.WindowType.WindowStaysOnTopHint)
             self.status_bar.setText("窗口已置顶")
         else:
-            self.setWindowFlags(self.windowFlags() & ~Qt.WindowType.WindowStaysOnTopHint)
             self.status_bar.setText("窗口已取消置顶")
-        
-        self.move(current_pos)
-        self.show()
-        self.activateWindow()
     
     def toggle_theme(self):
         """切换主题"""
@@ -598,9 +672,9 @@ class MainWindow(QMainWindow):
 
             # 更新热键
             hotkeys = Settings.get("hotkeys", {})
-            new_show_key = hotkeys.get("show_window", "Ctrl+O")
-            new_clear_key = hotkeys.get("clear_history", "Ctrl+Shift+C")
-            new_search_key = hotkeys.get("search", "Ctrl+F")
+            new_show_key = hotkeys.get("show_window", Settings.DEFAULT_HOTKEYS["show_window"])
+            new_clear_key = hotkeys.get("clear_history", Settings.DEFAULT_HOTKEYS["clear_history"])
+            new_search_key = hotkeys.get("search", Settings.DEFAULT_HOTKEYS["search"])
 
             # 更新清空历史回调引用
             self._clear_history_callback = lambda: self.clipboard_controller.clear_history(keep_favorites=True)
@@ -651,8 +725,10 @@ class MainWindow(QMainWindow):
         try:
             self.prediction_engine.reload_settings()
             ai = Settings.get("ai", {})
-            if ai.get("enabled"):
+            if ai.get("enabled") and self.prediction_engine.is_available():
                 self.status_bar.setText("AI 智能预测已启用")
+            elif ai.get("enabled"):
+                self.status_bar.setText("AI 智能预测不可用：缺少键盘监听能力")
             else:
                 self.status_bar.setText("AI 智能预测已关闭")
         except Exception as e:

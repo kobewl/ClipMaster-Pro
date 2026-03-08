@@ -1,38 +1,58 @@
-"""现代化UI样式定义 - Fluent Design 风格"""
+"""现代化UI样式定义 - 跨平台桌面风格"""
+
+import platform
+
+
+_FONT_STACK = (
+    "'PingFang SC', 'Helvetica Neue', 'Hiragino Sans GB', sans-serif"
+    if platform.system() == "Darwin"
+    else "'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', sans-serif"
+)
 
 class MainStyle:
     """主要样式定义 - 现代亮色主题"""
     
     COLORS = {
-        'primary': '#0067C0',
-        'primary_hover': '#1975C5',
-        'primary_light': '#F3F9FF',
-        'secondary': '#5D6471',
-        'success': '#0F7B0F',
-        'warning': '#9D5D00',
+        'primary': '#0A84FF',
+        'primary_hover': '#409CFF',
+        'primary_light': '#EAF4FF',
+        'secondary': '#516074',
+        'success': '#0F9D58',
+        'warning': '#C97A10',
         'danger': '#C42B1C',
-        'background': '#FAFAFA',
+        'background': '#EEF3F8',
         'surface': '#FFFFFF',
-        'border': '#E5E5E5',
-        'text_primary': '#1A1A1A',
-        'text_secondary': '#5D6471',
-        'text_muted': '#999999',
+        'surface_alt': '#F8FBFF',
+        'border': '#D8E3EE',
+        'border_strong': '#B7C9DA',
+        'text_primary': '#152033',
+        'text_secondary': '#516074',
+        'text_muted': '#7D8EA3',
     }
     
     MAIN_WIDGET = """
         QMainWindow {
-            background-color: #FAFAFA;
+            background-color: #EEF3F8;
         }
 
         #mainWidget {
-            background-color: transparent;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 #F4F8FC,
+                stop: 0.55 #EDF4FB,
+                stop: 1 #E8EFF7
+            );
             border: none;
         }
 
         #borderFrame {
-            background-color: #FFFFFF;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1,
+                stop: 0 #FFFFFF,
+                stop: 1 #F8FBFF
+            );
             border: none;
-            border-radius: 8px;
+            border-radius: 14px;
         }
 
         #contentWidget {
@@ -43,32 +63,37 @@ class MainStyle:
 
     TITLE_BAR = """
         #titleBar {
-            background-color: transparent;
-            padding: 8px 12px;
-            border-bottom: 1px solid #E5E5E5;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 0,
+                stop: 0 rgba(10, 132, 255, 0.14),
+                stop: 1 rgba(90, 200, 250, 0.03)
+            );
+            padding: 10px 14px;
+            border-bottom: 1px solid #D8E3EE;
         }
         
         #titleLabel {
-            font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', sans-serif;
-            font-size: 14px;
-            font-weight: 600;
-            color: #1A1A1A;
-            padding-left: 4px;
+            font-family: """ + _FONT_STACK + """;
+            font-size: 15px;
+            font-weight: 700;
+            color: #152033;
+            letter-spacing: 0.3px;
+            padding-left: 6px;
         }
     """
     
     SEARCH_CONTAINER = """
         #searchContainer {
-            background-color: #FFFFFF;
-            border: 1px solid #E5E5E5;
-            border-radius: 6px;
-            padding: 4px 8px;
-            margin: 4px 0;
+            background-color: rgba(255, 255, 255, 0.88);
+            border: 1px solid #D8E3EE;
+            border-radius: 10px;
+            padding: 5px 10px;
+            margin: 2px 0;
         }
         
         #searchContainer:focus-within {
-            border-bottom: 2px solid #0067C0;
-            padding-bottom: 3px;
+            border: 1px solid #0A84FF;
+            background-color: #FFFFFF;
         }
         
         #searchContainer QLineEdit {
@@ -76,7 +101,8 @@ class MainStyle:
             background: transparent;
             padding: 4px 4px;
             font-size: 13px;
-            color: #1A1A1A;
+            font-family: """ + _FONT_STACK + """;
+            color: #152033;
             min-width: 200px;
         }
         
@@ -91,33 +117,35 @@ class MainStyle:
     
     BUTTONS = """
         QPushButton {
-            border-radius: 6px;
+            border-radius: 9px;
             font-size: 13px;
             padding: 6px 12px;
-            font-weight: 400;
+            font-weight: 500;
             border: 1px solid transparent;
             background-color: transparent;
+            font-family: """ + _FONT_STACK + """;
         }
         
         /* 图标按钮 */
         #iconButton {
-            color: #5D6471;
+            color: #516074;
             min-width: 32px;
             min-height: 32px;
             padding: 6px;
-            border-radius: 6px;
-            background-color: transparent;
+            border-radius: 9px;
+            background-color: rgba(255, 255, 255, 0.55);
         }
         
         #iconButton:hover {
-            background-color: #F0F0F0;
-            color: #1A1A1A;
+            background-color: #FFFFFF;
+            color: #152033;
+            border: 1px solid #D8E3EE;
         }
         
         #iconButton:checked {
-            background-color: #FFFFFF;
-            color: #0067C0;
-            border: 1px solid #E5E5E5;
+            background-color: #EAF4FF;
+            color: #0A84FF;
+            border: 1px solid #B7C9DA;
         }
         
         /* 主要按钮 */
@@ -134,13 +162,12 @@ class MainStyle:
         /* 次要按钮 */
         #secondaryButton {
             background-color: #FFFFFF;
-            color: #1A1A1A;
-            border: 1px solid #E5E5E5;
-            border-bottom-color: #CCCCCC;
+            color: #152033;
+            border: 1px solid #D8E3EE;
         }
         
         #secondaryButton:hover {
-            background-color: #F6F6F6;
+            background-color: #F8FBFF;
         }
         
         /* 危险按钮 */
@@ -156,12 +183,12 @@ class MainStyle:
         /* 关闭按钮 */
         #closeButton {
             background-color: transparent;
-            color: #5D6471;
+            color: #516074;
             font-size: 14px;
             min-width: 32px;
             min-height: 32px;
             padding: 4px;
-            border-radius: 6px;
+            border-radius: 9px;
         }
         
         #closeButton:hover {
@@ -231,39 +258,40 @@ class MainStyle:
     TOOLBAR = """
         #toolbar {
             background-color: transparent;
-            padding: 4px 12px;
+            padding: 8px 14px 6px 14px;
             border-bottom: 1px solid transparent;
         }
         
         #filterButton {
-            background-color: transparent;
-            color: #5D6471;
-            border: 1px solid transparent;
-            border-radius: 6px;
-            padding: 6px 10px;
+            background-color: rgba(255, 255, 255, 0.45);
+            color: #516074;
+            border: 1px solid #D8E3EE;
+            border-radius: 9px;
+            padding: 6px 12px;
             font-size: 13px;
         }
         
         #filterButton:hover {
-            background-color: #F0F0F0;
+            background-color: #FFFFFF;
         }
         
         #filterButton:checked {
-            background-color: #FFFFFF;
-            color: #0067C0;
-            border: 1px solid #E5E5E5;
+            background-color: #EAF4FF;
+            color: #0A84FF;
+            border: 1px solid #B7C9DA;
         }
     """
     
     STATUS_BAR = """
         #statusBar {
-            background-color: #FAFAFA;
-            color: #5D6471;
+            background-color: rgba(10, 132, 255, 0.06);
+            color: #516074;
             font-size: 12px;
-            padding: 8px 12px;
-            border-top: 1px solid #E5E5E5;
-            border-bottom-left-radius: 8px;
-            border-bottom-right-radius: 8px;
+            font-family: """ + _FONT_STACK + """;
+            padding: 9px 14px;
+            border-top: 1px solid #D8E3EE;
+            border-bottom-left-radius: 14px;
+            border-bottom-right-radius: 14px;
         }
     """
     
@@ -293,9 +321,11 @@ class DarkStyle:
         'success': '#6CCB5F',
         'warning': '#FCE100',
         'danger': '#FF99A4',
-        'background': '#202020',
-        'surface': '#2D2D2D',
-        'border': '#434343',
+        'background': '#111827',
+        'surface': '#18212F',
+        'surface_alt': '#101827',
+        'border': '#29415B',
+        'border_strong': '#355575',
         'text_primary': '#FFFFFF',
         'text_secondary': '#A0AABF',
         'text_muted': '#7A7A7A',
@@ -303,18 +333,27 @@ class DarkStyle:
     
     MAIN_WIDGET = """
         QMainWindow {
-            background-color: #202020;
+            background-color: #111827;
         }
 
         #mainWidget {
-            background-color: transparent;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 1,
+                stop: 0 #111827,
+                stop: 0.5 #132033,
+                stop: 1 #0D1727
+            );
             border: none;
         }
 
         #borderFrame {
-            background-color: #2D2D2D;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 0, y2: 1,
+                stop: 0 #1A2433,
+                stop: 1 #121B29
+            );
             border: none;
-            border-radius: 8px;
+            border-radius: 14px;
         }
 
         #contentWidget {
@@ -325,33 +364,37 @@ class DarkStyle:
 
     TITLE_BAR = """
         #titleBar {
-            background-color: transparent;
-            padding: 8px 12px;
-            border-bottom: 1px solid #333333;
+            background-color: qlineargradient(
+                x1: 0, y1: 0, x2: 1, y2: 0,
+                stop: 0 rgba(76, 194, 255, 0.18),
+                stop: 1 rgba(24, 33, 47, 0.12)
+            );
+            padding: 10px 14px;
+            border-bottom: 1px solid #29415B;
         }
         
         #titleLabel {
-            font-family: 'Segoe UI Variable', 'Segoe UI', 'Microsoft YaHei', sans-serif;
-            font-size: 14px;
-            font-weight: 600;
+            font-family: """ + _FONT_STACK + """;
+            font-size: 15px;
+            font-weight: 700;
             color: #FFFFFF;
-            padding-left: 4px;
+            letter-spacing: 0.3px;
+            padding-left: 6px;
         }
     """
     
     SEARCH_CONTAINER = """
         #searchContainer {
-            background-color: #2D2D2D;
-            border: 1px solid #333333;
-            border-radius: 6px;
-            padding: 4px 8px;
-            margin: 4px 0;
-            border-bottom: 1px solid #555555;
+            background-color: rgba(24, 33, 47, 0.92);
+            border: 1px solid #29415B;
+            border-radius: 10px;
+            padding: 5px 10px;
+            margin: 2px 0;
         }
         
         #searchContainer:focus-within {
-            border-bottom: 2px solid #4CC2FF;
-            padding-bottom: 3px;
+            border: 1px solid #4CC2FF;
+            background-color: #1A2433;
         }
         
         #searchContainer QLineEdit {
@@ -359,6 +402,7 @@ class DarkStyle:
             background: transparent;
             padding: 4px 4px;
             font-size: 13px;
+            font-family: """ + _FONT_STACK + """;
             color: #FFFFFF;
             min-width: 200px;
         }
@@ -374,12 +418,13 @@ class DarkStyle:
     
     BUTTONS = """
         QPushButton {
-            border-radius: 6px;
+            border-radius: 9px;
             font-size: 13px;
             padding: 6px 12px;
-            font-weight: 400;
+            font-weight: 500;
             border: 1px solid transparent;
             background-color: transparent;
+            font-family: """ + _FONT_STACK + """;
         }
         
         /* 图标按钮 */
@@ -388,19 +433,20 @@ class DarkStyle:
             min-width: 32px;
             min-height: 32px;
             padding: 6px;
-            border-radius: 6px;
-            background-color: transparent;
+            border-radius: 9px;
+            background-color: rgba(26, 36, 51, 0.76);
         }
         
         #iconButton:hover {
-            background-color: #2D2D2D;
+            background-color: #213247;
             color: #FFFFFF;
+            border: 1px solid #29415B;
         }
         
         #iconButton:checked {
-            background-color: #333333;
+            background-color: #203347;
             color: #4CC2FF;
-            border: 1px solid #434343;
+            border: 1px solid #355575;
         }
         
         /* 主要按钮 */
@@ -416,14 +462,13 @@ class DarkStyle:
         
         /* 次要按钮 */
         #secondaryButton {
-            background-color: #2D2D2D;
+            background-color: #18212F;
             color: #FFFFFF;
-            border: 1px solid #333333;
-            border-top-color: #444444;
+            border: 1px solid #29415B;
         }
         
         #secondaryButton:hover {
-            background-color: #383838;
+            background-color: #203347;
         }
         
         /* 危险按钮 */
@@ -444,7 +489,7 @@ class DarkStyle:
             min-width: 32px;
             min-height: 32px;
             padding: 4px;
-            border-radius: 6px;
+            border-radius: 9px;
         }
         
         #closeButton:hover {
@@ -514,39 +559,40 @@ class DarkStyle:
     TOOLBAR = """
         #toolbar {
             background-color: transparent;
-            padding: 4px 12px;
+            padding: 8px 14px 6px 14px;
             border-bottom: 1px solid transparent;
         }
         
         #filterButton {
-            background-color: transparent;
+            background-color: rgba(26, 36, 51, 0.72);
             color: #A0AABF;
-            border: 1px solid transparent;
-            border-radius: 6px;
-            padding: 6px 10px;
+            border: 1px solid #29415B;
+            border-radius: 9px;
+            padding: 6px 12px;
             font-size: 13px;
         }
         
         #filterButton:hover {
-            background-color: #2D2D2D;
+            background-color: #213247;
         }
         
         #filterButton:checked {
-            background-color: #333333;
+            background-color: #203347;
             color: #4CC2FF;
-            border: 1px solid #434343;
+            border: 1px solid #355575;
         }
     """
     
     STATUS_BAR = """
         #statusBar {
-            background-color: #202020;
+            background-color: rgba(76, 194, 255, 0.08);
             color: #A0AABF;
             font-size: 12px;
-            padding: 8px 12px;
-            border-top: 1px solid #333333;
-            border-bottom-left-radius: 8px;
-            border-bottom-right-radius: 8px;
+            font-family: """ + _FONT_STACK + """;
+            padding: 9px 14px;
+            border-top: 1px solid #29415B;
+            border-bottom-left-radius: 14px;
+            border-bottom-right-radius: 14px;
         }
     """
     

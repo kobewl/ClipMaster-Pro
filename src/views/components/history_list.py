@@ -105,12 +105,24 @@ class HistoryListItem(QWidget):
 
     # ── 缩略图生成 ────────────────────────────────────────────
     def _make_thumbnail(self) -> QPixmap | None:
-        """将 base64 图片内容解码并缩放为缩略图，结果缓存"""
+        """加载图片并缩放为缩略图，结果缓存。支持文件路径（新数据）和 Base64（旧数据）。"""
         if self._thumbnail is not None:
             return self._thumbnail
         try:
             content = self.item_data.content
-            if content.startswith('data:image'):
+            # 优先从文件路径加载（新数据）
+            if content and not content.startswith('data:image'):
+                img = QImage()
+                if img.load(content) and not img.isNull():
+                    pix = QPixmap.fromImage(img)
+                    self._thumbnail = pix.scaled(
+                        self._THUMB_W, self._THUMB_H,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    return self._thumbnail
+            # 兼容旧数据（Base64）
+            elif content.startswith('data:image'):
                 import base64 as _b64
                 raw = _b64.b64decode(content.split(',', 1)[1])
                 img = QImage()

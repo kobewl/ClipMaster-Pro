@@ -163,6 +163,31 @@ class DatabaseManager:
             logger.error(f"从数据库获取项目时发生错误: {str(e)}")
             return []
     
+    def get_item_by_hash(self, content_hash: str) -> Optional[ClipboardItem]:
+        """根据 content_hash 获取单个项目"""
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM clipboard_history WHERE content_hash = ?', (content_hash,))
+            row = cursor.fetchone()
+            if row:
+                content = row['content']
+                if row['compressed']:
+                    content = gzip.decompress(content).decode('utf-8')
+                return ClipboardItem(
+                    content=content,
+                    timestamp=datetime.fromtimestamp(row['timestamp']),
+                    content_type=ContentType(row['content_type']),
+                    content_hash=row['content_hash'],
+                    is_favorite=bool(row['is_favorite']),
+                    tags=json.loads(row['tags']),
+                    metadata=json.loads(row['metadata'])
+                )
+            return None
+        except Exception as e:
+            logger.error(f"根据哈希获取项目时发生错误: {str(e)}")
+            return None
+
     def delete_item(self, content_hash: str) -> bool:
         """删除项目"""
         try:
@@ -349,6 +374,16 @@ class ClipboardService(QObject):
             logger.error(f"添加项目到历史记录时发生错误: {str(e)}")
             return False
     
+    def _delete_image_file(self, content: str, content_type: str = None) -> None:
+        """删除本地图片文件（当记录被删除时清理磁盘）。"""
+        try:
+            if content_type == 'image' or (content and not content.startswith("data:image")):
+                if os.path.exists(content):
+                    os.remove(content)
+                    logger.debug(f"已删除图片文件: {content}")
+        except Exception as e:
+            logger.warning(f"删除图片文件失败: {e}")
+
     def _enforce_max_limit(self):
         """强制执行最大记录数限制"""
         try:
@@ -358,26 +393,46 @@ class ClipboardService(QObject):
                 excess = count - self.max_history
                 conn = self.db._get_connection()
                 cursor = conn.cursor()
-                
-                # 删除最旧的非收藏项目
+
+                # 先查出要删除的项目，清理图片文件
                 cursor.execute('''
-                    DELETE FROM clipboard_history 
+                    SELECT content, content_type FROM clipboard_history
                     WHERE id IN (
-                        SELECT id FROM clipboard_history 
-                        WHERE is_favorite = 0 
-                        ORDER BY timestamp ASC 
+                        SELECT id FROM clipboard_history
+                        WHERE is_favorite = 0
+                        ORDER BY timestamp ASC
                         LIMIT ?
                     )
                 ''', (excess,))
-                
+                rows = cursor.fetchall()
+                for row in rows:
+                    self._delete_image_file(row['content'], row['content_type'])
+
+                # 删除最旧的非收藏项目
+                cursor.execute('''
+                    DELETE FROM clipboard_history
+                    WHERE id IN (
+                        SELECT id FROM clipboard_history
+                        WHERE is_favorite = 0
+                        ORDER BY timestamp ASC
+                        LIMIT ?
+                    )
+                ''', (excess,))
+
                 conn.commit()
                 logger.info(f"已删除 {cursor.rowcount} 条旧记录以限制总数")
         except Exception as e:
             logger.error(f"强制执行最大限制时发生错误: {str(e)}")
-    
+
     def clear_history(self, keep_favorites: bool = True) -> bool:
         """清空历史记录"""
         try:
+            # 先获取要删除的图片项目，清理文件
+            items = self.db.get_items(limit=10000, favorites_only=False)
+            for item in items:
+                if item.content_type == ContentType.IMAGE:
+                    self._delete_image_file(item.content, 'image')
+
             result = self.db.clear_history(keep_favorites)
             if result:
                 self.history_changed.emit()
@@ -386,10 +441,15 @@ class ClipboardService(QObject):
         except Exception as e:
             logger.error(f"清空历史记录时发生错误: {str(e)}")
             return False
-    
+
     def delete_item(self, content_hash: str) -> bool:
         """删除指定项目"""
         try:
+            # 先获取项目信息，如有图片则清理文件
+            item = self.db.get_item_by_hash(content_hash)
+            if item and item.content_type == ContentType.IMAGE:
+                self._delete_image_file(item.content, 'image')
+
             result = self.db.delete_item(content_hash)
             if result:
                 self.history_changed.emit()

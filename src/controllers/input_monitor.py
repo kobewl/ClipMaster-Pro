@@ -118,6 +118,19 @@ class InputMonitor(QObject):
         self._idle_timer.stop()
         self._key_deque.clear()
         logger.info("Input monitor stopped")
+        # 断开 timer 信号连接，防止内存泄漏
+        try:
+            self._poll_timer.timeout.disconnect(self._poll_keys)
+        except Exception:
+            pass
+        try:
+            self._ai_timer.timeout.disconnect(self._fire_word_completed)
+        except Exception:
+            pass
+        try:
+            self._idle_timer.timeout.disconnect(self._fire_word_completed)
+        except Exception:
+            pass
 
     def suppress(self):
         self._suppressed = True

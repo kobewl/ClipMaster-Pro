@@ -81,12 +81,12 @@ class PredictionEngine(QObject):
         self._ai_realtime_timer.timeout.connect(self._try_realtime_ai_prediction)
 
         # Wire signals — ALL on the main thread via InputMonitor's polling
-        self.input_monitor.typing_changed.connect(self._on_typing_changed)
-        self.input_monitor.word_completed.connect(self._on_word_completed)
-        self.input_monitor.tab_pressed.connect(self._do_accept)
-        self.input_monitor.esc_pressed.connect(self._do_dismiss)
-        self.ai_service.prediction_ready.connect(self._on_ai_result)
-        self.ai_service.prediction_error.connect(self._on_ai_error)
+        self._conn_typing = self.input_monitor.typing_changed.connect(self._on_typing_changed)
+        self._conn_word = self.input_monitor.word_completed.connect(self._on_word_completed)
+        self._conn_tab = self.input_monitor.tab_pressed.connect(self._do_accept)
+        self._conn_esc = self.input_monitor.esc_pressed.connect(self._do_dismiss)
+        self._conn_ai_ready = self.ai_service.prediction_ready.connect(self._on_ai_result)
+        self._conn_ai_err = self.ai_service.prediction_error.connect(self._on_ai_error)
 
         if self.ai_service.is_configured():
             self.start()

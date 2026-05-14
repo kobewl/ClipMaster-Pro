@@ -23,6 +23,8 @@ FALLBACK:
 import platform
 import ctypes
 import ctypes.wintypes as wt
+from collections import deque
+from threading import Lock
 from PyQt6.QtCore import QObject, pyqtSignal, QAbstractNativeEventFilter, QTimer
 from PyQt6.QtWidgets import QApplication
 from utils.logger import logger
@@ -278,10 +280,11 @@ class HotkeyController(QObject):
             app.installNativeEventFilter(self._filter)
             logger.info("Native event filter installed")
 
-        self.on_hotkey_triggered.connect(self._handle_signal)
+        self._conn_triggered = self.on_hotkey_triggered.connect(self._handle_signal)
 
         # Pending callbacks for fallback mode (thread-safe queue)
-        self._pending_callbacks = []
+        self._pending_callbacks: deque[str] = deque()
+        self._callbacks_lock = Lock()
         self._callback_timer = QTimer(self)
         self._callback_timer.timeout.connect(self._process_pending_callbacks)
         self._callback_timer.start(50)  # Process every 50ms
@@ -371,13 +374,16 @@ class HotkeyController(QObject):
             return False
 
     def _queue_callback(self, norm: str):
-        """Queue a callback to be executed on the main thread."""
-        self._pending_callbacks.append(norm)
+        """Queue a callback to be executed on the main thread (线程安全)."""
+        with self._callbacks_lock:
+            self._pending_callbacks.append(norm)
 
     def _process_pending_callbacks(self):
         """Process pending callbacks (called on main thread via timer)."""
-        while self._pending_callbacks:
-            norm = self._pending_callbacks.pop(0)
+        with self._callbacks_lock:
+            pending = list(self._pending_callbacks)
+            self._pending_callbacks.clear()
+        for norm in pending:
             self.on_hotkey_triggered.emit(norm)
 
     def unregister_shortcut(self, key_sequence: str) -> bool:

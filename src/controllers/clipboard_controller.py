@@ -75,11 +75,28 @@ class ClipboardController(QObject):
         self._poll_timer.timeout.connect(self._poll_clipboard)
         self._poll_timer.start(350)
 
-        self.clipboard.dataChanged.connect(self._on_clipboard_changed)
-
-        self.service.item_added.connect(self.item_added.emit)
-        self.service.history_changed.connect(self.history_updated.emit)
+        # 保存信号连接引用，便于 cleanup 时断开
+        self._conn_clipboard = self.clipboard.dataChanged.connect(self._on_clipboard_changed)
+        self._conn_item_added = self.service.item_added.connect(self.item_added.emit)
+        self._conn_history = self.service.history_changed.connect(self.history_updated.emit)
         self.history_updated.emit()
+
+    def cleanup(self):
+        """清理资源，断开所有信号连接，防止内存泄漏。"""
+        self._debounce_timer.stop()
+        self._poll_timer.stop()
+        try:
+            self.clipboard.dataChanged.disconnect(self._conn_clipboard)
+        except Exception:
+            pass
+        try:
+            self.service.item_added.disconnect(self._conn_item_added)
+        except Exception:
+            pass
+        try:
+            self.service.history_changed.disconnect(self._conn_history)
+        except Exception:
+            pass
 
     def _on_clipboard_changed(self):
         """Process clipboard changes with debounce."""

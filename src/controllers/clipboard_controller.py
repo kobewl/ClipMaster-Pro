@@ -100,19 +100,23 @@ class ClipboardController(QObject):
     def _process_clipboard_change(self):
         """Read clipboard content and add it to history."""
         try:
+            # 统一 fingerprint 去重：如果当前剪贴板内容指纹没有变化，直接跳过
+            # 这能防止 IDEA 等应用分多次更新剪贴板（先 text 后 html）导致重复记录
+            signature = self._build_clipboard_signature()
+            if not signature or signature == self._last_clipboard_data:
+                self._last_clipboard_sequence = self._get_clipboard_sequence_number()
+                return
+
             native_snapshot = self._get_windows_clipboard_snapshot()
             if native_snapshot:
-                self._process_native_snapshot(native_snapshot)
-                self._last_clipboard_sequence = self._get_clipboard_sequence_number()
+                added = self._process_native_snapshot(native_snapshot)
+                if added:
+                    self._last_clipboard_data = signature
+                    self._last_clipboard_sequence = self._get_clipboard_sequence_number()
                 return
 
             mime_data = self.clipboard.mimeData()
             if mime_data is None:
-                self._last_clipboard_sequence = self._get_clipboard_sequence_number()
-                return
-
-            signature = self._build_clipboard_signature(mime_data)
-            if not signature or signature == self._last_clipboard_data:
                 self._last_clipboard_sequence = self._get_clipboard_sequence_number()
                 return
 
@@ -157,7 +161,9 @@ class ClipboardController(QObject):
         if not content:
             return False
 
-        signature = f"{snapshot_type}:{content}"
+        # 构建与 _build_clipboard_signature 一致的 fingerprint（列表用 | 连接）
+        sig_content = "|".join(content) if isinstance(content, list) else content
+        signature = f"{snapshot_type}:{sig_content}"
         if signature == self._last_clipboard_data:
             return False
 
@@ -192,8 +198,6 @@ class ClipboardController(QObject):
                     metadata=metadata,
                 )
 
-        if added:
-            self._last_clipboard_data = signature
         return added
 
     def _build_clipboard_signature(self, mime_data=None):
@@ -253,13 +257,15 @@ class ClipboardController(QObject):
             if file_snapshot:
                 return {"type": "files", "content": file_snapshot}
 
-            html_snapshot = self._read_windows_html()
-            if html_snapshot:
-                return html_snapshot
-
+            # 优先读取纯文本，避免 IDEA 等 IDE 先写入 text 再写入 html 导致重复记录
+            # JetBrains IDE 复制时会分多次更新剪贴板格式，但纯文本内容始终一致
             text_snapshot = self._read_windows_unicode_text()
             if text_snapshot:
                 return {"type": "text", "content": text_snapshot}
+
+            html_snapshot = self._read_windows_html()
+            if html_snapshot:
+                return html_snapshot
         except Exception as e:
             logger.debug(f"Failed to read Windows clipboard directly: {e}")
         finally:
@@ -347,12 +353,22 @@ class ClipboardController(QObject):
         return html
 
     def _handle_image_clipboard(self, metadata=None):
-        """Store clipboard image as base64."""
+        """Store clipboard image as a file, keep only the path in database."""
         try:
             image = self.clipboard.image()
             if image.isNull():
                 return False
 
+            # 确保图片目录存在
+            Settings.IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+            # 生成唯一文件名
+            from datetime import datetime
+            import uuid
+            filename = f"img_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.jpg"
+            file_path = Settings.IMAGES_DIR / filename
+
+            # 缩放并保存到文件
             buffer_image = QApplication.clipboard().pixmap().toImage()
             scaled_image = buffer_image.scaled(
                 800,
@@ -360,24 +376,20 @@ class ClipboardController(QObject):
                 Qt.AspectRatioMode.KeepAspectRatio,
                 Qt.TransformationMode.SmoothTransformation,
             )
-
-            byte_array = QByteArray()
-            buffer_stream = QBuffer(byte_array)
-            buffer_stream.open(QBuffer.OpenModeFlag.WriteOnly)
-            scaled_image.save(buffer_stream, "JPEG", 85)
-
-            base64_data = base64.b64encode(byte_array.data()).decode("utf-8")
+            scaled_image.save(str(file_path), "JPEG", 85)
 
             item_metadata = {
                 "width": image.width(),
                 "height": image.height(),
                 "format": "jpeg",
+                "file_path": str(file_path),
             }
             if metadata:
                 item_metadata.update(metadata)
 
+            # 数据库存的是文件路径，不再存 Base64
             return self.service.add_item(
-                content=f"data:image/jpeg;base64,{base64_data}",
+                content=str(file_path),
                 content_type=ContentType.IMAGE,
                 metadata=item_metadata,
             )
@@ -413,18 +425,32 @@ class ClipboardController(QObject):
         except Exception as e:
             logger.error(f"Error copying text: {e}")
 
+    def _copy_image_from_base64(self, content: str) -> None:
+        """从 Base64 字符串加载图片到剪贴板（兼容旧数据）。"""
+        if content.startswith("data:image"):
+            base64_data = content.split(",", 1)[1]
+            image_data = base64.b64decode(base64_data)
+            image = QImage()
+            image.loadFromData(image_data)
+            self.clipboard.setImage(image)
+        else:
+            self.clipboard.setText(content)
+
     def copy_item(self, item: ClipboardItem) -> None:
         try:
             if item.content_type == ContentType.IMAGE:
                 try:
-                    if item.content.startswith("data:image"):
-                        base64_data = item.content.split(",", 1)[1]
-                        image_data = base64.b64decode(base64_data)
+                    # 优先从文件路径加载（新数据）
+                    if item.content and not item.content.startswith("data:image"):
                         image = QImage()
-                        image.loadFromData(image_data)
-                        self.clipboard.setImage(image)
+                        if image.load(item.content) and not image.isNull():
+                            self.clipboard.setImage(image)
+                        else:
+                            # 文件不存在或损坏，回退到 Base64
+                            self._copy_image_from_base64(item.content)
                     else:
-                        self.clipboard.setText(item.content)
+                        # 兼容旧数据（Base64）
+                        self._copy_image_from_base64(item.content)
                 except Exception as e:
                     logger.error(f"Error copying image: {e}")
                     self.clipboard.setText(item.content)

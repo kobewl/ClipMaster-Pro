@@ -27,7 +27,8 @@ class Settings:
     DATA_DIR = BASE_DIR / "data"
     LOG_DIR = BASE_DIR / "logs"
     CACHE_DIR = BASE_DIR / "cache"
-    
+    IMAGES_DIR = BASE_DIR / "images"
+
     # 文件设置
     HISTORY_FILE = DATA_DIR / "history.json"
     CONFIG_FILE = DATA_DIR / "config.json"
@@ -160,9 +161,3 @@ class Settings:
         except Exception as e:
             print(f"迁移旧版本数据时出错: {str(e)}")
         return False
-    _IS_MAC = platform.system() == "Darwin"
-    DEFAULT_HOTKEYS = {
-        "show_window": "Command+`" if _IS_MAC else "Ctrl+O",
-        "clear_history": "Command+Shift+C" if _IS_MAC else "Ctrl+Shift+C",
-        "search": "Command+F" if _IS_MAC else "Ctrl+F",
-    }

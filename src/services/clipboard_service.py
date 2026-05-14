@@ -18,28 +18,45 @@ from utils.logger import logger
 
 class DatabaseManager:
     """SQLite数据库管理器 - 高效存储大量数据"""
-    
+
     def __init__(self, db_path: str):
         self.db_path = db_path
         self._local = threading.local()
+        # 追踪所有线程创建的连接，确保程序退出时能全部关闭
+        self._all_connections: list[sqlite3.Connection] = []
+        self._connections_lock = threading.Lock()
         self._init_db()
-    
+
     def _get_connection(self) -> sqlite3.Connection:
         """获取线程本地连接"""
         if not hasattr(self._local, 'connection') or self._local.connection is None:
-            self._local.connection = sqlite3.connect(self.db_path, check_same_thread=False)
-            self._local.connection.row_factory = sqlite3.Row
+            conn = sqlite3.connect(self.db_path, check_same_thread=False)
+            conn.row_factory = sqlite3.Row
+            self._local.connection = conn
+            with self._connections_lock:
+                self._all_connections.append(conn)
         return self._local.connection
 
     def close(self):
-        """关闭当前线程的数据库连接"""
+        """关闭当前线程的数据库连接（向后兼容）"""
         if hasattr(self._local, 'connection') and self._local.connection is not None:
             try:
                 self._local.connection.close()
             except Exception:
                 pass
             self._local.connection = None
-    
+
+    def close_all(self):
+        """关闭所有线程的数据库连接，防止资源泄漏"""
+        with self._connections_lock:
+            for conn in list(self._all_connections):
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            self._all_connections.clear()
+        self._local.connection = None
+
     def _init_db(self):
         """初始化数据库"""
         conn = self._get_connection()

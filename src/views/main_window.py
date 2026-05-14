@@ -634,7 +634,7 @@ class MainWindow(QMainWindow):
         try:
             self.prediction_engine.stop()
             self.hotkey_controller.unregister_all()
-            self.clipboard_controller.service.db.close()
+            self.clipboard_controller.service.db.close_all()
             self.tray_icon.hide()
             app = QApplication.instance()
             if app:

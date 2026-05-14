@@ -295,6 +295,14 @@ class SettingsDialog(QDialog):
         self.test_ai_btn.setEnabled(False)
         self.test_ai_btn.setText("Testing…")
 
+        # 清理旧的测试服务，防止信号连接泄漏
+        if hasattr(self, '_test_svc') and self._test_svc:
+            try:
+                self._test_svc.test_result.disconnect(self._on_test_result)
+            except Exception:
+                pass
+            self._test_svc = None
+
         # Temporarily save so AIService can read them
         self._persist_ai_fields()
 

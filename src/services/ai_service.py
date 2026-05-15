@@ -358,6 +358,7 @@ class AIService(QObject):
         super().__init__()
         self._llm = None
         self._gen = 0          # monotonic generation counter
+        self._gen_lock = threading.Lock()
         self._busy = False     # guard: at most 1 in-flight request
         self._reload()
 
@@ -399,7 +400,8 @@ class AIService(QObject):
 
     def cancel_pending(self):
         """Bump generation so in-flight results are discarded."""
-        self._gen += 1
+        with self._gen_lock:
+            self._gen += 1
 
     def request_prediction(self, typing_context: str, clipboard_items: list,
                            gen: int = 0):
@@ -444,9 +446,11 @@ class AIService(QObject):
         try:
             resp = self._llm.invoke(messages)
             content = resp.content.strip()
-            if req_gen < self._gen:
+            with self._gen_lock:
+                current_gen = self._gen
+            if req_gen < current_gen:
                 logger.debug("Discarding stale AI result (gen %d < %d)",
-                             req_gen, self._gen)
+                             req_gen, current_gen)
                 return
             self._on_result(content)
         except Exception as e:

@@ -61,7 +61,16 @@ class DatabaseManager:
         """初始化数据库"""
         conn = self._get_connection()
         cursor = conn.cursor()
-        
+
+        # 性能优化：启用 WAL（写前日志）模式，提升并发读写性能
+        try:
+            cursor.execute('PRAGMA journal_mode=WAL')
+            cursor.execute('PRAGMA synchronous=NORMAL')
+            cursor.execute('PRAGMA temp_store=MEMORY')
+            cursor.execute('PRAGMA cache_size=-8000')  # 约 8MB 页缓存
+        except Exception as e:
+            logger.warning(f"启用 WAL 模式时发生警告: {e}")
+
         # 创建历史记录表
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS clipboard_history (
@@ -73,10 +82,14 @@ class DatabaseManager:
                 is_favorite INTEGER DEFAULT 0,
                 tags TEXT DEFAULT '[]',
                 metadata TEXT DEFAULT '{}',
-                compressed INTEGER DEFAULT 0
+                compressed INTEGER DEFAULT 0,
+                search_text TEXT DEFAULT ''
             )
         ''')
-        
+
+        # 兼容旧库：检查并增加 search_text 列
+        self._ensure_search_text_column(cursor)
+
         # 创建索引
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_timestamp ON clipboard_history(timestamp)
@@ -87,15 +100,80 @@ class DatabaseManager:
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_favorite ON clipboard_history(is_favorite)
         ''')
-        
+
         conn.commit()
+
+    # 搜索文本最大长度（截断超长内容，避免数据库膨胀）
+    # 8000 字符可覆盖绝大多数剪贴板场景，又不至于让单条记录过大
+    _SEARCH_TEXT_MAX_LEN = 8000
+
+    def _ensure_search_text_column(self, cursor) -> None:
+        """旧库迁移：补齐 search_text 列并填充数据。"""
+        try:
+            cursor.execute("PRAGMA table_info(clipboard_history)")
+            cols = {row[1] for row in cursor.fetchall()}
+            if 'search_text' not in cols:
+                logger.info("迁移：添加 search_text 列")
+                cursor.execute("ALTER TABLE clipboard_history ADD COLUMN search_text TEXT DEFAULT ''")
+
+            # 为 search_text 创建索引（LIKE 搜索时 SQLite 可走 B-tree 前缀匹配）
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_search_text ON clipboard_history(search_text)'
+            )
+
+            # 检查是否需要回填（search_text 为空但 content 非空的旧数据）
+            cursor.execute(
+                "SELECT COUNT(*) FROM clipboard_history "
+                "WHERE (search_text IS NULL OR search_text = '') "
+                "AND content_type IN ('text', 'html')"
+            )
+            backfill_count = cursor.fetchone()[0]
+            if backfill_count > 0:
+                logger.info(f"迁移：回填 {backfill_count} 条历史记录的搜索文本")
+                self._backfill_search_text(cursor)
+        except Exception as e:
+            logger.error(f"迁移 search_text 列时发生错误: {e}")
+
+    def _backfill_search_text(self, cursor) -> None:
+        """为旧数据回填 search_text 列。"""
+        cursor.execute(
+            "SELECT id, content, compressed, content_type FROM clipboard_history "
+            "WHERE (search_text IS NULL OR search_text = '')"
+        )
+        rows = cursor.fetchall()
+        for row in rows:
+            try:
+                content = row['content']
+                if row['compressed']:
+                    content = gzip.decompress(content).decode('utf-8', errors='ignore')
+                search_text = self._derive_search_text(content, row['content_type'])
+                cursor.execute(
+                    "UPDATE clipboard_history SET search_text = ? WHERE id = ?",
+                    (search_text, row['id'])
+                )
+            except Exception as e:
+                logger.debug(f"回填 search_text 失败 (id={row['id']}): {e}")
+
+    @classmethod
+    def _derive_search_text(cls, content, content_type: str) -> str:
+        """从原始内容派生可搜索文本（截断至最大长度）。"""
+        if not content:
+            return ''
+        if not isinstance(content, str):
+            return ''
+        # 图片和文件类型用 content（路径/文件列表）作为可搜索文本
+        text = content
+        if len(text) > cls._SEARCH_TEXT_MAX_LEN:
+            text = text[:cls._SEARCH_TEXT_MAX_LEN]
+        return text
+
     
     def add_item(self, item: ClipboardItem) -> bool:
         """添加项目"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
-            
+
             # 检查是否已存在
             cursor.execute(
                 'SELECT id FROM clipboard_history WHERE content_hash = ?',
@@ -107,18 +185,23 @@ class DatabaseManager:
                     'DELETE FROM clipboard_history WHERE content_hash = ?',
                     (item.content_hash,)
                 )
-            
+
+            # 在压缩前提取可搜索文本（保证压缩内容也能搜到）
+            search_text = self._derive_search_text(
+                item.content, item.content_type.value
+            )
+
             # 压缩大文本内容
             content = item.content
             compressed = 0
             if len(content) > 1000:
                 content = gzip.compress(content.encode('utf-8'))
                 compressed = 1
-            
+
             cursor.execute('''
-                INSERT INTO clipboard_history 
-                (content_hash, content, content_type, timestamp, is_favorite, tags, metadata, compressed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO clipboard_history
+                (content_hash, content, content_type, timestamp, is_favorite, tags, metadata, compressed, search_text)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 item.content_hash,
                 content if compressed == 0 else content,
@@ -127,35 +210,37 @@ class DatabaseManager:
                 1 if item.is_favorite else 0,
                 json.dumps(item.tags),
                 json.dumps(item.metadata),
-                compressed
+                compressed,
+                search_text,
             ))
-            
+
             conn.commit()
             return True
         except Exception as e:
             logger.error(f"添加项目到数据库时发生错误: {str(e)}")
             return False
     
-    def get_items(self, limit: int = 100, offset: int = 0, 
+    def get_items(self, limit: int = 100, offset: int = 0,
                   search_text: str = None, favorites_only: bool = False) -> List[ClipboardItem]:
         """获取项目列表"""
         try:
             conn = self._get_connection()
             cursor = conn.cursor()
-            
+
             query = 'SELECT * FROM clipboard_history WHERE 1=1'
             params = []
-            
+
             if favorites_only:
                 query += ' AND is_favorite = 1'
-            
+
             if search_text:
-                query += ' AND content LIKE ?'
+                # 使用 search_text 列搜索（压缩内容也能搜到，因为它存的是解压后的文本）
+                query += ' AND search_text LIKE ?'
                 params.append(f'%{search_text}%')
-            
+
             query += ' ORDER BY is_favorite DESC, timestamp DESC LIMIT ? OFFSET ?'
             params.extend([limit, offset])
-            
+
             cursor.execute(query, params)
             rows = cursor.fetchall()
             
@@ -216,6 +301,52 @@ class DatabaseManager:
         except Exception as e:
             logger.error(f"删除项目时发生错误: {str(e)}")
             return False
+
+    def delete_items(self, content_hashes: list[str]) -> int:
+        """批量删除项目，返回删除数量"""
+        if not content_hashes:
+            return 0
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(content_hashes))
+            cursor.execute(
+                f'DELETE FROM clipboard_history WHERE content_hash IN ({placeholders})',
+                content_hashes
+            )
+            conn.commit()
+            return cursor.rowcount
+        except Exception as e:
+            logger.error(f"批量删除项目时发生错误: {str(e)}")
+            return 0
+
+    def get_image_paths_by_hashes(self, content_hashes: list[str]) -> list[str]:
+        """一次性获取多个 hash 对应的图片文件路径（避免 N+1 查询）"""
+        if not content_hashes:
+            return []
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            placeholders = ','.join('?' * len(content_hashes))
+            cursor.execute(
+                f"SELECT content, compressed FROM clipboard_history "
+                f"WHERE content_hash IN ({placeholders}) AND content_type = 'image'",
+                content_hashes
+            )
+            paths = []
+            for row in cursor.fetchall():
+                content = row['content']
+                if row['compressed']:
+                    try:
+                        content = gzip.decompress(content).decode('utf-8')
+                    except Exception:
+                        continue
+                if content:
+                    paths.append(content)
+            return paths
+        except Exception as e:
+            logger.error(f"批量获取图片路径时发生错误: {str(e)}")
+            return []
     
     def clear_history(self, keep_favorites: bool = True) -> bool:
         """清空历史记录"""
@@ -475,6 +606,25 @@ class ClipboardService(QObject):
         except Exception as e:
             logger.error(f"删除项目时发生错误: {str(e)}")
             return False
+
+    def delete_items(self, content_hashes: list[str]) -> int:
+        """批量删除项目，只触发一次 history_changed"""
+        if not content_hashes:
+            return 0
+        try:
+            # 一次性获取所有要删除的图片路径，避免 N+1 查询
+            image_paths = self.db.get_image_paths_by_hashes(content_hashes)
+            for path in image_paths:
+                self._delete_image_file(path, 'image')
+
+            deleted = self.db.delete_items(content_hashes)
+            if deleted > 0:
+                self.history_changed.emit()
+                logger.info(f"已批量删除 {deleted} 个项目")
+            return deleted
+        except Exception as e:
+            logger.error(f"批量删除项目时发生错误: {str(e)}")
+            return 0
     
     def toggle_favorite(self, content_hash: str) -> bool:
         """切换收藏状态"""

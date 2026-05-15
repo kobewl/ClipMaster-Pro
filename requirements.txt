@@ -8,6 +8,14 @@ PyQt6-Qt6>=6.4.0
 # Windows integration
 pywin32>=305; platform_system=="Windows"
 
+# Global keyboard monitoring
+# - Windows: required for global hotkeys fallback and AI typing monitor
+# - macOS:   pynput is used instead (keyboard needs root on macOS)
+keyboard>=0.13.5; platform_system=="Windows"
+
+# macOS native window helpers (window level / topmost)
+pyobjc-framework-Cocoa>=9.0; platform_system=="Darwin"
+
 # Process information for source tracking
 psutil>=5.9.0
 pynput>=1.7.7
@@ -15,13 +23,13 @@ pynput>=1.7.7
 # ── Optional AI packages ───────────────────────────────────────────
 # Base app startup does not require LangChain.
 # Install these only if you want richer AI provider integrations.
-# keyboard>=0.13.5              # Global hotkeys / AI typing monitor on macOS needs Accessibility permission
-# langchain>=1.2.0
-# langchain-core>=1.2.0
-# langchain-openai>=1.1.0          # OpenAI + any custom OpenAI-compatible endpoint
+# langchain>=0.2.0
+# langchain-core>=0.2.0
+# langchain-openai>=0.1.0          # OpenAI + any custom OpenAI-compatible endpoint
 
 # ── Optional provider packages (install the ones you need) ──
 # pip install langchain-anthropic      # Anthropic Claude
 # pip install langchain-google-genai   # Google Gemini
 # pip install langchain-ollama         # Ollama (local models)
 # pip install langchain-deepseek       # DeepSeek
+

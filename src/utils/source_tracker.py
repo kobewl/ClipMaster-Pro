@@ -90,43 +90,127 @@ class SourceTracker:
 
         return info
 
+    # ── macOS helpers ─────────────────────────────────────────────────
+
     @staticmethod
-    def get_active_window_info() -> SourceInfo:
-        """Get information about the currently active window."""
-        info = SourceInfo(type="application")
+    def _get_mac_frontmost_app() -> tuple[str, str]:
+        """Return (app_name, bundle_id) for the frontmost app on macOS.
+        Uses NSWorkspace — does NOT require Accessibility permission."""
+        try:
+            from AppKit import NSWorkspace
+            app = NSWorkspace.sharedWorkspace().frontmostApplication()
+            name = app.localizedName()
+            bundle = app.bundleIdentifier()
+            return name or "", bundle or ""
+        except Exception:
+            return "", ""
 
-        if platform.system() != "Windows":
-            return info
+    @staticmethod
+    def _get_mac_window_title() -> str:
+        """Try to get the frontmost window title via Accessibility.
+        May fail if permission is not granted — returns empty string."""
+        try:
+            from ApplicationServices import (
+                AXUIElementCopyAttributeValue,
+                AXUIElementCreateSystemWide,
+                kAXFocusedApplicationAttribute,
+                kAXTitleAttribute,
+            )
+            system = AXUIElementCreateSystemWide()
+            err, app = AXUIElementCopyAttributeValue(
+                system, kAXFocusedApplicationAttribute, None
+            )
+            if err != 0 or app is None:
+                return ""
+            err, title = AXUIElementCopyAttributeValue(
+                app, kAXTitleAttribute, None
+            )
+            if err == 0 and title:
+                return str(title)
+        except Exception:
+            pass
+        return ""
 
+    @staticmethod
+    def _get_linux_active_window() -> tuple[str, str]:
+        """Return (app_name, title) for the active window on Linux (X11/Wayland)."""
+        try:
+            # Try xdotool first (most common)
+            import subprocess
+            result = subprocess.run(
+                ["xdotool", "getactivewindow", "getwindowname"],
+                capture_output=True, text=True, timeout=2
+            )
+            if result.returncode == 0:
+                title = result.stdout.strip()
+                # Also try to get the WM_CLASS (app name)
+                cls_result = subprocess.run(
+                    ["xdotool", "getactivewindow", "getwindowclassname"],
+                    capture_output=True, text=True, timeout=2
+                )
+                app_name = cls_result.stdout.strip() if cls_result.returncode == 0 else ""
+                return app_name, title
+        except Exception:
+            pass
+
+        try:
+            # Fallback: try reading from _NET_ACTIVE_WINDOW via xprop
+            import subprocess
+            result = subprocess.run(
+                ["xprop", "-root", "_NET_ACTIVE_WINDOW"],
+                capture_output=True, text=True, timeout=2
+            )
+            if result.returncode == 0:
+                line = result.stdout.strip()
+                if "0x" in line:
+                    wid = line.split("0x")[-1].strip()
+                    wid_hex = "0x" + wid
+                    wm_result = subprocess.run(
+                        ["xprop", "-id", wid_hex, "WM_CLASS"],
+                        capture_output=True, text=True, timeout=2
+                    )
+                    if wm_result.returncode == 0:
+                        # WM_CLASS output format: WM_CLASS(STRING) = "class", "Class"
+                        raw = wm_result.stdout.strip()
+                        if '"' in raw:
+                            parts = raw.split('"')
+                            app_name = parts[1] if len(parts) > 1 else ""
+                            return app_name, ""
+        except Exception:
+            pass
+
+        return "", ""
+
+    # ── Windows helpers ───────────────────────────────────────────────
+
+    @staticmethod
+    def _get_win_active_window() -> tuple[str, str, str]:
+        """Return (app_name, title, domain_hint) for the active window on Windows."""
         try:
             import ctypes
             import ctypes.wintypes as wt
 
-            # Get foreground window
             hwnd = ctypes.windll.user32.GetForegroundWindow()
             if not hwnd:
-                return info
+                return "", "", ""
 
-            # Get window title
+            title = ""
             length = ctypes.windll.user32.GetWindowTextLengthW(hwnd)
             if length > 0:
                 buffer = ctypes.create_unicode_buffer(length + 1)
                 ctypes.windll.user32.GetWindowTextW(hwnd, buffer, length + 1)
-                info.title = buffer.value
+                title = buffer.value
 
-            # Get process ID
+            app_name = ""
             pid = wt.DWORD()
             ctypes.windll.user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
 
-            # Get process name
             try:
                 import psutil
                 process = psutil.Process(pid.value)
-                info.app_name = process.name()
-                # Try to get the executable path for better identification
+                app_name = process.name()
                 exe_path = process.exe()
                 if exe_path:
-                    # Map common executables to friendly names
                     app_mapping = {
                         'chrome.exe': 'Google Chrome',
                         'firefox.exe': 'Mozilla Firefox',
@@ -155,30 +239,53 @@ class SourceTracker:
                     }
                     exe_name = exe_path.split('\\')[-1].lower()
                     if exe_name in app_mapping:
-                        info.app_name = app_mapping[exe_name]
-                    elif not info.app_name:
-                        info.app_name = exe_name.replace('.exe', '').title()
+                        app_name = app_mapping[exe_name]
+                    else:
+                        app_name = exe_name.replace('.exe', '').title()
             except Exception as e:
                 logger.debug(f"Could not get process info: {e}")
 
-            # Detect browser and extract URL from title
-            if info.app_name in ['Google Chrome', 'Microsoft Edge', 'Brave Browser', 'Opera']:
-                # Try to extract URL from window title pattern
-                # Common patterns:
-                # "Page Title - Website Name"
-                # "Page Title - Website Name - Browser Name"
-                title_parts = info.title.split(' - ')
+            # Detect browser domain from title
+            domain = ""
+            if app_name in ['Google Chrome', 'Microsoft Edge', 'Brave Browser', 'Opera']:
+                title_parts = title.split(' - ')
                 if len(title_parts) >= 2:
-                    # Last part might be browser name
                     browser_names = ['Google Chrome', 'Microsoft Edge', 'Brave', 'Opera']
                     if title_parts[-1] in browser_names:
-                        site_name = title_parts[-2]
+                        domain = title_parts[-2]
                     else:
-                        site_name = title_parts[-1]
-                    info.domain = site_name
+                        domain = title_parts[-1]
 
+            return app_name, title, domain
         except Exception as e:
             logger.error(f"Error getting active window info: {e}")
+            return "", "", ""
+
+    @staticmethod
+    def get_active_window_info() -> SourceInfo:
+        """Get information about the currently active window."""
+        info = SourceInfo(type="application")
+        system = platform.system()
+
+        if system == "Windows":
+            app_name, title, domain = SourceTracker._get_win_active_window()
+            info.app_name = app_name
+            info.title = title
+            info.domain = domain
+
+        elif system == "Darwin":
+            app_name, bundle_id = SourceTracker._get_mac_frontmost_app()
+            info.app_name = app_name
+            # Try to get window title via Accessibility (may fail gracefully)
+            info.title = SourceTracker._get_mac_window_title()
+            if not info.app_name and bundle_id:
+                # Fallback: derive name from bundle ID
+                info.app_name = bundle_id.split('.')[-1].replace('-', ' ').title()
+
+        elif system == "Linux":
+            app_name, title = SourceTracker._get_linux_active_window()
+            info.app_name = app_name
+            info.title = title
 
         return info
 

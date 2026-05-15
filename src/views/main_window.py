@@ -95,6 +95,7 @@ class MainWindow(QMainWindow):
         self.is_top = False
         self.show_favorites_only = False
         self._platform = platform.system()
+        self._connections = []  # 保存信号连接引用，便于退出时断开
         
         # 加载主题设置
         self.is_dark_mode = Settings.get("dark_mode", False)
@@ -329,46 +330,84 @@ class MainWindow(QMainWindow):
         return status_bar
     
     def _init_connections(self):
-        """初始化信号连接"""
+        """初始化信号连接并保存引用，便于退出时统一断开。"""
         try:
             # 剪贴板控制器连接
-            self.clipboard_controller.history_updated.connect(self._update_history)
-            self.clipboard_controller.item_added.connect(self._on_item_added)
-            
+            self._connections.append(
+                self.clipboard_controller.history_updated.connect(self._update_history)
+            )
+            self._connections.append(
+                self.clipboard_controller.item_added.connect(self._on_item_added)
+            )
+
             # 搜索栏连接
-            self.search_bar.textChanged.connect(self._on_search_changed)
-            self.search_bar.keyNavigationRequested.connect(self._handle_search_key_navigation)
-            
+            self._connections.append(
+                self.search_bar.textChanged.connect(self._on_search_changed)
+            )
+            self._connections.append(
+                self.search_bar.keyNavigationRequested.connect(self._handle_search_key_navigation)
+            )
+
             # 收藏筛选连接
-            self.fav_filter_button.clicked.connect(self._on_fav_filter_changed)
-            
+            self._connections.append(
+                self.fav_filter_button.clicked.connect(self._on_fav_filter_changed)
+            )
+
             # 历史记录列表连接
-            self.history_list.itemCopied.connect(self._handle_item_copy)
-            self.history_list.itemDeleted.connect(self._handle_item_delete)
-            self.history_list.favoriteToggled.connect(self._handle_favorite_toggle)
-            
+            self._connections.append(
+                self.history_list.itemCopied.connect(self._handle_item_copy)
+            )
+            self._connections.append(
+                self.history_list.itemDeleted.connect(self._handle_item_delete)
+            )
+            self._connections.append(
+                self.history_list.favoriteToggled.connect(self._handle_favorite_toggle)
+            )
+            self._connections.append(
+                self.history_list.itemsBatchDeleted.connect(self._handle_items_batch_delete)
+            )
+
             # 置顶按钮连接
-            self.top_button.clicked.connect(self.toggle_top_window)
-            
+            self._connections.append(
+                self.top_button.clicked.connect(self.toggle_top_window)
+            )
+
             # 主题切换按钮连接
-            self.theme_button.clicked.connect(self.toggle_theme)
-            
+            self._connections.append(
+                self.theme_button.clicked.connect(self.toggle_theme)
+            )
+
             # 设置按钮连接
-            self.settings_button.clicked.connect(self.show_settings)
-            
+            self._connections.append(
+                self.settings_button.clicked.connect(self.show_settings)
+            )
+
             # 数据管理按钮连接
-            self.data_button.clicked.connect(self.show_data_dialog)
-            
-            # 托盘图标连接
-            self.tray_icon.showWindowRequested.connect(self.show_and_activate)
-            self.tray_icon.clearHistoryRequested.connect(
+            self._connections.append(
+                self.data_button.clicked.connect(self.show_data_dialog)
+            )
+
+            # 托盘图标连接（lambda 需要保存连接对象才能断开）
+            self._connections.append(
+                self.tray_icon.showWindowRequested.connect(self.show_and_activate)
+            )
+            self._clear_hist_conn = self.tray_icon.clearHistoryRequested.connect(
                 lambda: self.clipboard_controller.clear_history(keep_favorites=True)
             )
-            self.tray_icon.toggleThemeRequested.connect(self.toggle_theme)
-            self.tray_icon.settingsRequested.connect(self.show_settings)
-            self.tray_icon.dataManagementRequested.connect(self.show_data_dialog)
-            self.tray_icon.quitRequested.connect(self.quit_application)
-            
+            self._connections.append(self._clear_hist_conn)
+            self._connections.append(
+                self.tray_icon.toggleThemeRequested.connect(self.toggle_theme)
+            )
+            self._connections.append(
+                self.tray_icon.settingsRequested.connect(self.show_settings)
+            )
+            self._connections.append(
+                self.tray_icon.dataManagementRequested.connect(self.show_data_dialog)
+            )
+            self._connections.append(
+                self.tray_icon.quitRequested.connect(self.quit_application)
+            )
+
         except Exception as e:
             logger.error(f"初始化信号连接时发生错误: {str(e)}")
     
@@ -464,7 +503,10 @@ class MainWindow(QMainWindow):
             logger.info(f"自动粘贴不可用: {_KEYBOARD_IMPORT_ERROR}")
             return
 
-        paste_hotkey = "ctrl+v" if self._platform == "Windows" else "command+v"
+        if self._platform == "Darwin":
+            paste_hotkey = "command+v"
+        else:
+            paste_hotkey = "ctrl+v"  # Windows & Linux
 
         def _send_paste():
             try:
@@ -484,7 +526,13 @@ class MainWindow(QMainWindow):
         """处理收藏切换"""
         self.clipboard_controller.toggle_favorite(content_hash)
         self._update_history()
-    
+
+    def _handle_items_batch_delete(self, content_hashes: list):
+        """处理批量删除"""
+        deleted = self.clipboard_controller.delete_items(content_hashes)
+        self._update_history()
+        self.status_bar.setText(f"已批量删除 {deleted} 个项目")
+
     def toggle_window_visibility(self):
         """切换窗口的显示和隐藏"""
         if self.isVisible() and self.isActiveWindow():
@@ -632,6 +680,15 @@ class MainWindow(QMainWindow):
     def quit_application(self):
         """退出应用程序，清理所有资源"""
         try:
+            # 断开所有信号连接，防止销毁时访问已释放内存
+            for conn in getattr(self, '_connections', []):
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+            self._connections.clear()
+
+            self.clipboard_controller.cleanup()
             self.prediction_engine.stop()
             self.hotkey_controller.unregister_all()
             self.clipboard_controller.service.db.close_all()
@@ -650,9 +707,19 @@ class MainWindow(QMainWindow):
             settings_dialog = SettingsDialog(self)
             settings_dialog.settingsChanged.connect(self._apply_settings)
             settings_dialog.aiSettingsChanged.connect(self._apply_ai_settings)
+            settings_dialog.clearHistoryRequested.connect(self._clear_all_history)
             settings_dialog.exec()
         except Exception as e:
             logger.error(f"显示设置对话框时发生错误: {str(e)}")
+
+    def _clear_all_history(self):
+        """一键清空所有历史记录（包括收藏）。"""
+        try:
+            self.clipboard_controller.clear_history(keep_favorites=False)
+            self._update_history()
+            self.status_bar.setText("所有历史记录已清空")
+        except Exception as e:
+            logger.error(f"清空历史记录时发生错误: {str(e)}")
     
     def show_data_dialog(self):
         """显示数据管理对话框"""

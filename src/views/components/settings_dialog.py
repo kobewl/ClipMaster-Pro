@@ -22,6 +22,7 @@ class SettingsDialog(QDialog):
 
     settingsChanged = pyqtSignal()
     aiSettingsChanged = pyqtSignal()
+    clearHistoryRequested = pyqtSignal()  # 一键清空所有历史记录（包括收藏）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -368,6 +369,22 @@ class SettingsDialog(QDialog):
         perf_layout.addRow("列表显示限制:", self.display_limit_spinbox)
         layout.addWidget(perf_group)
 
+        # 危险操作区域
+        danger_group = QGroupBox("⚠️ 危险操作")
+        danger_layout = QVBoxLayout(danger_group)
+        self.clear_all_btn = QPushButton("🗑️ 清空所有历史记录")
+        self.clear_all_btn.setFixedHeight(36)
+        self.clear_all_btn.setStyleSheet(
+            "QPushButton { background-color: #EF4444; color: white; border-radius: 8px; font-weight: bold; }"
+            "QPushButton:hover { background-color: #DC2626; }"
+        )
+        self.clear_all_btn.clicked.connect(self._on_clear_all_history)
+        danger_layout.addWidget(self.clear_all_btn)
+        clear_note = QLabel("此操作将删除所有历史记录（包括收藏），且不可恢复。")
+        clear_note.setStyleSheet("color: #9CA3AF; font-size: 12px;")
+        danger_layout.addWidget(clear_note)
+        layout.addWidget(danger_group)
+
         layout.addStretch()
         return tab
 
@@ -404,6 +421,19 @@ class SettingsDialog(QDialog):
             self.ai_max_tokens.setValue(ai.get("max_tokens", 100))
         except Exception as e:
             logger.error(f"加载设置时发生错误: {str(e)}")
+
+    def _on_clear_all_history(self):
+        """一键清空所有历史记录（包括收藏）。"""
+        reply = QMessageBox.question(
+            self,
+            "确认清空",
+            "确定要删除所有历史记录吗？\n包括收藏的项目也会被删除，且不可恢复。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.clearHistoryRequested.emit()
+            QMessageBox.information(self, "已清空", "所有历史记录已删除。")
 
     def _save_settings(self):
         try:

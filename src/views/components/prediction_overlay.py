@@ -56,10 +56,22 @@ def _get_caret_pos_win():
         return None
 
 
+def _get_mouse_pos_fallback():
+    """Return (x, y) screen coords of the mouse cursor — cross-platform."""
+    from PyQt6.QtGui import QCursor
+    pos = QCursor.pos()
+    return (pos.x(), pos.y())
+
+
 def get_caret_position():
-    if platform.system() == "Windows":
-        return _get_caret_pos_win()
-    return None
+    system = platform.system()
+    if system == "Windows":
+        pos = _get_caret_pos_win()
+        if pos:
+            return pos
+    # macOS / Linux: caret API 需要 Accessibility 权限且不稳定，
+    # fallback 到鼠标位置（用户复制时鼠标通常在目标输入框附近）
+    return _get_mouse_pos_fallback()
 
 
 # ── Overlay Widget ───────────────────────────────────────────────────

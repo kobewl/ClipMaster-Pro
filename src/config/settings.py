@@ -16,11 +16,11 @@ class Settings:
     
     # 应用程序信息
     APP_NAME = "ClipMaster Pro"
-    APP_VERSION = "2.0.0"
+    APP_VERSION = "2.0.2"
     
     # 窗口设置
-    WINDOW_WIDTH = 420
-    WINDOW_HEIGHT = 640
+    WINDOW_WIDTH = 560
+    WINDOW_HEIGHT = 800
     
     # 目录设置
     BASE_DIR = Path(os.path.expanduser("~")) / ".clipmaster_pro"

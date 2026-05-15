@@ -75,9 +75,12 @@ class PredictionEngine(QObject):
         self._dismiss_timer.timeout.connect(self._do_dismiss)
 
         # Real-time AI prediction timer (triggered after typing pause)
+        # 触发延迟从 Settings.ai.trigger_delay 读取（默认 600ms）
+        ai_cfg = Settings.get("ai", {})
+        realtime_delay = max(int(ai_cfg.get("trigger_delay", 600)), 100)
         self._ai_realtime_timer = QTimer(self)
         self._ai_realtime_timer.setSingleShot(True)
-        self._ai_realtime_timer.setInterval(600)
+        self._ai_realtime_timer.setInterval(realtime_delay)
         self._ai_realtime_timer.timeout.connect(self._try_realtime_ai_prediction)
 
         # Wire signals — ALL on the main thread via InputMonitor's polling
@@ -128,7 +131,9 @@ class PredictionEngine(QObject):
             self.stop()
         self.ai_service.reload_settings()
         ai = Settings.get("ai", {})
-        self.input_monitor.set_pause_delay(ai.get("trigger_delay", 300))
+        trigger_delay = max(int(ai.get("trigger_delay", 600)), 100)
+        self.input_monitor.set_pause_delay(trigger_delay)
+        self._ai_realtime_timer.setInterval(trigger_delay)
         if self.ai_service.is_configured():
             self.start()
 
@@ -299,6 +304,7 @@ class PredictionEngine(QObject):
         self._ai_busy = True
         import time
         self._last_ai_time = time.time()
+        self.ai_service.cancel_pending()
         self.ai_service.request_prediction(context, text_items, gen)
         logger.debug(f"Realtime AI prediction triggered for: '{last_word}'")
 
@@ -332,6 +338,7 @@ class PredictionEngine(QObject):
             return
 
         self._ai_busy = True
+        self.ai_service.cancel_pending()
         self.ai_service.request_prediction(context, text_items, gen)
 
     def _on_ai_result(self, text: str):

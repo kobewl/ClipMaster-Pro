@@ -47,3 +47,7 @@ cover/
 test_*.py
 langcha
 nul
+
+# macOS
+.DS_Store
+**/.DS_Store

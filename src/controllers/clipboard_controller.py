@@ -7,6 +7,7 @@ from PyQt6.QtCore import QByteArray, QBuffer, QObject, Qt, QTimer, QUrl, pyqtSig
 from PyQt6.QtGui import QClipboard, QImage
 from PyQt6.QtWidgets import QApplication
 
+from config.settings import Settings
 from models.clipboard_item import ClipboardItem, ContentType
 from services.clipboard_service import ClipboardService
 from utils.logger import logger
@@ -146,23 +147,24 @@ class ClipboardController(QObject):
                 added = self._handle_image_clipboard(metadata)
             elif mime_data.hasUrls():
                 added = self._handle_file_clipboard(mime_data.urls(), metadata)
-            elif mime_data.hasHtml():
-                html = mime_data.html()
-                text = mime_data.text() or html
-                metadata["html"] = html
-                added = self.service.add_item(
-                    content=text,
-                    content_type=ContentType.HTML,
-                    metadata=metadata,
-                )
-            else:
+            elif mime_data.hasText():
                 text = mime_data.text()
                 if text and text.strip():
+                    # 同时携带 HTML 时作为元数据保存，但主内容按 text 处理
+                    if mime_data.hasHtml():
+                        metadata["html"] = mime_data.html()
                     added = self.service.add_item(
                         text,
                         ContentType.TEXT,
                         metadata=metadata,
                     )
+            elif mime_data.hasHtml():
+                html = mime_data.html()
+                added = self.service.add_item(
+                    content=html,
+                    content_type=ContentType.HTML,
+                    metadata=metadata,
+                )
 
             if added:
                 self._last_clipboard_data = signature
@@ -234,7 +236,17 @@ class ClipboardController(QObject):
         if mime_data.hasImage():
             image = self.clipboard.image()
             if not image.isNull():
-                return f"image:{image.width()}x{image.height()}:{image.cacheKey()}"
+                # 用像素数据的快速哈希替代不稳定的 cacheKey（macOS 上每次不同）
+                import hashlib
+                small = image.scaled(
+                    8, 8,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.FastTransformation,
+                )
+                ptr = small.bits()
+                ptr.setsize(small.sizeInBytes())
+                h = hashlib.md5(bytes(ptr.asstring())).hexdigest()[:12]
+                return f"image:{image.width()}x{image.height()}:{h}"
 
         if mime_data.hasUrls():
             urls = [url.toString() for url in mime_data.urls()]
@@ -385,8 +397,11 @@ class ClipboardController(QObject):
             filename = f"img_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}.jpg"
             file_path = Settings.IMAGES_DIR / filename
 
-            # 缩放并保存到文件
-            buffer_image = QApplication.clipboard().pixmap().toImage()
+            # 缩放并保存到文件（使用 self.clipboard 而非全局，保持一致性）
+            pixmap = self.clipboard.pixmap()
+            if pixmap is None:
+                return False
+            buffer_image = pixmap.toImage()
             scaled_image = buffer_image.scaled(
                 800,
                 600,
@@ -497,6 +512,13 @@ class ClipboardController(QObject):
             self.service.delete_item(content_hash)
         except Exception as e:
             logger.error(f"Error deleting item: {e}")
+
+    def delete_items(self, content_hashes: list[str]) -> int:
+        try:
+            return self.service.delete_items(content_hashes)
+        except Exception as e:
+            logger.error(f"Error deleting items: {e}")
+            return 0
 
     def toggle_favorite(self, content_hash: str) -> None:
         try:

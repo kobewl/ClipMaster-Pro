@@ -1,12 +1,16 @@
 //! 设置持久化：存放在 SQLite `app_settings` key-value 表中，
-//! 与历史数据共享同一个数据库文件和事务边界，避免像 v2 一样拆成
-//! SQLite + 独立 JSON 文件两套存储导致状态不一致。
+//! 与历史数据共享同一个数据库文件和事务边界。
+//!
+//! 实现 `domain::ports::SettingsStore` trait，Application 层通过 trait 访问，
+//! 不直接依赖 SQLite 细节，保证依赖方向 Application → Domain ← Infrastructure。
 
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::error::RepositoryError;
+use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
 
 const KEY_MAX_HISTORY: &str = "max_history";
@@ -22,8 +26,11 @@ impl SqliteSettingsStore {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
     }
+}
 
-    pub async fn load(&self) -> Result<AppSettings, RepositoryError> {
+#[async_trait]
+impl SettingsStore for SqliteSettingsStore {
+    async fn load(&self) -> Result<AppSettings, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().expect("sqlite mutex poisoned");
@@ -52,12 +59,7 @@ impl SqliteSettingsStore {
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    /// 三个字段必须作为一个原子操作写入：如果 `retention_days` 写入成功但
-    /// `capture_enabled` 写入失败，之前的实现会把设置留在半更新状态，
-    /// 违反 FR-SET-006（设置修改失败时保留原值）。这里用显式事务保证
-    /// 三次写入全部成功才提交，任一失败则整体回滚，数据库里永远只存在
-    /// “更新前”或“更新后”两种完整状态之一。
-    pub async fn save(&self, settings: AppSettings) -> Result<(), RepositoryError> {
+    async fn save(&self, settings: AppSettings) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");

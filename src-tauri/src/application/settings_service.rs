@@ -3,15 +3,15 @@
 use std::sync::Arc;
 
 use crate::domain::error::AppError;
+use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
-use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
 
 pub struct SettingsService {
-    store: Arc<SqliteSettingsStore>,
+    store: Arc<dyn SettingsStore>,
 }
 
 impl SettingsService {
-    pub fn new(store: Arc<SqliteSettingsStore>) -> Self {
+    pub fn new(store: Arc<dyn SettingsStore>) -> Self {
         Self { store }
     }
 
@@ -20,8 +20,7 @@ impl SettingsService {
     }
 
     pub async fn update(&self, next: AppSettings) -> Result<AppSettings, AppError> {
-        next.validate()
-            .map_err(AppError::InvalidSettings)?;
+        next.validate().map_err(AppError::InvalidSettings)?;
         self.store.save(next.clone()).await?;
         Ok(next)
     }

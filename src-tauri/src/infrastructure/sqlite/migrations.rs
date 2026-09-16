@@ -1,19 +1,16 @@
 //! SQLite schema 与 migration。
 //!
-//! 参考数据文档第 3.1、3.2 节：
-//! - `schema_migrations` 记录已执行 migration 版本，应用启动时先确认结构可识别再启动写入。
-//! - `clipboard_items` 主表结构见下方 SQL。
-//! - `app_settings` 为 key-value 存储，承载最大历史数量、保留天数等设置（架构文档未强制要求
-//!   独立表，这里选择表而非配置文件，方便与历史数据在同一事务边界内操作）。
+//! Migration 策略：每个版本号对应一段幂等 SQL，只会被执行一次。
+//! 新功能通过追加新版本号来演进，不修改已有 migration。
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 
-/// 按顺序执行的 migration SQL。每个 migration 必须是幂等或受版本号保护的。
-const MIGRATIONS: &[(i64, &str)] = &[(
-    1,
-    r#"
+const MIGRATIONS: &[(i64, &str)] = &[
+    (
+        1,
+        r#"
     CREATE TABLE IF NOT EXISTS clipboard_items (
         id              TEXT PRIMARY KEY,
         content_type    TEXT NOT NULL,
@@ -45,10 +42,32 @@ const MIGRATIONS: &[(i64, &str)] = &[(
         value TEXT NOT NULL
     );
     "#,
-)];
+    ),
+    // -----------------------------------------------------------------------
+    // Migration 2: 引入 FTS5 全文搜索，取代 LIKE '%xxx%'。
+    //
+    // FTS5 虚拟表用 external content 模式（content=clipboard_items），
+    // 这样 FTS 索引不会拷贝一份完整的 content_text，只存倒排索引，
+    // 查询时通过 rowid → clipboard_items 回表取完整数据。
+    //
+    // 对于老用户（已有 migration 1 的数据），通过 rebuild 命令一次性
+    // 把已有行灌进 FTS 索引；新用户第一次运行 rebuild 是空表，无开销。
+    // -----------------------------------------------------------------------
+    (
+        2,
+        r#"
+    CREATE VIRTUAL TABLE IF NOT EXISTS clipboard_items_fts USING fts5(
+        search_text,
+        content=clipboard_items,
+        content_rowid=rowid
+    );
 
-/// 执行全部尚未应用的 migration。若任一步骤失败，整体回滚，不允许应用
-/// 在半升级结构上继续运行（数据文档第 5 节事务规则）。
+    INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES('rebuild');
+    "#,
+    ),
+];
+
+/// 执行全部尚未应用的 migration。若任一步骤失败，整体回滚。
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;

@@ -1,5 +1,9 @@
 //! 历史记录相关用例：捕获、列表/搜索、收藏、删除、清空、复制。
 //! 参考架构文档第 3.3 节：Application 编排具体用例，不含平台细节。
+//!
+//! 图片文件生命周期管理：
+//! Repository 层只负责数据库，不碰文件系统。Application 层在 DB 删除成功后
+//! 异步清理孤儿图片文件（fire-and-forget），失败仅日志告警，不影响主流程。
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -8,24 +12,22 @@ use crate::domain::error::{AppError, DomainError, RepositoryError};
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::normalize::{build_search_text, compute_fingerprint, compute_fingerprint_bytes};
 use crate::domain::ports::{
-    ClipboardEvent, ClipboardRepository, ClipboardWriter, ListResult, SearchQuery,
+    ClipboardEvent, ClipboardRepository, ClipboardWriter, ListResult, SearchQuery, SettingsStore,
 };
-use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
 
-/// 单条文本内容的大小上限（FR-CAP-005）。
-pub const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024; // 5 MB
+pub const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024;
 
 pub struct HistoryService {
     repository: Arc<dyn ClipboardRepository>,
     writer: Arc<dyn ClipboardWriter>,
-    settings_store: Arc<SqliteSettingsStore>,
+    settings_store: Arc<dyn SettingsStore>,
 }
 
 impl HistoryService {
     pub fn new(
         repository: Arc<dyn ClipboardRepository>,
         writer: Arc<dyn ClipboardWriter>,
-        settings_store: Arc<SqliteSettingsStore>,
+        settings_store: Arc<dyn SettingsStore>,
     ) -> Self {
         Self {
             repository,
@@ -34,19 +36,19 @@ impl HistoryService {
         }
     }
 
-    /// 统一捕获入口，根据 content_type 分派到文本或图片路径。
     pub async fn capture(&self, event: ClipboardEvent) -> Result<ClipboardItem, AppError> {
         match event.content_type {
             ContentType::Text => {
-                self.capture_text(event.content_text, event.source_app).await
+                self.capture_text(event.content_text, event.source_app)
+                    .await
             }
             ContentType::Image => {
-                self.capture_image(event.content_text, event.source_app).await
+                self.capture_image(event.content_text, event.source_app)
+                    .await
             }
         }
     }
 
-    /// 捕获文本。
     pub async fn capture_text(
         &self,
         content: String,
@@ -85,8 +87,6 @@ impl HistoryService {
         Ok(item)
     }
 
-    /// 捕获图片。content_text 是 EventHandler 已保存的 PNG 文件路径。
-    /// fingerprint 从文件名中提取（文件名就是图片内容的 SHA-256 前缀）。
     async fn capture_image(
         &self,
         image_path: String,
@@ -96,7 +96,6 @@ impl HistoryService {
             return Err(AppError::Domain(DomainError::EmptyContent));
         }
 
-        // fingerprint 从文件内容重新计算以保证一致性
         let bytes = tokio::fs::read(&image_path)
             .await
             .map_err(|e| AppError::Domain(DomainError::InvalidContentType(e.to_string())))?;
@@ -116,15 +115,21 @@ impl HistoryService {
         Ok(item)
     }
 
-    /// 捕获后执行数量上限 + 按天保留清理。
     async fn run_cleanup_after_capture(&self) -> Result<(), AppError> {
         let settings = self.settings_store.load().await?;
-        self.repository
+
+        let max_result = self
+            .repository
             .enforce_max_count(settings.max_history)
             .await?;
-        self.repository
+        spawn_image_cleanup(max_result.image_paths);
+
+        let ret_result = self
+            .repository
             .enforce_retention_days(settings.retention_days)
             .await?;
+        spawn_image_cleanup(ret_result.image_paths);
+
         Ok(())
     }
 
@@ -168,14 +173,18 @@ impl HistoryService {
                 id_str.to_string(),
             )));
         }
+        if let Some(path) = result.image_path {
+            spawn_image_cleanup(vec![path]);
+        }
         Ok(())
     }
 
     pub async fn clear(&self, keep_favorites: bool) -> Result<u64, AppError> {
-        Ok(self.repository.clear(keep_favorites).await?)
+        let result = self.repository.clear(keep_favorites).await?;
+        spawn_image_cleanup(result.image_paths);
+        Ok(result.deleted_count)
     }
 
-    /// 将历史项重新写入系统剪贴板（支持文本和图片）。
     pub async fn copy_to_clipboard(&self, id_str: &str) -> Result<(), AppError> {
         let id = parse_id(id_str)?;
         let item = self.repository.get_by_id(id).await?;
@@ -193,7 +202,6 @@ impl HistoryService {
             }
         }
 
-        // 刷新 last_copied_at
         self.repository
             .insert_or_touch(NewClipboardItem {
                 content_type: item.content_type,
@@ -206,11 +214,31 @@ impl HistoryService {
     }
 
     pub async fn run_retention_cleanup(&self, retention_days: i64) -> Result<u64, AppError> {
-        Ok(self
+        let result = self
             .repository
             .enforce_retention_days(retention_days)
-            .await?)
+            .await?;
+        spawn_image_cleanup(result.image_paths);
+        Ok(result.deleted_count)
     }
+}
+
+/// 异步清理孤儿图片文件。fire-and-forget 策略：
+/// DB 事务已提交（source of truth），文件清理失败只浪费磁盘空间，不影响数据一致性。
+fn spawn_image_cleanup(paths: Vec<String>) {
+    if paths.is_empty() {
+        return;
+    }
+    tokio::spawn(async move {
+        for path in &paths {
+            if let Err(e) = tokio::fs::remove_file(path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!(path, error = %e, "清理孤儿图片文件失败");
+                }
+            }
+        }
+        tracing::debug!(count = paths.len(), "图片文件清理完成");
+    });
 }
 
 fn parse_id(id_str: &str) -> Result<ClipboardItemId, AppError> {

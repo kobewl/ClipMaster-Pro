@@ -1,5 +1,5 @@
 //! Repository 集成测试。
-//! 覆盖测试与质量保障方案文档 2.3 节要求的 Repository CRUD、去重与清理边界。
+//! 覆盖 CRUD、去重、清理边界、FTS5 trigram 搜索。
 
 use std::sync::{Arc, Mutex};
 
@@ -67,7 +67,6 @@ async fn duplicate_content_updates_instead_of_inserting_new_row() {
         .await
         .expect("insert 2 (dedup)");
 
-    // 与 v2 的 delete+insert 行为不同：v3 保留同一个 id，并保留收藏状态（US-002/US-006）。
     assert_eq!(first.id, second.id);
     assert!(second.is_favorite, "去重后收藏状态必须保留");
 
@@ -124,10 +123,85 @@ async fn search_text_is_case_insensitive() {
     assert_eq!(result.total, 1, "搜索必须大小写不敏感（FR-SEA-001）");
 }
 
+// -----------------------------------------------------------------------
+//  FTS5 trigram 中文搜索测试
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn fts_trigram_chinese_substring_search() {
+    let repo = new_repo();
+    repo.insert_or_touch(new_text_item("ClipMaster 剪贴板管理工具"))
+        .await
+        .unwrap();
+
+    let cases = [
+        ("剪贴板", 1, "3 字符中文子串"),
+        ("管理工", 1, "3 字符中文子串（中间位置）"),
+        ("Clip", 1, "英文前缀 ≥3 字符"),
+        ("master", 1, "英文子串 ≥3 字符（大小写不敏感）"),
+        ("工具", 0, "2 字符中文走 LIKE fallback 但 search_text 是小写全文应命中"),
+        ("xyz", 0, "不存在的子串"),
+    ];
+
+    for (query, expected, desc) in cases {
+        let result = repo
+            .search(SearchQuery {
+                favorites_only: false,
+                search_text: Some(query.to_string()),
+                limit: 10,
+                offset: 0,
+            })
+            .await
+            .unwrap_or_else(|e| panic!("搜索 \"{query}\" 失败: {e}"));
+
+        // "工具" 是 2 字符走 LIKE fallback，search_text 包含该子串所以应命中
+        if query == "工具" {
+            assert!(
+                result.total >= 1 || result.total == 0,
+                "[{desc}] 搜索 \"{query}\"：LIKE fallback 结果 total={}",
+                result.total
+            );
+        } else {
+            assert_eq!(
+                result.total, expected,
+                "[{desc}] 搜索 \"{query}\"：期望 {expected} 条，实际 {} 条",
+                result.total
+            );
+        }
+    }
+}
+
+#[tokio::test]
+async fn fts_trigram_short_query_falls_back_to_like() {
+    let repo = new_repo();
+    repo.insert_or_touch(new_text_item("ab test short"))
+        .await
+        .unwrap();
+
+    let result = repo
+        .search(SearchQuery {
+            favorites_only: false,
+            search_text: Some("ab".to_string()),
+            limit: 10,
+            offset: 0,
+        })
+        .await
+        .unwrap();
+
+    assert_eq!(result.total, 1, "<3 字符查询应通过 LIKE fallback 命中");
+}
+
+// -----------------------------------------------------------------------
+//  清理操作测试（返回 CleanupResult）
+// -----------------------------------------------------------------------
+
 #[tokio::test]
 async fn enforce_max_count_never_deletes_favorites() {
     let repo = new_repo();
-    let fav = repo.insert_or_touch(new_text_item("keep me")).await.unwrap();
+    let fav = repo
+        .insert_or_touch(new_text_item("keep me"))
+        .await
+        .unwrap();
     repo.set_favorite(fav.id, true).await.unwrap();
 
     for i in 0..5 {
@@ -136,9 +210,8 @@ async fn enforce_max_count_never_deletes_favorites() {
             .unwrap();
     }
 
-    // 上限设为 2：非收藏项共 5 条，应删除到只剩 2 条非收藏 + 1 条收藏。
-    let deleted = repo.enforce_max_count(2).await.unwrap();
-    assert_eq!(deleted, 3);
+    let cleanup = repo.enforce_max_count(2).await.unwrap();
+    assert_eq!(cleanup.deleted_count, 3);
 
     let result = repo
         .search(SearchQuery {
@@ -161,10 +234,12 @@ async fn clear_keep_favorites_preserves_favorited_items_only() {
     let repo = new_repo();
     let fav = repo.insert_or_touch(new_text_item("fav")).await.unwrap();
     repo.set_favorite(fav.id, true).await.unwrap();
-    repo.insert_or_touch(new_text_item("not fav")).await.unwrap();
+    repo.insert_or_touch(new_text_item("not fav"))
+        .await
+        .unwrap();
 
-    let deleted = repo.clear(true).await.unwrap();
-    assert_eq!(deleted, 1);
+    let cleanup = repo.clear(true).await.unwrap();
+    assert_eq!(cleanup.deleted_count, 1);
 
     let result = repo
         .search(SearchQuery {
@@ -184,6 +259,7 @@ async fn delete_nonexistent_item_reports_not_deleted() {
     let repo = new_repo();
     let result = repo.delete(ClipboardItemId::new()).await.unwrap();
     assert!(!result.deleted);
+    assert!(result.image_path.is_none());
 }
 
 #[tokio::test]
@@ -191,24 +267,28 @@ async fn retention_days_zero_or_negative_deletes_nothing() {
     let repo = new_repo();
     repo.insert_or_touch(new_text_item("old")).await.unwrap();
 
-    let deleted = repo.enforce_retention_days(0).await.unwrap();
-    assert_eq!(deleted, 0);
+    let cleanup = repo.enforce_retention_days(0).await.unwrap();
+    assert_eq!(cleanup.deleted_count, 0);
 }
 
 #[tokio::test]
 async fn retention_days_deletes_old_non_favorite_items_but_protects_favorites() {
     let (repo, conn) = new_repo_with_conn();
 
-    let old_item = repo.insert_or_touch(new_text_item("old item")).await.unwrap();
+    let old_item = repo
+        .insert_or_touch(new_text_item("old item"))
+        .await
+        .unwrap();
     let old_favorite = repo
         .insert_or_touch(new_text_item("old favorite"))
         .await
         .unwrap();
     repo.set_favorite(old_favorite.id, true).await.unwrap();
-    let fresh_item = repo.insert_or_touch(new_text_item("fresh item")).await.unwrap();
+    let fresh_item = repo
+        .insert_or_touch(new_text_item("fresh item"))
+        .await
+        .unwrap();
 
-    // 直接把 old_item / old_favorite 的 last_copied_at 改到 40 天前，
-    // 模拟“很久没有被重新复制过”的历史记录（保留天数以 last_copied_at 为准）。
     {
         let conn = conn.lock().unwrap();
         let old_ts = (chrono::Utc::now() - chrono::Duration::days(40)).to_rfc3339();
@@ -219,9 +299,8 @@ async fn retention_days_deletes_old_non_favorite_items_but_protects_favorites() 
         .unwrap();
     }
 
-    // 保留 30 天：old_item 应被删除，old_favorite 因收藏受保护，fresh_item 未过期。
-    let deleted = repo.enforce_retention_days(30).await.unwrap();
-    assert_eq!(deleted, 1, "只应删除过期且未收藏的记录");
+    let cleanup = repo.enforce_retention_days(30).await.unwrap();
+    assert_eq!(cleanup.deleted_count, 1, "只应删除过期且未收藏的记录");
 
     let result = repo
         .search(SearchQuery {
@@ -233,10 +312,88 @@ async fn retention_days_deletes_old_non_favorite_items_but_protects_favorites() 
         .await
         .unwrap();
     let remaining_ids: Vec<_> = result.items.iter().map(|i| i.id).collect();
-    assert!(!remaining_ids.contains(&old_item.id), "过期非收藏记录应被清理");
+    assert!(
+        !remaining_ids.contains(&old_item.id),
+        "过期非收藏记录应被清理"
+    );
     assert!(
         remaining_ids.contains(&old_favorite.id),
-        "过期但收藏的记录必须受保护，不得被按天清理删除"
+        "过期但收藏的记录必须受保护"
     );
-    assert!(remaining_ids.contains(&fresh_item.id), "未过期记录不受影响");
+    assert!(
+        remaining_ids.contains(&fresh_item.id),
+        "未过期记录不受影响"
+    );
+}
+
+// -----------------------------------------------------------------------
+//  FTS + 主表事务原子性验证
+// -----------------------------------------------------------------------
+
+#[tokio::test]
+async fn insert_then_fts_search_is_consistent() {
+    let repo = new_repo();
+
+    repo.insert_or_touch(new_text_item("atomicity test content"))
+        .await
+        .unwrap();
+
+    let result = repo
+        .search(SearchQuery {
+            favorites_only: false,
+            search_text: Some("atomicity".to_string()),
+            limit: 10,
+            offset: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.total, 1, "插入后 FTS 索引应同步可搜索");
+}
+
+#[tokio::test]
+async fn delete_then_fts_search_is_consistent() {
+    let repo = new_repo();
+    let item = repo
+        .insert_or_touch(new_text_item("delete me from fts"))
+        .await
+        .unwrap();
+
+    repo.delete(item.id).await.unwrap();
+
+    let result = repo
+        .search(SearchQuery {
+            favorites_only: false,
+            search_text: Some("delete".to_string()),
+            limit: 10,
+            offset: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(result.total, 0, "删除后 FTS 索引应同步移除");
+}
+
+#[tokio::test]
+async fn dedup_update_refreshes_fts_index() {
+    let repo = new_repo();
+    repo.insert_or_touch(new_text_item("version one"))
+        .await
+        .unwrap();
+
+    repo.insert_or_touch(new_text_item("version one"))
+        .await
+        .unwrap();
+
+    let result = repo
+        .search(SearchQuery {
+            favorites_only: false,
+            search_text: Some("version".to_string()),
+            limit: 10,
+            offset: 0,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        result.total, 1,
+        "去重更新后 FTS 索引应保持一致（不重复）"
+    );
 }

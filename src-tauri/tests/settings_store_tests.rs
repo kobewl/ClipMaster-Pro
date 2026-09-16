@@ -3,6 +3,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use app_lib::domain::ports::SettingsStore;
 use app_lib::domain::settings::AppSettings;
 use app_lib::infrastructure::sqlite::settings_store::SqliteSettingsStore;
 

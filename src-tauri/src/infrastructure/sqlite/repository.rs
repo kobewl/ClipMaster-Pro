@@ -1,8 +1,11 @@
 //! SQLite 实现的 ClipboardRepository。
 //!
-//! 搜索使用 FTS5 全文索引（migration 2），性能远优于 LIKE '%xxx%'：
-//! - B-tree 前缀索引对 '%keyword%' 无效，FTS5 的倒排索引天然支持任意位置匹配
-//! - 后续可扩展：前缀搜索、多词搜索、排序等
+//! 搜索使用 FTS5 + trigram tokenizer（migration 3），天然支持 CJK 子串匹配：
+//! - ≥3 字符查询走 FTS5 MATCH（trigram 子串索引）
+//! - <3 字符查询自动 fallback 到 LIKE（短词 FTS 无法形成有效 trigram）
+//!
+//! 事务规则：所有涉及"主表 + FTS 索引"的写操作必须在同一事务内完成，
+//! FTS 同步失败会回滚整个事务，杜绝 index drift。
 //!
 //! 并发规则（架构文档第 8 节）：
 //! - 所有数据库操作放入 `spawn_blocking`，不跨 `await` 持有 Mutex。
@@ -17,7 +20,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::domain::error::RepositoryError;
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::normalize::build_search_text;
-use crate::domain::ports::{ClipboardRepository, DeleteResult, ListResult, SearchQuery};
+use crate::domain::ports::{
+    CleanupResult, ClipboardRepository, DeleteResult, ListResult, SearchQuery,
+};
 
 pub struct SqliteClipboardRepository {
     conn: Arc<Mutex<Connection>>,
@@ -61,27 +66,48 @@ fn parse_datetime(value: &str) -> DateTime<Utc> {
         .unwrap_or_else(|_| Utc::now())
 }
 
-/// 同步 FTS5 索引：插入或更新后调用。
-/// external content 模式下 FTS 不会自动同步，必须手动 INSERT/DELETE。
-fn sync_fts_insert(conn: &Connection, rowid: i64, search_text: &str) -> Result<(), RepositoryError> {
+// ---------------------------------------------------------------------------
+//  FTS5 同步辅助函数
+//  external content 模式下 FTS 不会自动同步，必须手动 INSERT/DELETE。
+//  这些函数的错误必须向上传播，由调用方在事务中处理，绝不能 `let _ =`。
+// ---------------------------------------------------------------------------
+
+fn sync_fts_insert(
+    conn: &Connection,
+    rowid: i64,
+    search_text: &str,
+) -> Result<(), RepositoryError> {
     conn.execute(
         "INSERT INTO clipboard_items_fts(rowid, search_text) VALUES (?1, ?2)",
         params![rowid, search_text],
     )
-    .map_err(|e| RepositoryError::Database(e.to_string()))?;
+    .map_err(|e| RepositoryError::Database(format!("FTS insert failed: {e}")))?;
     Ok(())
 }
 
-fn sync_fts_delete(conn: &Connection, rowid: i64, old_search_text: &str) -> Result<(), RepositoryError> {
+fn sync_fts_delete(
+    conn: &Connection,
+    rowid: i64,
+    old_search_text: &str,
+) -> Result<(), RepositoryError> {
     conn.execute(
-        "INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, search_text) VALUES('delete', ?1, ?2)",
+        "INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, search_text) \
+         VALUES('delete', ?1, ?2)",
         params![rowid, old_search_text],
     )
-    .map_err(|e| RepositoryError::Database(e.to_string()))?;
+    .map_err(|e| RepositoryError::Database(format!("FTS delete failed: {e}")))?;
     Ok(())
 }
 
-/// 获取一行的 rowid（SQLite 隐式行号）。
+fn fts_rebuild(conn: &Connection) -> Result<(), RepositoryError> {
+    conn.execute(
+        "INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES('rebuild')",
+        [],
+    )
+    .map_err(|e| RepositoryError::Database(format!("FTS rebuild failed: {e}")))?;
+    Ok(())
+}
+
 fn get_rowid(conn: &Connection, id: &str) -> Result<i64, RepositoryError> {
     conn.query_row(
         "SELECT rowid FROM clipboard_items WHERE id = ?1",
@@ -89,6 +115,23 @@ fn get_rowid(conn: &Connection, id: &str) -> Result<i64, RepositoryError> {
         |row| row.get(0),
     )
     .map_err(|e| RepositoryError::Database(e.to_string()))
+}
+
+/// 查询指定条件下将被删除的图片文件路径。
+fn collect_image_paths_with_sql(
+    conn: &Connection,
+    sql: &str,
+    params: &[&dyn rusqlite::types::ToSql],
+) -> Result<Vec<String>, RepositoryError> {
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| RepositoryError::Database(e.to_string()))?;
+    let paths: Vec<String> = stmt
+        .query_map(params, |row| row.get(0))
+        .map_err(|e| RepositoryError::Database(e.to_string()))?
+        .filter_map(|r| r.ok())
+        .collect();
+    Ok(paths)
 }
 
 #[async_trait]
@@ -99,10 +142,13 @@ impl ClipboardRepository for SqliteClipboardRepository {
     ) -> Result<ClipboardItem, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let now = Utc::now().to_rfc3339();
+            let search_text = build_search_text(&item.content_text);
 
-            let existing: Option<(String, String)> = conn
+            let tx = conn.transaction().map_err(Self::map_db_err)?;
+
+            let existing: Option<(String, String)> = tx
                 .query_row(
                     "SELECT id, search_text FROM clipboard_items WHERE fingerprint = ?1",
                     params![item.fingerprint],
@@ -111,10 +157,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 .optional()
                 .map_err(Self::map_db_err)?;
 
-            let search_text = build_search_text(&item.content_text);
-
             if let Some((existing_id, old_search_text)) = existing {
-                conn.execute(
+                tx.execute(
                     "UPDATE clipboard_items
                      SET updated_at = ?1, last_copied_at = ?1, source_app = ?2, search_text = ?3
                      WHERE id = ?4",
@@ -122,22 +166,24 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 )
                 .map_err(Self::map_db_err)?;
 
-                // FTS external content 模式：delete 旧的，insert 新的
-                let rowid = get_rowid(&conn, &existing_id)?;
-                let _ = sync_fts_delete(&conn, rowid, &old_search_text);
-                let _ = sync_fts_insert(&conn, rowid, &search_text);
+                let rowid = get_rowid(&tx, &existing_id)?;
+                sync_fts_delete(&tx, rowid, &old_search_text)?;
+                sync_fts_insert(&tx, rowid, &search_text)?;
 
-                return conn
+                let result = tx
                     .query_row(
                         "SELECT * FROM clipboard_items WHERE id = ?1",
                         params![existing_id],
                         Self::row_to_item,
                     )
-                    .map_err(Self::map_db_err);
+                    .map_err(Self::map_db_err)?;
+
+                tx.commit().map_err(Self::map_db_err)?;
+                return Ok(result);
             }
 
             let new_id = ClipboardItemId::new();
-            conn.execute(
+            tx.execute(
                 "INSERT INTO clipboard_items
                     (id, content_type, content_text, fingerprint, search_text,
                      is_favorite, created_at, updated_at, last_copied_at, source_app, legacy_id)
@@ -154,16 +200,19 @@ impl ClipboardRepository for SqliteClipboardRepository {
             )
             .map_err(Self::map_db_err)?;
 
-            // 同步 FTS 索引
-            let rowid = get_rowid(&conn, &new_id.to_string())?;
-            let _ = sync_fts_insert(&conn, rowid, &search_text);
+            let rowid = get_rowid(&tx, &new_id.to_string())?;
+            sync_fts_insert(&tx, rowid, &search_text)?;
 
-            conn.query_row(
-                "SELECT * FROM clipboard_items WHERE id = ?1",
-                params![new_id.to_string()],
-                Self::row_to_item,
-            )
-            .map_err(Self::map_db_err)
+            let result = tx
+                .query_row(
+                    "SELECT * FROM clipboard_items WHERE id = ?1",
+                    params![new_id.to_string()],
+                    Self::row_to_item,
+                )
+                .map_err(Self::map_db_err)?;
+
+            tx.commit().map_err(Self::map_db_err)?;
+            Ok(result)
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
@@ -174,74 +223,104 @@ impl ClipboardRepository for SqliteClipboardRepository {
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().expect("sqlite mutex poisoned");
 
-            // FTS5 搜索：把用户输入转为 FTS5 MATCH 表达式
-            // 例如 "hello world" → "hello* world*"（每个词加前缀通配）
-            let fts_match_expr = query.search_text.as_ref().map(|s| {
-                s.split_whitespace()
-                    .map(|word| {
-                        // 转义 FTS5 特殊字符
+            // ----------------------------------------------------------
+            // 搜索策略（trigram tokenizer, migration 3）：
+            //   ≥3 字符的词 → FTS5 MATCH（trigram 子串匹配）
+            //   <3 字符的词 → LIKE fallback（trigram 至少需要 3 字符）
+            //   混合时 FTS + LIKE 联合 AND 过滤
+            // ----------------------------------------------------------
+            let mut fts_terms: Vec<String> = Vec::new();
+            let mut like_patterns: Vec<String> = Vec::new();
+
+            if let Some(ref text) = query.search_text {
+                for word in text.split_whitespace() {
+                    if word.is_empty() {
+                        continue;
+                    }
+                    if word.chars().count() >= 3 {
+                        let escaped = word.replace('"', "\"\"");
+                        fts_terms.push(format!("\"{escaped}\""));
+                    } else {
                         let escaped = word
-                            .replace('"', "\"\"");
-                        format!("\"{escaped}\"*")
-                    })
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            });
-
-            let use_fts = fts_match_expr.is_some();
-
-            // 构建查询
-            let (from_clause, search_condition) = if let Some(ref expr) = fts_match_expr {
-                if expr.trim().is_empty() {
-                    ("clipboard_items".to_string(), None)
-                } else {
-                    // FTS5 JOIN：通过 rowid 关联主表
-                    (
-                        "clipboard_items INNER JOIN clipboard_items_fts ON clipboard_items.rowid = clipboard_items_fts.rowid".to_string(),
-                        Some(format!("clipboard_items_fts MATCH '{}'", expr.replace('\'', "''")))
-                    )
+                            .replace('\\', "\\\\")
+                            .replace('%', "\\%")
+                            .replace('_', "\\_");
+                        like_patterns.push(format!("%{escaped}%"));
+                    }
                 }
+            }
+
+            let use_fts = !fts_terms.is_empty();
+            let fts_expr = fts_terms.join(" ");
+
+            let from_clause = if use_fts {
+                "clipboard_items INNER JOIN clipboard_items_fts \
+                 ON clipboard_items.rowid = clipboard_items_fts.rowid"
             } else {
-                ("clipboard_items".to_string(), None)
+                "clipboard_items"
             };
 
-            let mut where_clauses: Vec<String> = Vec::new();
+            // 动态构建 WHERE 条件和参数列表
+            let mut conditions: Vec<String> = Vec::new();
+            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+            let mut pidx = 0usize;
+
             if query.favorites_only {
-                where_clauses.push("clipboard_items.is_favorite = 1".to_string());
+                conditions.push("clipboard_items.is_favorite = 1".to_string());
             }
-            if let Some(cond) = search_condition {
-                where_clauses.push(cond);
+
+            if use_fts {
+                pidx += 1;
+                conditions.push(format!("clipboard_items_fts MATCH ?{pidx}"));
+                param_values.push(Box::new(fts_expr));
             }
-            let where_sql = if where_clauses.is_empty() {
+
+            for pattern in &like_patterns {
+                pidx += 1;
+                conditions.push(format!(
+                    "clipboard_items.search_text LIKE ?{pidx} ESCAPE '\\'"
+                ));
+                param_values.push(Box::new(pattern.clone()));
+            }
+
+            let where_sql = if conditions.is_empty() {
                 String::new()
             } else {
-                format!("WHERE {}", where_clauses.join(" AND "))
+                format!("WHERE {}", conditions.join(" AND "))
             };
 
             // COUNT
-            let count_sql =
-                format!("SELECT COUNT(*) FROM {from_clause} {where_sql}");
+            let count_sql = format!("SELECT COUNT(*) FROM {from_clause} {where_sql}");
+            let count_refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_values.iter().map(|p| p.as_ref()).collect();
             let total: i64 = conn
-                .query_row(&count_sql, [], |row| row.get(0))
+                .query_row(&count_sql, count_refs.as_slice(), |row| row.get(0))
                 .map_err(Self::map_db_err)?;
 
             // SELECT with pagination
+            pidx += 1;
+            let limit_idx = pidx;
+            pidx += 1;
+            let offset_idx = pidx;
             let list_sql = format!(
                 "SELECT clipboard_items.* FROM {from_clause} {where_sql}
                  ORDER BY clipboard_items.is_favorite DESC, clipboard_items.last_copied_at DESC
-                 LIMIT ?1 OFFSET ?2"
+                 LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
             );
+
+            param_values.push(Box::new(query.limit));
+            param_values.push(Box::new(query.offset));
+            let list_refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_values.iter().map(|p| p.as_ref()).collect();
 
             let mut stmt = conn.prepare(&list_sql).map_err(Self::map_db_err)?;
             let mut rows = stmt
-                .query(params![query.limit, query.offset])
+                .query(list_refs.as_slice())
                 .map_err(Self::map_db_err)?;
             let mut items = Vec::new();
             while let Some(row) = rows.next().map_err(Self::map_db_err)? {
                 items.push(Self::row_to_item(row).map_err(Self::map_db_err)?);
             }
-
-            let _ = use_fts; // suppress unused warning
 
             Ok(ListResult {
                 items,
@@ -299,67 +378,113 @@ impl ClipboardRepository for SqliteClipboardRepository {
     async fn delete(&self, id: ClipboardItemId) -> Result<DeleteResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let tx = conn.transaction().map_err(Self::map_db_err)?;
 
-            // 先读 FTS 需要的数据再删除
-            let fts_data: Option<(i64, String)> = conn
+            let item_data: Option<(i64, String, String, String)> = tx
                 .query_row(
-                    "SELECT rowid, search_text FROM clipboard_items WHERE id = ?1",
+                    "SELECT rowid, search_text, content_type, content_text \
+                     FROM clipboard_items WHERE id = ?1",
                     params![id.to_string()],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
                 )
                 .optional()
                 .map_err(Self::map_db_err)?;
 
-            let affected = conn
+            let affected = tx
                 .execute(
                     "DELETE FROM clipboard_items WHERE id = ?1",
                     params![id.to_string()],
                 )
                 .map_err(Self::map_db_err)?;
 
-            // 同步删除 FTS 索引
-            if let Some((rowid, search_text)) = fts_data {
-                let _ = sync_fts_delete(&conn, rowid, &search_text);
+            let mut image_path: Option<String> = None;
+            if let Some((rowid, search_text, content_type, content_text)) = item_data {
+                sync_fts_delete(&tx, rowid, &search_text)?;
+                if content_type == "image" {
+                    image_path = Some(content_text);
+                }
             }
+
+            tx.commit().map_err(Self::map_db_err)?;
 
             Ok(DeleteResult {
                 deleted: affected > 0,
+                image_path,
             })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    async fn clear(&self, keep_favorites: bool) -> Result<u64, RepositoryError> {
+    async fn clear(&self, keep_favorites: bool) -> Result<CleanupResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let tx = conn.transaction().map_err(Self::map_db_err)?;
+
+            let image_paths = if keep_favorites {
+                collect_image_paths_with_sql(
+                    &tx,
+                    "SELECT content_text FROM clipboard_items \
+                     WHERE content_type = 'image' AND is_favorite = 0",
+                    &[],
+                )?
+            } else {
+                collect_image_paths_with_sql(
+                    &tx,
+                    "SELECT content_text FROM clipboard_items WHERE content_type = 'image'",
+                    &[],
+                )?
+            };
+
             let sql = if keep_favorites {
                 "DELETE FROM clipboard_items WHERE is_favorite = 0"
             } else {
                 "DELETE FROM clipboard_items"
             };
-            let affected = conn.execute(sql, []).map_err(Self::map_db_err)?;
+            let affected = tx.execute(sql, []).map_err(Self::map_db_err)?;
 
-            // 批量操作后直接 rebuild FTS 索引比逐条 delete 更高效
-            conn.execute(
-                "INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES('rebuild')",
-                [],
-            )
-            .map_err(Self::map_db_err)?;
+            fts_rebuild(&tx)?;
+            tx.commit().map_err(Self::map_db_err)?;
 
-            Ok(affected as u64)
+            Ok(CleanupResult {
+                deleted_count: affected as u64,
+                image_paths,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    async fn enforce_max_count(&self, max_count: u32) -> Result<u64, RepositoryError> {
+    async fn enforce_max_count(&self, max_count: u32) -> Result<CleanupResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
-            let affected = conn
+            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let tx = conn.transaction().map_err(Self::map_db_err)?;
+
+            let image_paths: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT content_text FROM clipboard_items
+                         WHERE content_type = 'image' AND is_favorite = 0
+                           AND id IN (
+                             SELECT id FROM clipboard_items
+                             WHERE is_favorite = 0
+                             ORDER BY last_copied_at ASC
+                             LIMIT MAX(0,
+                               (SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 0) - ?1
+                             )
+                           )",
+                    )
+                    .map_err(Self::map_db_err)?;
+                let rows = stmt
+                    .query_map(params![max_count], |row| row.get(0))
+                    .map_err(Self::map_db_err)?;
+                rows.filter_map(|r| r.ok()).collect()
+            };
+
+            let affected = tx
                 .execute(
                     "DELETE FROM clipboard_items
                      WHERE is_favorite = 0
@@ -367,8 +492,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
                          SELECT id FROM clipboard_items
                          WHERE is_favorite = 0
                          ORDER BY last_copied_at ASC
-                         LIMIT MAX(
-                           0,
+                         LIMIT MAX(0,
                            (SELECT COUNT(*) FROM clipboard_items WHERE is_favorite = 0) - ?1
                          )
                        )",
@@ -377,28 +501,48 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 .map_err(Self::map_db_err)?;
 
             if affected > 0 {
-                // 批量删除后 rebuild
-                let _ = conn.execute(
-                    "INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES('rebuild')",
-                    [],
-                );
+                fts_rebuild(&tx)?;
             }
 
-            Ok(affected as u64)
+            tx.commit().map_err(Self::map_db_err)?;
+
+            Ok(CleanupResult {
+                deleted_count: affected as u64,
+                image_paths,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    async fn enforce_retention_days(&self, retention_days: i64) -> Result<u64, RepositoryError> {
+    async fn enforce_retention_days(
+        &self,
+        retention_days: i64,
+    ) -> Result<CleanupResult, RepositoryError> {
         if retention_days <= 0 {
-            return Ok(0);
+            return Ok(CleanupResult::default());
         }
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let cutoff = (Utc::now() - chrono::Duration::days(retention_days)).to_rfc3339();
-            let affected = conn
+            let tx = conn.transaction().map_err(Self::map_db_err)?;
+
+            let image_paths: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT content_text FROM clipboard_items
+                         WHERE content_type = 'image' AND is_favorite = 0
+                           AND last_copied_at < ?1",
+                    )
+                    .map_err(Self::map_db_err)?;
+                let rows = stmt
+                    .query_map(params![cutoff], |row| row.get(0))
+                    .map_err(Self::map_db_err)?;
+                rows.filter_map(|r| r.ok()).collect()
+            };
+
+            let affected = tx
                 .execute(
                     "DELETE FROM clipboard_items
                      WHERE is_favorite = 0 AND last_copied_at < ?1",
@@ -407,13 +551,15 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 .map_err(Self::map_db_err)?;
 
             if affected > 0 {
-                let _ = conn.execute(
-                    "INSERT INTO clipboard_items_fts(clipboard_items_fts) VALUES('rebuild')",
-                    [],
-                );
+                fts_rebuild(&tx)?;
             }
 
-            Ok(affected as u64)
+            tx.commit().map_err(Self::map_db_err)?;
+
+            Ok(CleanupResult {
+                deleted_count: affected as u64,
+                image_paths,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?

@@ -1,3 +1,4 @@
+pub mod group_repository;
 pub mod migrations;
 pub mod repository;
 pub mod settings_store;

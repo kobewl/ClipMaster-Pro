@@ -1,9 +1,4 @@
-//! 历史记录相关用例：捕获、列表/搜索、收藏、删除、清空、复制。
-//! 参考架构文档第 3.3 节：Application 编排具体用例，不含平台细节。
-//!
-//! 图片文件生命周期管理：
-//! Repository 层只负责数据库，不碰文件系统。Application 层在 DB 删除成功后
-//! 异步清理孤儿图片文件（fire-and-forget），失败仅日志告警，不影响主流程。
+//! 历史记录相关用例。
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -29,22 +24,16 @@ impl HistoryService {
         writer: Arc<dyn ClipboardWriter>,
         settings_store: Arc<dyn SettingsStore>,
     ) -> Self {
-        Self {
-            repository,
-            writer,
-            settings_store,
-        }
+        Self { repository, writer, settings_store }
     }
 
     pub async fn capture(&self, event: ClipboardEvent) -> Result<ClipboardItem, AppError> {
         match event.content_type {
             ContentType::Text => {
-                self.capture_text(event.content_text, event.source_app)
-                    .await
+                self.capture_text(event.content_text, event.source_app, event.source_url).await
             }
             ContentType::Image => {
-                self.capture_image(event.content_text, event.source_app)
-                    .await
+                self.capture_image(event.content_text, event.source_app, event.source_url).await
             }
         }
     }
@@ -53,19 +42,14 @@ impl HistoryService {
         &self,
         content: String,
         source_app: Option<String>,
+        source_url: Option<String>,
     ) -> Result<ClipboardItem, AppError> {
         if content.is_empty() {
             return Err(AppError::Domain(DomainError::EmptyContent));
         }
-
         let byte_len = content.len();
         if byte_len > MAX_CONTENT_BYTES {
-            tracing::warn!(
-                content_type = "text",
-                size_bytes = byte_len,
-                limit_bytes = MAX_CONTENT_BYTES,
-                "内容超过大小上限，跳过采集"
-            );
+            tracing::warn!(size_bytes = byte_len, "内容超过大小上限，跳过");
             return Err(AppError::Domain(DomainError::ContentTooLarge {
                 actual: byte_len,
                 limit: MAX_CONTENT_BYTES,
@@ -73,15 +57,13 @@ impl HistoryService {
         }
 
         let fingerprint = compute_fingerprint("text", &content);
-        let item = self
-            .repository
-            .insert_or_touch(NewClipboardItem {
-                content_type: ContentType::Text,
-                content_text: content,
-                fingerprint,
-                source_app,
-            })
-            .await?;
+        let item = self.repository.insert_or_touch(NewClipboardItem {
+            content_type: ContentType::Text,
+            content_text: content,
+            fingerprint,
+            source_app,
+            source_url,
+        }).await?;
 
         self.run_cleanup_after_capture().await?;
         Ok(item)
@@ -91,25 +73,22 @@ impl HistoryService {
         &self,
         image_path: String,
         source_app: Option<String>,
+        source_url: Option<String>,
     ) -> Result<ClipboardItem, AppError> {
         if image_path.is_empty() {
             return Err(AppError::Domain(DomainError::EmptyContent));
         }
-
-        let bytes = tokio::fs::read(&image_path)
-            .await
+        let bytes = tokio::fs::read(&image_path).await
             .map_err(|e| AppError::Domain(DomainError::InvalidContentType(e.to_string())))?;
         let fingerprint = compute_fingerprint_bytes("image", &bytes);
 
-        let item = self
-            .repository
-            .insert_or_touch(NewClipboardItem {
-                content_type: ContentType::Image,
-                content_text: image_path,
-                fingerprint,
-                source_app,
-            })
-            .await?;
+        let item = self.repository.insert_or_touch(NewClipboardItem {
+            content_type: ContentType::Image,
+            content_text: image_path,
+            fingerprint,
+            source_app,
+            source_url,
+        }).await?;
 
         self.run_cleanup_after_capture().await?;
         Ok(item)
@@ -117,19 +96,10 @@ impl HistoryService {
 
     async fn run_cleanup_after_capture(&self) -> Result<(), AppError> {
         let settings = self.settings_store.load().await?;
-
-        let max_result = self
-            .repository
-            .enforce_max_count(settings.max_history)
-            .await?;
-        spawn_image_cleanup(max_result.image_paths);
-
-        let ret_result = self
-            .repository
-            .enforce_retention_days(settings.retention_days)
-            .await?;
-        spawn_image_cleanup(ret_result.image_paths);
-
+        let max_r = self.repository.enforce_max_count(settings.max_history).await?;
+        spawn_image_cleanup(max_r.image_paths);
+        let ret_r = self.repository.enforce_retention_days(settings.retention_days).await?;
+        spawn_image_cleanup(ret_r.image_paths);
         Ok(())
     }
 
@@ -143,13 +113,13 @@ impl HistoryService {
     }
 
     pub fn build_search_query(
-        favorites_only: bool,
+        group_id: Option<String>,
         search: Option<String>,
         limit: u32,
         offset: u32,
     ) -> SearchQuery {
         SearchQuery {
-            favorites_only,
+            group_id,
             search_text: search
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())
@@ -159,9 +129,9 @@ impl HistoryService {
         }
     }
 
-    pub async fn set_favorite(&self, id_str: &str, favorite: bool) -> Result<(), AppError> {
+    pub async fn set_group(&self, id_str: &str, group_id: Option<String>) -> Result<(), AppError> {
         let id = parse_id(id_str)?;
-        self.repository.set_favorite(id, favorite).await?;
+        self.repository.set_group(id, group_id).await?;
         Ok(())
     }
 
@@ -169,9 +139,7 @@ impl HistoryService {
         let id = parse_id(id_str)?;
         let result = self.repository.delete(id).await?;
         if !result.deleted {
-            return Err(AppError::Repository(RepositoryError::NotFound(
-                id_str.to_string(),
-            )));
+            return Err(AppError::Repository(RepositoryError::NotFound(id_str.to_string())));
         }
         if let Some(path) = result.image_path {
             spawn_image_cleanup(vec![path]);
@@ -179,8 +147,8 @@ impl HistoryService {
         Ok(())
     }
 
-    pub async fn clear(&self, keep_favorites: bool) -> Result<u64, AppError> {
-        let result = self.repository.clear(keep_favorites).await?;
+    pub async fn clear(&self, keep_grouped: bool) -> Result<u64, AppError> {
+        let result = self.repository.clear(keep_grouped).await?;
         spawn_image_cleanup(result.image_paths);
         Ok(result.deleted_count)
     }
@@ -188,47 +156,29 @@ impl HistoryService {
     pub async fn copy_to_clipboard(&self, id_str: &str) -> Result<(), AppError> {
         let id = parse_id(id_str)?;
         let item = self.repository.get_by_id(id).await?;
-
         match item.content_type {
-            ContentType::Text => {
-                self.writer
-                    .write_text(&item.content_text)
-                    .map_err(AppError::Clipboard)?;
-            }
-            ContentType::Image => {
-                self.writer
-                    .write_image(&item.content_text)
-                    .map_err(AppError::Clipboard)?;
-            }
+            ContentType::Text => self.writer.write_text(&item.content_text).map_err(AppError::Clipboard)?,
+            ContentType::Image => self.writer.write_image(&item.content_text).map_err(AppError::Clipboard)?,
         }
-
-        self.repository
-            .insert_or_touch(NewClipboardItem {
-                content_type: item.content_type,
-                content_text: item.content_text,
-                fingerprint: item.fingerprint,
-                source_app: item.source_app,
-            })
-            .await?;
+        self.repository.insert_or_touch(NewClipboardItem {
+            content_type: item.content_type,
+            content_text: item.content_text,
+            fingerprint: item.fingerprint,
+            source_app: item.source_app,
+            source_url: item.source_url,
+        }).await?;
         Ok(())
     }
 
     pub async fn run_retention_cleanup(&self, retention_days: i64) -> Result<u64, AppError> {
-        let result = self
-            .repository
-            .enforce_retention_days(retention_days)
-            .await?;
+        let result = self.repository.enforce_retention_days(retention_days).await?;
         spawn_image_cleanup(result.image_paths);
         Ok(result.deleted_count)
     }
 }
 
-/// 异步清理孤儿图片文件。fire-and-forget 策略：
-/// DB 事务已提交（source of truth），文件清理失败只浪费磁盘空间，不影响数据一致性。
 fn spawn_image_cleanup(paths: Vec<String>) {
-    if paths.is_empty() {
-        return;
-    }
+    if paths.is_empty() { return; }
     tokio::spawn(async move {
         for path in &paths {
             if let Err(e) = tokio::fs::remove_file(path).await {
@@ -237,7 +187,6 @@ fn spawn_image_cleanup(paths: Vec<String>) {
                 }
             }
         }
-        tracing::debug!(count = paths.len(), "图片文件清理完成");
     });
 }
 

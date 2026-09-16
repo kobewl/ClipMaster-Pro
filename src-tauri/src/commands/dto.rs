@@ -1,9 +1,8 @@
-//! Command 层 DTO。只负责与前端的数据形状转换，不承载业务规则
-//! （架构文档第 3.2 节：Command 不写业务规则）。
+//! Command 层 DTO。
 
 use serde::{Deserialize, Serialize};
 
-use crate::domain::model::{build_preview, ClipboardItem};
+use crate::domain::model::{build_preview, ClipGroup, ClipboardItem};
 use crate::domain::settings::AppSettings;
 
 #[derive(Debug, Clone, Serialize)]
@@ -13,11 +12,12 @@ pub struct ClipboardItemDto {
     pub content_type: &'static str,
     pub content_text: String,
     pub preview: String,
-    pub is_favorite: bool,
+    pub group_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub last_copied_at: String,
     pub source_app: Option<String>,
+    pub source_url: Option<String>,
 }
 
 impl From<ClipboardItem> for ClipboardItemDto {
@@ -32,11 +32,12 @@ impl From<ClipboardItem> for ClipboardItemDto {
             content_type: item.content_type.as_str(),
             content_text: item.content_text,
             preview,
-            is_favorite: item.is_favorite,
+            group_id: item.group_id,
             created_at: item.created_at.to_rfc3339(),
             updated_at: item.updated_at.to_rfc3339(),
             last_copied_at: item.last_copied_at.to_rfc3339(),
             source_app: item.source_app,
+            source_url: item.source_url,
         }
     }
 }
@@ -44,7 +45,7 @@ impl From<ClipboardItem> for ClipboardItemDto {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ListQueryDto {
-    pub favorites_only: bool,
+    pub group_id: Option<String>,
     pub search: Option<String>,
     pub limit: u32,
     pub offset: u32,
@@ -56,6 +57,51 @@ pub struct ListResultDto {
     pub items: Vec<ClipboardItemDto>,
     pub total: u64,
 }
+
+// ---------------------------------------------------------------------------
+//  Group DTO
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ClipGroupDto {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+    pub sort_order: i32,
+    pub item_count: u64,
+}
+
+impl From<ClipGroup> for ClipGroupDto {
+    fn from(g: ClipGroup) -> Self {
+        ClipGroupDto {
+            id: g.id,
+            name: g.name,
+            color: g.color,
+            sort_order: g.sort_order,
+            item_count: g.item_count,
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CreateGroupDto {
+    pub name: String,
+    pub color: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct UpdateGroupDto {
+    pub id: String,
+    pub name: String,
+    pub color: String,
+}
+
+// ---------------------------------------------------------------------------
+//  Settings DTO
+// ---------------------------------------------------------------------------
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "snake_case")]

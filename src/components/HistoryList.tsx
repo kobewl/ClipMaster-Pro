@@ -1,57 +1,51 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { ClipboardItem } from "@/types/clipboard";
+import type { ClipboardItem, ClipGroup } from "@/types/clipboard";
 import { HistoryItemRow } from "./HistoryItemRow";
 import type { LoadState } from "@/hooks/useClipboardHistory";
 
-interface HistoryListProps {
+interface Props {
   items: ClipboardItem[];
+  groups: ClipGroup[];
   loadState: LoadState;
-  onCopy: (id: string) => void;
-  onToggleFavorite: (id: string) => void;
+  onPaste: (id: string) => void;
+  onSetGroup: (id: string, groupId: string | null) => void;
   onDelete: (id: string) => void;
   searchActive: boolean;
 }
 
 export function HistoryList({
   items,
+  groups,
   loadState,
-  onCopy,
-  onToggleFavorite,
+  onPaste,
+  onSetGroup,
   onDelete,
   searchActive,
-}: HistoryListProps) {
+}: Props) {
   const [activeIndex, setActiveIndex] = useState(0);
   const listRef = useRef<HTMLUListElement>(null);
 
-  useEffect(() => {
-    setActiveIndex(0);
-  }, [items.length, searchActive]);
+  useEffect(() => { setActiveIndex(0); }, [items.length, searchActive]);
 
   const handleKeyDown = useCallback(
     (event: KeyboardEvent) => {
-      // 如果焦点在 input 或 button 上（设置面板、搜索框等），不拦截方向键
       const tag = (event.target as HTMLElement)?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") {
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
       }
-
       if (items.length === 0) return;
-
       if (event.key === "ArrowDown") {
         event.preventDefault();
-        setActiveIndex((prev) => Math.min(prev + 1, items.length - 1));
+        setActiveIndex((p) => Math.min(p + 1, items.length - 1));
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
-        setActiveIndex((prev) => Math.max(prev - 1, 0));
+        setActiveIndex((p) => Math.max(p - 1, 0));
       } else if (event.key === "Enter") {
         const target = items[activeIndex];
-        if (target) {
-          event.preventDefault();
-          onCopy(target.id);
-        }
+        if (target) { event.preventDefault(); onPaste(target.id); }
       }
     },
-    [items, activeIndex, onCopy],
+    [items, activeIndex, onPaste],
   );
 
   useEffect(() => {
@@ -62,26 +56,23 @@ export function HistoryList({
   if (loadState === "loading" && items.length === 0) {
     return (
       <div className="flex flex-1 items-center justify-center text-sm text-neutral-400">
-        <span className="animate-pulse">正在加载…</span>
+        <span className="animate-pulse">加载中…</span>
       </div>
     );
   }
 
   if (loadState === "error") {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-red-400">
-        <span className="text-2xl">⚠️</span>
-        加载历史记录失败，请稍后重试
+      <div className="flex flex-1 flex-col items-center justify-center gap-2 text-sm text-red-400">
+        <span className="text-2xl">⚠️</span>加载失败
       </div>
     );
   }
 
   if (items.length === 0) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center text-sm text-neutral-400">
-        <span className="text-3xl opacity-40">
-          {searchActive ? "🔍" : "📋"}
-        </span>
+      <div className="flex flex-1 flex-col items-center justify-center gap-1.5 text-sm text-neutral-400">
+        <span className="text-3xl opacity-40">{searchActive ? "🔍" : "📋"}</span>
         {searchActive ? "没有找到匹配的记录" : "暂无剪贴板历史"}
         {!searchActive && (
           <span className="text-[11px]">复制内容后会自动出现在这里</span>
@@ -94,19 +85,17 @@ export function HistoryList({
     <ul
       ref={listRef}
       role="listbox"
-      aria-label="剪贴板历史记录"
-      className="scrollbar-thin flex-1 space-y-px overflow-y-auto px-1.5 py-1.5"
+      aria-label="剪贴板历史"
+      className="scrollbar-thin flex-1 space-y-px overflow-y-auto px-1.5 py-1"
     >
-      {items.map((item, index) => (
+      {items.map((item, idx) => (
         <HistoryItemRow
           key={item.id}
           item={item}
-          active={index === activeIndex}
-          onClick={() => {
-            setActiveIndex(index);
-            onCopy(item.id);
-          }}
-          onToggleFavorite={() => onToggleFavorite(item.id)}
+          active={idx === activeIndex}
+          groups={groups}
+          onClick={() => { setActiveIndex(idx); onPaste(item.id); }}
+          onSetGroup={(gid) => onSetGroup(item.id, gid)}
           onDelete={() => onDelete(item.id)}
         />
       ))}

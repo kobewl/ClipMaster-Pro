@@ -7,9 +7,9 @@ pub mod lifecycle;
 use tauri::Manager;
 
 use crate::commands::clipboard_commands::{
-    clear_history, copy_clipboard_item, delete_clipboard_item, get_settings,
-    list_clipboard_items, paste_clipboard_item, set_capture_enabled, set_favorite,
-    update_settings, update_shortcut,
+    clear_history, copy_clipboard_item, create_group, delete_clipboard_item, delete_group,
+    get_settings, list_clipboard_items, list_groups, paste_clipboard_item, set_capture_enabled,
+    set_item_group, update_group, update_settings, update_shortcut,
 };
 use crate::lifecycle::runtime::{build_runtime, AppRuntime};
 use crate::lifecycle::shortcut::register_global_shortcut;
@@ -32,8 +32,6 @@ pub fn run() {
                 e
             })?;
 
-            // 读取用户配置的快捷键并注册（FR-SYS-002 / FR-SET-003）。
-            // 注册失败不阻止应用启动——快捷键只是便利入口，核心功能不依赖它。
             let settings = {
                 let store = runtime.settings_store();
                 tauri::async_runtime::block_on(store.load()).unwrap_or_default()
@@ -46,17 +44,19 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|_window, event| {
-            if let tauri::WindowEvent::Destroyed = event {
-                // 主窗口关闭默认隐藏而非退出进程（macOS 平台设计文档 4.2 节）。
-            }
+            if let tauri::WindowEvent::Destroyed = event {}
         })
         .invoke_handler(tauri::generate_handler![
             list_clipboard_items,
             delete_clipboard_item,
-            set_favorite,
+            set_item_group,
             copy_clipboard_item,
             paste_clipboard_item,
             clear_history,
+            list_groups,
+            create_group,
+            update_group,
+            delete_group,
             get_settings,
             update_settings,
             set_capture_enabled,

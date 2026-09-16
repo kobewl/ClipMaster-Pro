@@ -1,14 +1,10 @@
 //! 剪贴板核心领域模型。
-//!
-//! 参考文档：
-//! - 02-架构与设计/01-总体技术架构.md 第 5.1 节
-//! - 03-数据与迁移/01-数据模型存储与迁移方案.md 第 3.1 节
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// 剪贴板条目稳定标识。使用 UUID v4，不依赖数据库自增 ID。
+/// 剪贴板条目稳定标识。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ClipboardItemId(pub Uuid);
@@ -33,13 +29,12 @@ impl std::fmt::Display for ClipboardItemId {
 
 impl std::str::FromStr for ClipboardItemId {
     type Err = uuid::Error;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(Uuid::parse_str(s)?))
     }
 }
 
-/// 内容类型。Text + Image。
+/// 内容类型。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentType {
@@ -58,7 +53,6 @@ impl ContentType {
 
 impl std::str::FromStr for ContentType {
     type Err = crate::domain::error::DomainError;
-
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "text" => Ok(ContentType::Text),
@@ -70,6 +64,28 @@ impl std::str::FromStr for ContentType {
     }
 }
 
+// ---------------------------------------------------------------------------
+//  分组
+// ---------------------------------------------------------------------------
+
+/// 剪贴板条目分组。替代原有的布尔收藏，支持多组 + 自定义颜色。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClipGroup {
+    pub id: String,
+    pub name: String,
+    /// CSS 颜色值，如 "#3B82F6"。
+    pub color: String,
+    pub sort_order: i32,
+    /// 组内条目数量（由查询时 LEFT JOIN 计算得出）。
+    pub item_count: u64,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+// ---------------------------------------------------------------------------
+//  剪贴板条目
+// ---------------------------------------------------------------------------
+
 /// 已持久化的剪贴板历史条目。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClipboardItem {
@@ -78,21 +94,26 @@ pub struct ClipboardItem {
     /// 文本类型：原始正文。图片类型：图片文件的绝对路径。
     pub content_text: String,
     pub fingerprint: String,
-    pub is_favorite: bool,
+    /// 所属分组 ID（None = 未分组）。替代旧的 is_favorite。
+    pub group_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub last_copied_at: DateTime<Utc>,
+    /// 复制来源应用名称（macOS 上自动采集前台应用名）。
     pub source_app: Option<String>,
+    /// 复制来源 URL（浏览器复制时自动采集当前标签页 URL）。
+    pub source_url: Option<String>,
     pub legacy_id: Option<String>,
 }
 
-/// 新增条目时使用的输入结构，尚未分配 id/时间戳。
+/// 新增条目输入结构。
 #[derive(Debug, Clone)]
 pub struct NewClipboardItem {
     pub content_type: ContentType,
     pub content_text: String,
     pub fingerprint: String,
     pub source_app: Option<String>,
+    pub source_url: Option<String>,
 }
 
 /// 面向前端的截断预览长度上限。

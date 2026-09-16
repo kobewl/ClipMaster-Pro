@@ -1,14 +1,15 @@
-//! Composition Root：组装 Repository、Service、CapturePipeline，
-//! 并把它们放入 `AppRuntime` 供 Tauri Commands 使用（架构文档第 8 节）。
+//! Composition Root。
 
 use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::application::capture_pipeline::CapturePipeline;
+use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
 use crate::application::settings_service::SettingsService;
 use crate::domain::ports::SettingsStore;
+use crate::infrastructure::sqlite::group_repository::SqliteGroupRepository;
 use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
 use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
 
@@ -24,6 +25,7 @@ use crate::infrastructure::clipboard::unsupported::{
 pub struct AppRuntime {
     pub history: Arc<HistoryService>,
     pub settings: Arc<SettingsService>,
+    pub groups: Arc<GroupService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
     settings_store: Arc<dyn SettingsStore>,
 }
@@ -52,6 +54,8 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
 
     let repository: Arc<dyn crate::domain::ports::ClipboardRepository> =
         Arc::new(SqliteClipboardRepository::new(conn.clone()));
+    let group_repository: Arc<dyn crate::domain::ports::GroupRepository> =
+        Arc::new(SqliteGroupRepository::new(conn.clone()));
     let settings_store: Arc<dyn SettingsStore> =
         Arc::new(SqliteSettingsStore::new(conn.clone()));
 
@@ -86,6 +90,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         settings_store.clone(),
     ));
     let settings = Arc::new(SettingsService::new(settings_store.clone()));
+    let groups = Arc::new(GroupService::new(group_repository));
 
     spawn_retention_cleanup_timer(history.clone(), settings_store.clone());
 
@@ -112,6 +117,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     Ok(AppRuntime {
         history,
         settings,
+        groups,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),
         settings_store,
     })
@@ -126,9 +132,9 @@ fn spawn_retention_cleanup_timer(
         loop {
             interval.tick().await;
             let settings = match settings_store.load().await {
-                Ok(settings) => settings,
+                Ok(s) => s,
                 Err(err) => {
-                    tracing::warn!(error = %err, "定时清理读取设置失败，跳过本次清理");
+                    tracing::warn!(error = %err, "定时清理读取设置失败");
                     continue;
                 }
             };

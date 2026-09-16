@@ -51,21 +51,80 @@ impl ClipboardHandler for EventHandler {
             }
         };
 
+        // 采集来源应用信息（在处理剪贴板内容前获取，此时前台应用即复制源）
+        let source_info = get_source_info();
+
         // 优先尝试文本
         if let Ok(text) = ctx.get_text() {
             if !text.is_empty() {
-                self.handle_text(text);
+                self.handle_text(text, source_info);
                 return;
             }
         }
 
-        // 文本为空或获取失败时尝试图片（截图、复制图片等场景）
-        self.handle_image(&ctx);
+        // 文本为空或获取失败时尝试图片
+        self.handle_image(&ctx, source_info);
     }
 }
 
+struct SourceInfo {
+    app_name: Option<String>,
+    source_url: Option<String>,
+}
+
+fn get_source_info() -> SourceInfo {
+    let app_name = get_frontmost_app_name();
+    let source_url = app_name.as_ref().and_then(|name| get_browser_url(name));
+    SourceInfo { app_name, source_url }
+}
+
+fn get_frontmost_app_name() -> Option<String> {
+    let output = std::process::Command::new("osascript")
+        .args([
+            "-e",
+            "tell application \"System Events\" to get name of first process whose frontmost is true",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if name.is_empty() { None } else { Some(name) }
+}
+
+fn get_browser_url(app_name: &str) -> Option<String> {
+    let script = match app_name {
+        "Safari" | "Safari Technology Preview" => {
+            r#"tell application "Safari" to get URL of current tab of front window"#
+        }
+        "Google Chrome" | "Google Chrome Canary" | "Chromium" => {
+            r#"tell application "Google Chrome" to get URL of active tab of front window"#
+        }
+        "Microsoft Edge" | "Microsoft Edge Beta" | "Microsoft Edge Dev" => {
+            r#"tell application "Microsoft Edge" to get URL of active tab of front window"#
+        }
+        "Arc" => {
+            r#"tell application "Arc" to get URL of active tab of front window"#
+        }
+        "Brave Browser" => {
+            r#"tell application "Brave Browser" to get URL of active tab of front window"#
+        }
+        _ => return None,
+    };
+    let output = std::process::Command::new("osascript")
+        .args(["-e", script])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if url.is_empty() || url == "missing value" { None } else { Some(url) }
+}
+
 impl EventHandler {
-    fn handle_text(&self, text: String) {
+    fn handle_text(&self, text: String, source: SourceInfo) {
         let fingerprint = compute_fingerprint("text", &text);
         if matches_and_consume_self_write(&self.self_write_guard, &fingerprint) {
             return;
@@ -73,11 +132,12 @@ impl EventHandler {
         self.send_event(ClipboardEvent {
             content_type: ContentType::Text,
             content_text: text,
-            source_app: None,
+            source_app: source.app_name,
+            source_url: source.source_url,
         });
     }
 
-    fn handle_image(&self, ctx: &ClipboardContext) {
+    fn handle_image(&self, ctx: &ClipboardContext, source: SourceInfo) {
         let image = match ctx.get_image() {
             Ok(img) => img,
             Err(_) => return,
@@ -119,7 +179,8 @@ impl EventHandler {
         self.send_event(ClipboardEvent {
             content_type: ContentType::Image,
             content_text: file_path.to_string_lossy().to_string(),
-            source_app: None,
+            source_app: source.app_name,
+            source_url: source.source_url,
         });
     }
 

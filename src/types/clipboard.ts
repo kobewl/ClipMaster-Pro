@@ -1,9 +1,3 @@
-/**
- * 与 Rust 端 DTO 对齐的类型定义。
- * 字段命名使用 snake_case 以匹配 Serde 默认序列化，避免额外的映射层。
- * 参考文档：02-架构与设计/01-总体技术架构.md 第 5、7 节。
- */
-
 export type ContentType = "text" | "image";
 
 export interface ClipboardItem {
@@ -11,15 +5,24 @@ export interface ClipboardItem {
   content_type: ContentType;
   content_text: string;
   preview: string;
-  is_favorite: boolean;
+  group_id: string | null;
   created_at: string;
   updated_at: string;
   last_copied_at: string;
   source_app: string | null;
+  source_url: string | null;
+}
+
+export interface ClipGroup {
+  id: string;
+  name: string;
+  color: string;
+  sort_order: number;
+  item_count: number;
 }
 
 export interface ListQuery {
-  favorites_only: boolean;
+  group_id: string | null;
   search: string | null;
   limit: number;
   offset: number;
@@ -34,14 +37,9 @@ export interface AppSettings {
   max_history: number;
   retention_days: number;
   capture_enabled: boolean;
-  /** 全局快捷键 accelerator 字符串，空字符串表示不绑定 */
   shortcut: string;
 }
 
-/**
- * 与 02-架构与设计/01-总体技术架构.md 第 7.3 节的 CommandError 契约保持一致。
- * 前端必须依据 code 处理业务状态，不解析 message 自然语言文本。
- */
 export interface CommandError {
   code: string;
   message: string;
@@ -57,3 +55,9 @@ export function isCommandError(value: unknown): value is CommandError {
     "message" in value
   );
 }
+
+export const GROUP_COLORS = [
+  "#EF4444", "#F97316", "#F59E0B", "#22C55E",
+  "#06B6D4", "#3B82F6", "#8B5CF6", "#EC4899",
+  "#6B7280",
+] as const;

@@ -4,7 +4,7 @@
  * 参考文档：02-架构与设计/01-总体技术架构.md 第 5、7 节。
  */
 
-export type ContentType = "text";
+export type ContentType = "text" | "image";
 
 export interface ClipboardItem {
   id: string;

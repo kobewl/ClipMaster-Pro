@@ -58,6 +58,7 @@ pub trait ClipboardRepository: Send + Sync {
 /// 剪贴板事件，由平台适配器产生，交给应用层用例处理。
 #[derive(Debug, Clone)]
 pub struct ClipboardEvent {
+    pub content_type: crate::domain::model::ContentType,
     pub content_text: String,
     pub source_app: Option<String>,
 }
@@ -75,4 +76,5 @@ pub trait ClipboardSource: Send {
 /// 剪贴板写入适配器接口，独立于读取，方便测试用例中用假实现替换。
 pub trait ClipboardWriter: Send + Sync {
     fn write_text(&self, content: &str) -> Result<(), ClipboardSourceError>;
+    fn write_image(&self, image_path: &str) -> Result<(), ClipboardSourceError>;
 }

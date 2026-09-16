@@ -33,6 +33,16 @@ pub fn compute_fingerprint(content_type: &str, content: &str) -> String {
     hex::encode(digest)
 }
 
+/// 对二进制数据（图片等）计算 fingerprint。
+pub fn compute_fingerprint_bytes(content_type: &str, data: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(content_type.as_bytes());
+    hasher.update(b"\0");
+    hasher.update(data);
+    let digest = hasher.finalize();
+    hex::encode(digest)
+}
+
 /// 生成用于本地搜索的规范化文本：大小写不敏感匹配的基础（FR-SEA-001）。
 pub fn build_search_text(content: &str) -> String {
     content.to_lowercase()

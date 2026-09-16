@@ -59,6 +59,11 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         Arc::new(SqliteClipboardRepository::new(conn.clone()));
     let settings_store = Arc::new(SqliteSettingsStore::new(conn.clone()));
 
+    // 图片存储目录
+    let image_dir = app_data_dir.join("images");
+    std::fs::create_dir_all(&image_dir)
+        .map_err(|e| format!("创建图片存储目录失败: {e}"))?;
+
     #[cfg(target_os = "macos")]
     let (writer, source): (
         Arc<dyn crate::domain::ports::ClipboardWriter>,
@@ -67,7 +72,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         let guard = new_self_write_guard();
         (
             Arc::new(MacOsClipboardWriter::new(guard.clone())),
-            Box::new(MacOsClipboardSource::new(guard)),
+            Box::new(MacOsClipboardSource::new(guard, image_dir)),
         )
     };
 

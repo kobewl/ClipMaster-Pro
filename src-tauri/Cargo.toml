@@ -38,8 +38,7 @@ hex = "0.4.3"
 unicode-normalization = "0.1.25"
 async-trait = "0.1.92"
 
-# macOS 剪贴板读写。前台应用识别（source_app）暂不实现，见
-# infrastructure/clipboard/macos.rs 顶部注释与 ADR 说明。
+# macOS 剪贴板读写（含图片支持，默认启用 image feature）。
 [target.'cfg(target_os = "macos")'.dependencies]
 clipboard-rs = "0.3.5"
 

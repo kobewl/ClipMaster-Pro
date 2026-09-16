@@ -65,13 +65,19 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
 
-  const handleCopy = useCallback(
+  const handlePaste = useCallback(
     async (id: string) => {
       try {
-        await copyItem(id);
-        showToast("已复制到剪贴板 ✓");
+        await commands.pasteClipboardItem(id);
+        // 窗口已由后端隐藏，不需要 toast
       } catch {
-        // useClipboardHistory 已经写入 errorMessage
+        // 粘贴失败时 fallback 到仅复制
+        try {
+          await copyItem(id);
+          showToast("已复制到剪贴板 ✓");
+        } catch {
+          // useClipboardHistory 已写入 errorMessage
+        }
       }
     },
     [copyItem, showToast],
@@ -107,7 +113,7 @@ export default function App() {
       <HistoryList
         items={items}
         loadState={loadState}
-        onCopy={handleCopy}
+        onCopy={handlePaste}
         onToggleFavorite={toggleFavorite}
         onDelete={deleteItem}
         searchActive={debouncedSearch.trim().length > 0 || favoritesOnly}

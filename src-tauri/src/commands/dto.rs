@@ -22,11 +22,16 @@ pub struct ClipboardItemDto {
 
 impl From<ClipboardItem> for ClipboardItemDto {
     fn from(item: ClipboardItem) -> Self {
+        use crate::domain::model::ContentType;
+        let preview = match item.content_type {
+            ContentType::Text => build_preview(&item.content_text),
+            ContentType::Image => "[图片]".to_string(),
+        };
         ClipboardItemDto {
             id: item.id.to_string(),
             content_type: item.content_type.as_str(),
-            preview: build_preview(&item.content_text),
             content_text: item.content_text,
+            preview,
             is_favorite: item.is_favorite,
             created_at: item.created_at.to_rfc3339(),
             updated_at: item.updated_at.to_rfc3339(),

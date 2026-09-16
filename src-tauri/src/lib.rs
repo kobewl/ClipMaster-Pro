@@ -8,8 +8,8 @@ use tauri::Manager;
 
 use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, delete_clipboard_item, get_settings,
-    list_clipboard_items, set_capture_enabled, set_favorite, update_settings,
-    update_shortcut,
+    list_clipboard_items, paste_clipboard_item, set_capture_enabled, set_favorite,
+    update_settings, update_shortcut,
 };
 use crate::lifecycle::runtime::{build_runtime, AppRuntime};
 use crate::lifecycle::shortcut::register_global_shortcut;
@@ -55,6 +55,7 @@ pub fn run() {
             delete_clipboard_item,
             set_favorite,
             copy_clipboard_item,
+            paste_clipboard_item,
             clear_history,
             get_settings,
             update_settings,

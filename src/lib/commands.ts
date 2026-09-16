@@ -46,6 +46,11 @@ export const commands = {
   updateShortcut(shortcut: string): Promise<AppSettings> {
     return invoke("update_shortcut", { shortcut });
   },
+
+  /** 写入剪贴板 + 隐藏窗口 + 模拟 ⌘V 粘贴到上一个应用 */
+  pasteClipboardItem(id: string): Promise<void> {
+    return invoke("paste_clipboard_item", { id });
+  },
 };
 
 export type { ClipboardItem };

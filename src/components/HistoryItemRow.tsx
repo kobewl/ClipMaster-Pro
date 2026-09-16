@@ -1,4 +1,5 @@
 import { memo, useEffect, useRef } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import type { ClipboardItem } from "@/types/clipboard";
 
 interface HistoryItemRowProps {
@@ -45,6 +46,8 @@ export const HistoryItemRow = memo(function HistoryItemRow({
     }
   }, [active]);
 
+  const isImage = item.content_type === "image";
+
   return (
     <li
       ref={ref}
@@ -58,9 +61,21 @@ export const HistoryItemRow = memo(function HistoryItemRow({
       }`}
     >
       <div className="min-w-0 flex-1">
-        <p className="line-clamp-2 whitespace-pre-wrap break-words leading-relaxed text-neutral-800 dark:text-neutral-100">
-          {item.preview}
-        </p>
+        {isImage ? (
+          <div className="flex items-center gap-2">
+            <img
+              src={convertFileSrc(item.content_text)}
+              alt="截图"
+              className="h-12 max-w-[120px] rounded border border-black/10 object-cover dark:border-white/10"
+              loading="lazy"
+            />
+            <span className="text-xs text-neutral-400">📷 图片</span>
+          </div>
+        ) : (
+          <p className="line-clamp-2 whitespace-pre-wrap break-words leading-relaxed text-neutral-800 dark:text-neutral-100">
+            {item.preview}
+          </p>
+        )}
         <p className="mt-1 text-[11px] text-neutral-400">
           {formatTime(item.last_copied_at)}
           {item.source_app ? ` · ${item.source_app}` : ""}

@@ -59,7 +59,7 @@ impl CapturePipeline {
                 }
 
                 match history_service
-                    .capture_text(event.content_text, event.source_app)
+                    .capture(event)
                     .await
                 {
                     Ok(item) => on_captured(item),

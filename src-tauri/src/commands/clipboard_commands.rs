@@ -1,4 +1,4 @@
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::dto::{AppSettingsDto, ClipboardItemDto, ListQueryDto, ListResultDto};
 use crate::domain::error::CommandError;
@@ -87,11 +87,41 @@ pub async fn copy_clipboard_item(
         .await
         .map_err(CommandError::from)?;
 
-    // 复制会刷新 last_copied_at（走 insert_or_touch），前端列表按此字段排序，
-    // 因此也需要通过 clipboard://updated 通知，否则排序不会实时更新。
     if let Ok(item) = runtime.history.get(&id).await {
         emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
     }
+    Ok(())
+}
+
+/// 选中条目后一键粘贴：写入剪贴板 → 隐藏窗口 → 模拟 ⌘V。
+/// 典型流程：用户按回车 → 调此命令 → 内容直接粘贴到之前的输入框/编辑器。
+#[tauri::command]
+pub async fn paste_clipboard_item(
+    app: AppHandle,
+    runtime: State<'_, AppRuntime>,
+    id: String,
+) -> Result<(), CommandError> {
+    runtime
+        .history
+        .copy_to_clipboard(&id)
+        .await
+        .map_err(CommandError::from)?;
+
+    if let Ok(item) = runtime.history.get(&id).await {
+        emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
+    }
+
+    // 隐藏窗口，让之前的应用获得焦点
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.hide();
+    }
+
+    // 等待前一个应用获得焦点后模拟 Cmd+V
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    #[cfg(target_os = "macos")]
+    crate::infrastructure::clipboard::macos::simulate_paste();
+
     Ok(())
 }
 

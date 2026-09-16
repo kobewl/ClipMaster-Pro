@@ -1,0 +1,57 @@
+@import "tailwindcss";
+
+:root {
+  color-scheme: light dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    -apple-system,
+    BlinkMacSystemFont,
+    "PingFang SC",
+    "Helvetica Neue",
+    Arial,
+    sans-serif;
+  background-color: transparent;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* 防止 Tauri webview 内拖选文字（桌面应用常规做法） */
+  user-select: none;
+}
+
+/* 输入框和文本区域仍允许选择 */
+input,
+textarea,
+[contenteditable] {
+  user-select: text;
+}
+
+/* 列表项的文本预览允许选择以便查看 */
+[role="option"] p {
+  user-select: text;
+}
+
+/* 细滚动条，轨道透明，与 macOS 原生滚动条风格一致 */
+.scrollbar-thin::-webkit-scrollbar {
+  width: 5px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: rgba(120, 120, 128, 0.3);
+  border-radius: 3px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(120, 120, 128, 0.5);
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background-color: transparent;
+}

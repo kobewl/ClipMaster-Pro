@@ -1,16 +1,12 @@
-# Python
-__pycache__/
-*.py[cod]
-*$py.class
-.Python
-.env
-.venv
-env/
-venv/
-ENV/
-env.bak/
-venv.bak/
-*.so
+# Node / frontend
+node_modules/
+dist/
+
+# Rust
+target/
+
+# Tauri generated
+src-tauri/gen/schemas/
 
 # IDE
 .idea/
@@ -18,35 +14,6 @@ venv.bak/
 .claude/
 *.swp
 *.swo
-
-# Project specific
-clipboard_history.json
-clipboard_history.backup.json
-
-# Distribution / packaging
-dist/
-build/
-*.egg-info/
-
-# Unit test / coverage reports
-htmlcov/
-.tox/
-.nox/
-.coverage
-.coverage.*
-.cache
-nosetests.xml
-coverage.xml
-*.cover
-*.py,cover
-.hypothesis/
-.pytest_cache/
-cover/ 
-
-# Local diagnostics / temporary files
-test_*.py
-langcha
-nul
 
 # macOS
 .DS_Store

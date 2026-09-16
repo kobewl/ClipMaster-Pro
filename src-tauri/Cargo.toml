@@ -1,0 +1,47 @@
+[package]
+name = "clipmaster-pro"
+version = "0.1.0"
+description = "ClipMaster Pro 0.01 Beta - 轻量级本地优先剪贴板助手"
+authors = ["ClipMaster Pro"]
+license = "MIT"
+repository = ""
+edition = "2021"
+rust-version = "1.77.2"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+name = "app_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2.6.3", features = [] }
+
+[dependencies]
+tauri = { version = "2.11.5", features = [] }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+
+thiserror = "2.0.20"
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "fmt"] }
+
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+chrono = { version = "0.4.45", features = ["serde"] }
+sha2 = "0.10.9"
+hex = "0.4.3"
+unicode-normalization = "0.1.25"
+async-trait = "0.1.92"
+
+# macOS 剪贴板读写。前台应用识别（source_app）暂不实现，见
+# infrastructure/clipboard/macos.rs 顶部注释与 ADR 说明。
+[target.'cfg(target_os = "macos")'.dependencies]
+clipboard-rs = "0.3.5"
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"

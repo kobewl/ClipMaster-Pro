@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ClipMaster Pro · 新功能原型：查看全文 / 多选合并复制</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+/* ============================================================================
+   本页只做「增量」：proto.css 里已定稿的数值一律不改，
+   新功能需要的变化全部在这里覆盖，方便对照 diff。
+   ========================================================================== */
+
+/* 操作条从 2 个按钮变成 3 个（新增「预览」），正文右侧留白跟着加宽 */
+.row__body { padding-right: 90px; }
+
+/* ---- 多选：最左侧多出 22px 勾选框列 ---- */
+.row--multi { grid-template-columns: 22px 30px minmax(0, 1fr); }
+
+.pick {
+  display: flex;
+  width: 22px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+}
+
+.pick__box {
+  display: flex;
+  width: 16px;
+  height: 16px;
+  align-items: center;
+  justify-content: center;
+  border: 1.5px solid var(--line-strong);
+  border-radius: 5px;
+  background: var(--surface);
+  color: transparent;
+  transition: 0.11s;
+}
+
+.pick__box svg { width: 10px; height: 10px; }
+
+/* 悬停整行时勾选框描边变强调色，暗示「这里可以点」 */
+.row:hover .pick__box { border-color: var(--accent); }
+
+.pick__box--on {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.row--picked { background: var(--accent-soft); }
+
+/* ---- 底部批量操作条：多选模式下它「接管」状态栏，不遮挡列表 ---- */
+.batchbar {
+  display: flex;
+  height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 11px;
+  border-top: 1px solid var(--accent-ring);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-size: 11.5px;
+}
+
+.batchbar__info {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+}
+
+.batchbar__info b { font-weight: 640; }
+
+.batchbar__icon {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--r-xs);
+  background: var(--accent);
+  color: #fff;
+}
+
+.batchbar__icon svg { width: 12px; height: 12px; }
+
+.batchbar__sep { opacity: 0.45; }
+
+.batchbar__actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+}
+
+.btn--ghost {
+  min-width: 0;
+  padding: 0 9px;
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent-text);
+}
+
+/* ---- 查看全文弹窗：比设置弹窗宽，正文区可滚动、文字可选中 ---- */
+.dialog--wide { max-width: 520px; }
+
+/* 头部图标换成来源应用的 emoji（真实产品里是来源 App 的图标） */
+.dialog__icon--app { font-size: 16px; line-height: 1; }
+
+.preview {
+  max-height: 296px;
+  margin-top: 13px;
+  padding: 13px 14px;
+  overflow-y: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  overscroll-behavior: contain;
+}
+
+.preview p {
+  margin: 0;
+  color: var(--fg);
+  font-size: 13px;
+  line-height: 1.78;
+  white-space: pre-wrap;
+  word-break: break-word;
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+.preview__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 13px;
+}
+
+.preview__hint {
+  color: var(--fg-faint);
+  font-size: 10.5px;
+}
+
+.preview__actions { display: flex; gap: 8px; }
+
+/* 细滚动条，和产品内的滚动条风格一致 */
+.preview::-webkit-scrollbar { width: 5px; }
+.preview::-webkit-scrollbar-thumb {
+  border-radius: 3px;
+  background: rgba(120, 120, 128, 0.32);
+}
+
+/* ---- 来源应用的真实图标（替代 emoji）----
+   图标由 NSWorkspace 从本机应用里导出，存在 prototype/appicons/。
+   产品里走的是同一条路径（Rust 渲染 → 缓存 → convertFileSrc），
+   所以原型看到的就是真实观感。 */
+.appicon { width: 20px; height: 20px; object-fit: contain; }
+.appicon--lg { width: 22px; height: 22px; }
+
+/* ---- 截图模式：只显示目标屏，尺寸正好 800×600 ---- */
+body.single { padding: 0; }
+body.single > .board-title,
+body.single > .board-sub,
+body.single > .section-label,
+body.single > .notes { display: none; }
+body.single .screen-block { display: none; }
+body.single .screen-block.is-target { display: block; }
+body.single .caption { display: none; }
+body.single .pair > div { margin-bottom: 0; }
+</style>
+</head>
+<body>
+
+<h1 class="board-title">ClipMaster Pro · 新功能原型</h1>
+<p class="board-sub">
+  两个功能：<b>查看全部内容</b>（长文本 / 图片能看全）和 <b>多选合并复制</b>（勾几条，一起进剪贴板）。
+  沿用 <code>docs/design/README.md</code> 已定稿的令牌与组件，增量部分见页面底部的说明。
+</p>
+
+<div id="board"></div>
+
+<div class="notes">
+  <h3>这一版新增了什么、动了什么</h3>
+  <ol>
+    <li><b>悬停操作区新增「预览」（眼睛图标）</b>：由 2 个按钮变成 3 个，位于分组按钮左边。行正文的右侧留白从 58px 调整到 90px 给工具条让位。</li>
+    <li><b>预览入口有三条路</b>：鼠标走悬停工具条的眼睛按钮；键盘选中某行后按 <code>空格</code>（沿用 macOS 速览的习惯）；双击也行，但双击不是主入口——单击已经是「粘贴」，加双击会让核心操作变慢。</li>
+    <li><b>查看全文弹窗</b>：宽 520px（比设置弹窗的 430px 宽，因为要读长文），正文用 13px / 行高 1.78，比列表里的 1.55 更松。文字<b>可以拖选</b>，底部有「复制」和「粘贴」两个按钮。图片类型用同一个弹窗显示大图。</li>
+    <li><b>多选的最左侧多出一列勾选框</b>：只在多选模式下出现，行内容整体右移 22px。没选中时是空心方框，选中后是实心强调色方块 + 白勾。</li>
+    <li><b>多选模式下，底部状态栏被批量操作条接管</b>（而不是浮在列表上方）：高度从 32px 变 42px，底色换成 accentSoft，左边报「已选几条 · 共多少字」，右边是「取消 / 复制 / 粘贴」。这样不会遮住列表最后几行。</li>
+    <li><b>合并规则写死在文案里</b>：按列表从上到下的顺序，用换行拼接；图片条目会被跳过（图片没法并进文本），如果选中的全是图片则复制按钮置灰。</li>
+    <li><b>状态栏的键盘提示</b>补上「空格 预览」，普通模式下多选入口是状态栏右侧的「多选」按钮，⌘ 点击任意行也能直接进入。</li>
+    <li><b>来源图标改用真实应用图标</b>（<code>prototype/appicons/</code>，16 个，由 NSWorkspace 从本机导出）。原来的 emoji 表在 IntelliJ IDEA 这类工具上会退化成通用图标，用户看不出内容来自哪里。</li>
+  </ol>
+</div>
+
+<div class="notes" style="margin-top:18px">
+  <h3>顺带修掉的一个真实 bug：IDEA 的图标一直取不到</h3>
+  <ol>
+    <li><b>现象</b>：从 IntelliJ IDEA 复制的内容（比如上面那条 <code>@ApiModelProperty</code>），来源那里显示的是一个 🧠 emoji，而不是 IDEA 的图标。</li>
+    <li><b>根因</b>：来源应用名取的是 System Events 报的<b>进程名</b>（<code>idea</code>，全小写），而 IDE 的显示名是 <code>IntelliJ IDEA</code>。匹配用的是区分大小写的 <code>contains</code>，<code>"IntelliJ IDEA".contains("idea")</code> 为 false，于是取不到图标。</li>
+    <li><b>修法</b>：① 比对时统一转小写；② 同时比对<b>可执行文件名</b>（<code>Contents/MacOS/idea</code>）和应用显示名；③ 加一张进程名 → 目录名的别名表（<code>idea → IntelliJ IDEA</code>、<code>code → Visual Studio Code</code> 等），覆盖应用没在运行时按目录查找的情况。</li>
+  </ol>
+</div>
+
+<script>
+/* ============================================================================
+   图标：与产品内 Icon 组件同源，24×24 描边、线宽 1.7
+   ========================================================================== */
+const P = {
+  search:  '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.2 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.4v-4h.1A1.7 1.7 0 0 0 4.2 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.66 3.8l.06.06A1.7 1.7 0 0 0 8.6 4.2a1.7 1.7 0 0 0 1-.6A1.7 1.7 0 0 0 10 2.5v-.1h4v.1a1.7 1.7 0 0 0 1 1.7 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7 1Z"/>',
+  close:   '<path d="m6 6 12 12M18 6 6 18"/>',
+  folder:  '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10Z"/>',
+  trash:   '<path d="M4.5 7h15M9 7V4.5h6V7m2.5 0-.7 13h-9.6L6.5 7M10 11v5.5M14 11v5.5"/>',
+  plus:    '<path d="M12 5v14M5 12h14"/>',
+  clipboard:'<rect x="5" y="5" width="14" height="16" rx="3"/><path d="M9 5.5V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M9 11h6M9 15h6"/>',
+  image:   '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4 3.5 3 3-2.5 5 4.5"/>',
+  check:   '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  alert:   '<path d="M10.2 4.2 2.9 17a2 2 0 0 0 1.75 3h14.7a2 2 0 0 0 1.75-3L13.8 4.2a2 2 0 0 0-3.6 0Z"/><path d="M12 9v4M12 17h.01"/>',
+  eye:     '<path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.8"/>',
+  checkSquare: '<rect x="3.5" y="3.5" width="17" height="17" rx="5"/><path d="m8.5 12.2 2.6 2.6L16 9.5"/>',
+};
+
+const ic = (n, style = "") =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+        stroke-linecap="round" stroke-linejoin="round" ${style ? `style="${style}"` : ""}>${P[n]}</svg>`;
+
+/* ============================================================================
+   Logo（与 prototype.html 同一份，保证两个原型文件视觉一致）
+   ========================================================================== */
+function logoDefs(id, uid) {
+  return `
+    <defs>
+      <linearGradient id="bg${uid}" x1="0.08" y1="0" x2="0.92" y2="1">
+        <stop offset="0" stop-color="#7C79FF"/>
+        <stop offset="0.48" stop-color="#5B5FEF"/>
+        <stop offset="1" stop-color="#4346D6"/>
+      </linearGradient>
+      <radialGradient id="glow${uid}" cx="0.16" cy="0.06" r="0.82">
+        <stop offset="0" stop-color="#B4B2FF" stop-opacity="0.62"/>
+        <stop offset="0.55" stop-color="#B4B2FF" stop-opacity="0.08"/>
+        <stop offset="1" stop-color="#B4B2FF" stop-opacity="0"/>
+      </radialGradient>
+      <linearGradient id="paper${uid}" x1="0.1" y1="0" x2="0.42" y2="1">
+        <stop offset="0" stop-color="#FFFFFF"/>
+        <stop offset="0.62" stop-color="#FCFCFF"/>
+        <stop offset="1" stop-color="#EDEEFB"/>
+      </linearGradient>
+      <linearGradient id="ink${uid}" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0" stop-color="#6D6AFA"/>
+        <stop offset="1" stop-color="#4B4EE4"/>
+      </linearGradient>
+      <linearGradient id="clip${uid}" x1="0" y1="0" x2="0.85" y2="1">
+        <stop offset="0" stop-color="#4B4EE4"/>
+        <stop offset="1" stop-color="#2F32A8"/>
+      </linearGradient>
+      <filter id="ds${uid}" x="-40%" y="-40%" width="180%" height="180%">
+        <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#141645" flood-opacity="0.30"/>
+      </filter>
+    </defs>`;
+}
+
+const LOGO_BASE = (uid) => `
+  <rect width="512" height="512" rx="116" fill="url(#bg${uid})"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow${uid})"/>`;
+
+const LOGO_EDGE = `
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+        stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>`;
+
+function logoMark(size = 26, id = "g") {
+  return `<svg viewBox="0 0 512 512" fill="none"
+      style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.226)}px">
+    ${logoDefs(id, id)}
+    ${LOGO_BASE(id)}
+    <g filter="url(#ds${id})">
+      <rect x="124" y="112" width="264" height="288" rx="58" fill="url(#paper${id})"/>
+    </g>
+    <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#clip${id})"
+          stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+    <rect x="176" y="206" width="160" height="34" rx="17" fill="url(#ink${id})"/>
+    <rect x="176" y="262" width="124" height="34" rx="17" fill="url(#ink${id})" opacity="0.55"/>
+    <rect x="176" y="318" width="146" height="34" rx="17" fill="url(#ink${id})" opacity="0.26"/>
+    ${LOGO_EDGE}
+  </svg>`;
+}
+
+/* ============================================================================
+   示例数据
+   ----------------------------------------------------------------------------
+   用 liang 真实的剪贴板内容（Java 后端的 @ApiModelProperty、企业微信的调研结论），
+   这样量出来的行高和真实使用完全一致。
+   ========================================================================== */
+const IDEA_FIELD = `@ApiModelProperty(value = "是否需要去审核：L2认证已通过(false)时前端不再展示「去审核」按钮")
+private Boolean needAudit = Boolean.TRUE;`;
+
+const WEWORK_TEXT = `我调研了一圈以后，结论比我们前面那个方案更清晰了：
+
+1. 方案 A（本地 SQLite 全量索引）上手最快，但历史超过十万条以后，冷启动检索会掉到 1 秒以上，体感很差。
+2. 方案 B（分片 + 按天归档）要多写一套迁移逻辑，不过在五万条量级下检索仍然稳定在 80ms 以内。
+3. 折中做法：先按方案 A 落地，把索引层的接口留好，等数据量上来再切方案 B，改动只涉及一个模块。
+
+我倾向第三个。如果你们没有别的意见，我这边这周把接口定义发出来，下周一开个短会对一下。`;
+
+// 来源图标是真实应用图标（prototype/appicons/，由 NSWorkspace 导出），
+// 不再用 emoji —— emoji 表覆盖不到 IDEA 这类工具，会退化成通用图标。
+const APPICON = (slug) => `appicons/${slug}.png`;
+
+const IMG = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="336" height="208">
+<defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#22D3EE"/></linearGradient></defs>
+<rect width="336" height="208" fill="url(#a)"/><circle cx="252" cy="56" r="76" fill="#fff" opacity=".2"/>
+<rect x="28" y="140" width="154" height="13" rx="6.5" fill="#fff" opacity=".8"/>
+<rect x="28" y="163" width="98" height="13" rx="6.5" fill="#fff" opacity=".5"/></svg>`);
+
+const GROUPS = [
+  { name: "工作", color: "#3B82F6" },
+  { name: "设计", color: "#8B5CF6" },
+  { name: "链接", color: "#06B6D4" },
+];
+
+const ITEMS = [
+  { src: "idea", icon: "idea", ago: "1 小时前", long: true, text: IDEA_FIELD },
+  { src: "idea", icon: "idea", ago: "1 小时前", text: "needAudit" },
+  { src: "企业微信", icon: "wework", ago: "23 分钟前", group: 0, text: WEWORK_TEXT },
+  { src: "iTerm2", icon: "terminal", ago: "12 分钟前", group: 0,
+    text: "SELECT id, content_type, preview, last_copied_at FROM clipboard_items WHERE content_text MATCH ? ORDER BY last_copied_at DESC LIMIT 100;" },
+  { src: "Figma", image: true, ago: "26 分钟前", group: 1 },
+  { src: "Google Chrome", icon: "chrome", ago: "2 小时前",
+    text: "Tauri v2 里 data-tauri-drag-region 只作用于带该属性的元素本身，子元素上的按钮依然可以正常点击。" },
+];
+/* 只放 6 条：第一条是两行高的长文本，再多一条就会把末行挤出可视区，
+   截图里出现「半行」看起来像渲染出错。 */
+
+/* ============================================================================
+   行渲染
+   ----------------------------------------------------------------------------
+   state: "" | "hover" | "on" | "menu"   —— 沿用 prototype.html 的三种状态
+   multi / picked                          —— 新增：多选模式
+   ========================================================================== */
+function row(item, { state = "", multi = false, picked = false } = {}) {
+  const hover = state === "hover" || state === "menu";
+  const on = state === "on" || state === "menu";
+  const menuOpen = state === "menu";
+
+  const groupBadge = item.group !== undefined
+    ? `<span class="badge" style="background:${GROUPS[item.group].color}1f;color:${GROUPS[item.group].color}">
+         <i style="background:${GROUPS[item.group].color}"></i>${GROUPS[item.group].name}</span>`
+    : "";
+
+  // 行内预览把换行折叠成空格，否则多段文本会被首行换行吃掉，
+  // 看起来只剩一句话。真实的「还有更多」由两行截断的省略号表达。
+  const flat = item.text ? item.text.replace(/\s*\n+\s*/g, " ") : "";
+
+  const body = item.image
+    ? `<div class="shot"><img src="${IMG}" alt=""></div>`
+    : `<p class="row__text">${flat}</p>`;
+
+  // 操作区：新增「预览」，排在分组左边（越常用越靠左）
+  const actions = hover
+    ? `<div class="row__actions">
+         <span class="act ${state === "hover" ? "act--hover" : ""}">${ic("eye")}</span>
+         <span class="act ${menuOpen ? "act--on" : ""}">${ic("folder")}</span>
+         <span class="act">${ic("trash")}</span>
+       </div>`
+    : "";
+
+  const hint = on && !multi ? `<span class="hint-paste">↵ 粘贴</span>` : "";
+
+  const picker = multi
+    ? `<span class="pick"><span class="pick__box ${picked ? "pick__box--on" : ""}">${ic("check")}</span></span>`
+    : "";
+
+  // 真实应用图标优先；图片类型用图片图标兜底（原型里不去找每个应用的 appicon）。
+  const tile = item.image
+    ? ic("image")
+    : `<img class="appicon" src="${APPICON(item.icon)}" alt="">`;
+
+  return `<div class="row ${multi ? "row--multi" : ""} ${on ? "row--on" : ""} ${
+    state === "hover" ? "row--hover" : ""} ${picked ? "row--picked" : ""}">
+    ${picker}
+    <span class="tile">${tile}</span>
+    <div class="row__body">
+      <div class="row__meta">
+        <span class="row__source">${item.src}</span>
+        <span class="dot-sep"></span>
+        <span>${item.ago}</span>
+        ${groupBadge}
+      </div>
+      ${body}
+    </div>
+    ${actions}
+    ${hint}
+  </div>`;
+}
+
+/* ============================================================================
+   窗口骨架
+   ========================================================================== */
+function header({ query = "", uid = "a" } = {}) {
+  const keys = query
+    ? `<span class="act act--hover" style="position:absolute;right:7px;width:22px;height:22px;top:5px">${ic("close", "width:12px;height:12px")}</span>`
+    : `<span class="search__keys"><kbd>⌘</kbd><kbd>K</kbd></span>`;
+
+  return `<div class="app-header">
+    <div class="brand">
+      ${logoMark(26, "lg" + uid)}
+      <span class="brand__name">ClipMaster</span>
+      <span class="brand__edition">PRO</span>
+    </div>
+    <div class="search">
+      ${ic("search").replace("<svg ", '<svg class="search__icon" ')}
+      <input class="search__input" value="${query}" placeholder="搜索剪贴板历史…" readonly>
+      ${keys}
+    </div>
+    <span class="icon-btn">${ic("settings")}</span>
+  </div>`;
+}
+
+function groupBar(active = 0) {
+  const chip = (g, i) => `<span class="chip ${i === active ? "chip--on" : ""}">
+      <span class="chip__dot" style="background:${g.color}"></span>${g.name}
+      <span class="chip__count">${[8, 5, 3][i]}</span></span>`;
+  return `<div class="group-bar">
+    <div class="group-bar__scroll">
+      <span class="chip ${active === -1 ? "chip--on" : ""}">全部<span class="chip__count">30</span></span>
+      ${GROUPS.map(chip).join("")}
+    </div>
+    <span class="chip chip--add">${ic("plus")}分组</span>
+  </div>`;
+}
+
+function status({ capture = true, total = 30, loaded = 8 } = {}) {
+  return `<div class="status">
+    <div class="status__left">
+      <span class="status__dot ${capture ? "" : "status__dot--off"}"></span>
+      <span class="status__live ${capture ? "" : "status__live--off"}">${capture ? "正在采集" : "已暂停"}</span>
+      <span class="vsep"></span>
+      <span class="status__count">共 ${total} 条${loaded < total ? ` · 已显示 ${loaded}` : ""}</span>
+    </div>
+    <div class="status__right">
+      <span class="status__hints"><kbd>↑</kbd><kbd>↓</kbd> 选择 <kbd>↵</kbd> 粘贴 <kbd>空格</kbd> 预览</span>
+      <span class="chip" style="color:var(--fg-muted)">${ic("checkSquare", "width:12px;height:12px")}多选</span>
+      <span class="chip" style="color:var(--fg-faint)">清空未分组</span>
+    </div>
+  </div>`;
+}
+
+/** 多选模式下接管状态栏的批量操作条 */
+function batchbar({ count = 3, chars = 254, note = "" } = {}) {
+  return `<div class="batchbar">
+    <div class="batchbar__info">
+      <span class="batchbar__icon">${ic("check")}</span>
+      <b>已选 ${count} 条</b>
+      <span class="batchbar__sep">·</span>
+      <span>共 ${chars} 字</span>
+      ${note ? `<span class="batchbar__sep">·</span><span>${note}</span>` : ""}
+    </div>
+    <div class="batchbar__actions">
+      <span class="btn btn--ghost">取消</span>
+      <span class="btn btn--secondary">复制</span>
+      <span class="btn btn--primary">粘贴</span>
+    </div>
+  </div>`;
+}
+
+function windowShell(inner, { chrome = true } = {}) {
+  const bar = chrome
+    ? `<div class="window__bar">
+         <span class="lights"><i class="light light--r"></i><i class="light light--y"></i><i class="light light--g"></i></span>
+         <span class="window__title">ClipMaster Pro</span>
+         <span style="width:44px"></span>
+       </div>`
+    : "";
+  return `<div class="window" style="width:800px;height:600px">
+    ${bar}
+    <div class="window__body" style="height:562px">
+      ${inner}
+    </div>
+  </div>`;
+}
+
+function mainScreen({
+  theme = "light", items = ITEMS, groupsActive = -1, states = {},
+  overlay = "", uid = "a", multi = false, picked = [], batch = null,
+} = {}) {
+  const list = items.map((it, i) =>
+    row(it, { state: states[i] ?? "", multi, picked: picked.includes(i) })).join("");
+
+  const inner = `${header({ uid })}
+    ${groupBar(groupsActive)}
+    <div class="list-region">
+      <div class="list">${list}</div>
+    </div>
+    ${batch ?? status()}
+    ${overlay}`;
+
+  return `<div data-theme="${theme}">${windowShell(inner)}</div>`;
+}
+
+/* ============================================================================
+   查看全文弹窗
+   ========================================================================== */
+const previewDialog = `
+<div class="modal">
+  <div class="dialog dialog--wide">
+    <div class="dialog__head">
+      <span class="dialog__icon dialog__icon--app"><img class="appicon--lg" src="${APPICON("idea")}" alt=""></span>
+      <div>
+        <h2 class="dialog__title">idea</h2>
+        <p class="dialog__sub">1 小时前 · 共 107 字</p>
+      </div>
+      <span class="act act--hover" style="width:28px;height:28px">${ic("close")}</span>
+    </div>
+
+    <div class="preview"><p>${IDEA_FIELD}</p></div>
+
+    <div class="preview__foot">
+      <span class="preview__hint">可以直接拖选文字 · <kbd>Esc</kbd> 关闭</span>
+      <div class="preview__actions">
+        <span class="btn btn--secondary">复制</span>
+        <span class="btn btn--primary">粘贴</span>
+      </div>
+    </div>
+  </div>
+</div>`;
+
+/* ============================================================================
+   组装画板（编号接着 prototype.html 的 01–13）
+   ========================================================================== */
+const board = [];
+
+/* ---- 14. 悬停操作区新增「预览」 ---- */
+board.push(`
+  <div class="screen-block" data-screen="14">
+    <p class="caption"><b>14</b>悬停操作区新增「预览」· 三个按钮的整体工具条</p>
+    ${mainScreen({ theme: "light", states: { 0: "hover" }, uid: "p1" })}
+  </div>`);
+
+/* ---- 15 / 16. 查看全文弹窗 ---- */
+board.push(`
+  <div class="screen-block" data-screen="15">
+    <p class="caption"><b>15</b>查看全部内容 · 长文本（浅色）</p>
+    ${mainScreen({ theme: "light", states: { 0: "on" }, uid: "pv", overlay: previewDialog })}
+  </div>`);
+
+board.push(`
+  <div class="screen-block" data-screen="16">
+    <p class="caption"><b>16</b>查看全部内容 · 长文本（深色）</p>
+    ${mainScreen({ theme: "dark", states: { 0: "on" }, uid: "pvd", overlay: previewDialog })}
+  </div>`);
+
+/* ---- 17 / 18. 多选合并复制 ---- */
+board.push(`
+  <div class="screen-block" data-screen="17">
+    <p class="caption"><b>17</b>多选 · 已选 3 条（浅色）</p>
+    ${mainScreen({
+      theme: "light", uid: "ms", multi: true, picked: [0, 1, 3],
+      batch: batchbar({ count: 3, chars: 254 }),
+    })}
+  </div>`);
+
+board.push(`
+  <div class="screen-block" data-screen="18">
+    <p class="caption"><b>18</b>多选 · 已选 3 条（深色）</p>
+    ${mainScreen({
+      theme: "dark", uid: "msd", multi: true, picked: [0, 1, 3],
+      batch: batchbar({ count: 3, chars: 254 }),
+    })}
+  </div>`);
+
+document.getElementById("board").innerHTML = board.join("");
+
+/* 让 flex 布局的列表区把剩余高度吃满 */
+document.querySelectorAll(".list-region").forEach((el) => {
+  el.style.flex = "1";
+  el.style.minHeight = "0";
+  el.style.overflow = "hidden";
+});
+
+/* 截图模式：features.html#s15 只显示 15 号屏，方便按 800×600 逐屏出图 */
+const hash = location.hash.replace("#s", "");
+if (hash) {
+  document.body.classList.add("single");
+  document.querySelectorAll(".screen-block").forEach((el) => {
+    el.classList.toggle("is-target", el.dataset.screen === hash);
+  });
+}
+</script>
+</body>
+</html>

@@ -2,142 +2,256 @@ import { memo, useEffect, useRef, useState } from "react";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import type { ClipboardItem, ClipGroup } from "@/types/clipboard";
 import { getAppIcon, extractDomain } from "@/lib/sourceIcons";
+import { HighlightedText } from "./HighlightedText";
+import { Icon } from "./Icon";
 
 interface Props {
   item: ClipboardItem;
   active: boolean;
   groups: ClipGroup[];
-  onClick: () => void;
-  onSetGroup: (groupId: string | null) => void;
-  onDelete: () => void;
+  keyword: string;
+  /** 来源应用的真实图标路径（null 时退回 emoji / 图片图标）。 */
+  iconSrc: string | null;
+  onPaste: (id: string) => void;
+  onSetGroup: (id: string, groupId: string | null) => void;
+  onDelete: (id: string) => void;
 }
 
-function formatTime(iso: string): string {
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "";
-  const diff = Date.now() - d.getTime();
-  const m = Math.floor(diff / 60000);
-  if (m < 1) return "刚刚";
-  if (m < 60) return `${m}分钟前`;
-  const h = Math.floor(diff / 3600000);
-  if (h < 24) return `${h}小时前`;
-  const day = Math.floor(diff / 86400000);
-  if (day < 7) return `${day}天前`;
-  return d.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
+/** 菜单大致高度，用来判断往下弹出会不会被列表底部裁掉。 */
+const MENU_ESTIMATED_HEIGHT = 210;
+
+/**
+ * 关闭菜单的那一次点击不应该顺带触发"点击即粘贴"（与 macOS 原生菜单一致）。
+ * 用模块级时间戳而不是组件状态，是为了让"点到别的行"也被吞掉。
+ */
+let suppressPasteUntil = 0;
+function suppressNextPaste() {
+  suppressPasteUntil = Date.now() + 250;
+}
+
+function formatTime(iso: string, now: number): string {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return "";
+  const minutes = Math.floor((now - date.getTime()) / 60000);
+  if (minutes < 1) return "刚刚";
+  if (minutes < 60) return `${minutes}分钟前`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}小时前`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}天前`;
+  return date.toLocaleDateString(undefined, { month: "2-digit", day: "2-digit" });
 }
 
 export const HistoryItemRow = memo(function HistoryItemRow({
   item,
   active,
   groups,
-  onClick,
+  keyword,
+  iconSrc,
+  onPaste,
   onSetGroup,
   onDelete,
 }: Props) {
-  const ref = useRef<HTMLLIElement>(null);
-  const [groupMenuOpen, setGroupMenuOpen] = useState(false);
+  const rowRef = useRef<HTMLLIElement>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuUp, setMenuUp] = useState(false);
+  const [now, setNow] = useState(() => Date.now());
+  const [imageBroken, setImageBroken] = useState(false);
+  // 记「加载失败的那张图标」而不是一个布尔值：iconSrc 变了就自动重试。
+  const [brokenIconSrc, setBrokenIconSrc] = useState<string | null>(null);
+
+  // 相对时间（"3分钟前"）需要自己走时，否则列表放着不动文案就会过期。
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   useEffect(() => {
-    if (active && ref.current) {
-      ref.current.scrollIntoView({ block: "nearest", behavior: "smooth" });
-    }
+    if (active) rowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [active]);
+
+  // 点击菜单以外任何地方、或按 Esc，都关掉菜单。
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    function handleDocumentClick(event: MouseEvent) {
+      if (menuRef.current?.contains(event.target as Node)) return;
+      suppressNextPaste();
+      setMenuOpen(false);
+    }
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      event.stopPropagation();
+      setMenuOpen(false);
+    }
+
+    document.addEventListener("click", handleDocumentClick, true);
+    window.addEventListener("keydown", handleEscape, true);
+    return () => {
+      document.removeEventListener("click", handleDocumentClick, true);
+      window.removeEventListener("keydown", handleEscape, true);
+    };
+  }, [menuOpen]);
+
+  function toggleMenu() {
+    if (!menuOpen) {
+      const rect = rowRef.current?.getBoundingClientRect();
+      if (rect) setMenuUp(window.innerHeight - rect.bottom < MENU_ESTIMATED_HEIGHT);
+    }
+    setMenuOpen((open) => !open);
+  }
+
+  function closeMenu() {
+    suppressNextPaste();
+    setMenuOpen(false);
+  }
+
+  function handleRowClick() {
+    if (Date.now() < suppressPasteUntil) return;
+    onPaste(item.id);
+  }
 
   const isImage = item.content_type === "image";
   const domain = extractDomain(item.source_url);
   const appIcon = getAppIcon(item.source_app);
   const group = item.group_id ? groups.find((g) => g.id === item.group_id) : null;
 
+  // 真实的来源应用图标优先；取不到时才退回「图片类型 → 图片图标 / 文本类型 → emoji」。
+  const iconUrl = iconSrc && iconSrc !== brokenIconSrc ? convertFileSrc(iconSrc) : null;
+
   return (
     <li
-      ref={ref}
+      ref={rowRef}
       role="option"
       aria-selected={active}
-      onClick={onClick}
-      className={`group relative flex cursor-pointer flex-col gap-1 rounded-lg px-3 py-2 text-sm transition-colors ${
+      onClick={handleRowClick}
+      className={`history-card group ${
         active
-          ? "bg-blue-500/10 ring-1 ring-blue-500/15 dark:bg-blue-400/15 dark:ring-blue-400/15"
-          : "hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+          ? "history-card--active"
+          : ""
       }`}
     >
-      {/* Header: source + time */}
-      <div className="flex items-center justify-between text-[11px]">
-        <span className="flex items-center gap-1 text-neutral-400">
+      <div className="source-tile" aria-hidden>
+        {iconUrl ? (
+          <img src={iconUrl} alt="" loading="lazy" onError={() => setBrokenIconSrc(iconSrc)} />
+        ) : isImage ? (
+          <Icon name="image" />
+        ) : (
           <span>{appIcon}</span>
-          <span className="max-w-[140px] truncate">
-            {domain ?? item.source_app ?? ""}
-          </span>
-        </span>
-        <span className="text-neutral-400">{formatTime(item.last_copied_at)}</span>
+        )}
       </div>
-
-      {/* Content */}
-      {isImage ? (
-        <div className="flex items-center gap-2">
-          <img
-            src={convertFileSrc(item.content_text)}
-            alt="截图"
-            className="h-14 max-w-[140px] rounded border border-black/5 object-cover dark:border-white/10"
-            loading="lazy"
-          />
-          <span className="text-[11px] text-neutral-400">📷 图片</span>
+      <div className="history-card__body">
+        <div className="history-card__meta">
+          <span className="truncate">{domain ?? item.source_app ?? "未知来源"}</span>
+          <span className="meta-dot" />
+          <time>{formatTime(item.last_copied_at, now)}</time>
+          {group && (
+            <span className="group-badge" style={{ backgroundColor: `${group.color}16`, color: group.color }}>
+              <i style={{ backgroundColor: group.color }} />{group.name}
+            </span>
+          )}
         </div>
-      ) : (
-        <p className="line-clamp-2 whitespace-pre-wrap break-words text-[13px] leading-relaxed text-neutral-800 dark:text-neutral-100">
-          {item.preview}
-        </p>
-      )}
+        {isImage ? (
+          <div className="image-preview">
+            {imageBroken ? (
+              <span className="image-preview__fallback"><Icon name="image" /></span>
+            ) : (
+              <img src={convertFileSrc(item.content_text)} alt="剪贴板图片" loading="lazy" onError={() => setImageBroken(true)} />
+            )}
+            <div><strong>图片</strong><span>点击即可粘贴原图</span></div>
+          </div>
+        ) : (
+          <p className="history-card__text">
+            <HighlightedText text={item.preview} keyword={keyword} />
+          </p>
+        )}
+      </div>
+      {active && <kbd className="paste-hint">↵ 粘贴</kbd>}
 
-      {/* Footer: group badge */}
-      {group && (
-        <span className="flex w-fit items-center gap-1 rounded-full px-1.5 py-0.5 text-[10px]"
-              style={{ backgroundColor: group.color + "18", color: group.color }}>
-          <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ backgroundColor: group.color }} />
-          {group.name}
-        </span>
-      )}
-
-      {/* Hover actions */}
-      <div className="absolute right-2 top-2 flex items-center gap-0.5 opacity-0 transition-opacity group-hover:opacity-100">
-        <div className="relative">
+      {/* 悬停时出现的操作区。未悬停时不可点击，避免误触看不见的按钮。
+          菜单打开时必须强制可见：容器上的 opacity 会一并作用到菜单子树。
+          focus-within 让键盘 Tab 进来时按钮同样可见。 */}
+      <div
+        className={`history-actions ${
+          menuOpen
+            ? "pointer-events-auto opacity-100"
+            : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+        }`}
+      >
+        <div ref={menuRef} className="relative">
           <button
             type="button"
             title="设置分组"
-            onClick={(e) => { e.stopPropagation(); setGroupMenuOpen(!groupMenuOpen); }}
-            className="rounded-md p-1 text-[11px] transition-colors hover:bg-black/10 dark:hover:bg-white/10"
+            aria-label="设置分组"
+            aria-expanded={menuOpen}
+            onClick={(event) => {
+              event.stopPropagation();
+              toggleMenu();
+            }}
+            className={`card-action ${menuOpen ? "card-action--active" : ""}`}
           >
-            📁
+            <Icon name="folder" />
           </button>
-          {groupMenuOpen && (
-            <div className="absolute right-0 top-7 z-30 min-w-[120px] rounded-lg bg-white py-1 shadow-xl ring-1 ring-black/10 dark:bg-neutral-700 dark:ring-white/10"
-                 onClick={(e) => e.stopPropagation()}>
+
+          {menuOpen && (
+            <div
+              role="menu"
+              onClick={(event) => event.stopPropagation()}
+              className={`card-menu scrollbar-thin ${
+                menuUp ? "bottom-7" : "top-7"
+              }`}
+            >
               {item.group_id && (
-                <button type="button"
-                        onClick={() => { onSetGroup(null); setGroupMenuOpen(false); }}
-                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-neutral-500 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onSetGroup(item.id, null);
+                    closeMenu();
+                  }}
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-neutral-500 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                >
                   移出分组
                 </button>
               )}
+              {groups.length === 0 && (
+                <p className="px-3 py-1.5 text-[11px] text-neutral-400">
+                  还没有分组，先在顶部「＋」里创建
+                </p>
+              )}
               {groups.map((g) => (
-                <button key={g.id} type="button"
-                        onClick={() => { onSetGroup(g.id); setGroupMenuOpen(false); }}
-                        className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-black/[0.04] dark:hover:bg-white/[0.06] ${
-                          item.group_id === g.id ? "text-blue-500 font-medium" : "text-neutral-700 dark:text-neutral-200"
-                        }`}>
-                  <span className="h-2 w-2 rounded-full" style={{ backgroundColor: g.color }} />
-                  {g.name}
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    onSetGroup(item.id, g.id);
+                    closeMenu();
+                  }}
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-black/[0.04] dark:hover:bg-white/[0.06] ${
+                    item.group_id === g.id
+                      ? "font-medium text-blue-500"
+                      : "text-neutral-700 dark:text-neutral-200"
+                  }`}
+                >
+                  <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: g.color }} />
+                  <span className="truncate">{g.name}</span>
                 </button>
               ))}
             </div>
           )}
         </div>
+
         <button
           type="button"
           title="删除"
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          className="rounded-md p-1 text-[11px] transition-colors hover:bg-red-500/10 hover:text-red-500"
+          aria-label="删除这条记录"
+          onClick={(event) => {
+            event.stopPropagation();
+            onDelete(item.id);
+          }}
+          className="card-action card-action--danger"
         >
-          🗑
+          <Icon name="trash" />
         </button>
       </div>
     </li>

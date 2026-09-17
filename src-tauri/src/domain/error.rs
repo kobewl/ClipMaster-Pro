@@ -89,14 +89,32 @@ pub struct CommandError {
 }
 
 impl CommandError {
-    /// 快捷键注册/变更失败（FR-SYS-003：冲突时明确反馈）。
-    pub fn shortcut(reason: String) -> Self {
+    pub fn new(code: &str, message: String, retryable: bool) -> Self {
         CommandError {
-            code: "shortcut_conflict".to_string(),
-            message: reason,
-            retryable: false,
+            code: code.to_string(),
+            message,
+            retryable,
             details: None,
         }
+    }
+
+    /// 快捷键注册/变更失败（FR-SYS-003：冲突时明确反馈）。
+    pub fn shortcut(reason: String) -> Self {
+        Self::new("shortcut_conflict", reason, false)
+    }
+
+    /// 「自动粘贴」这步失败。
+    ///
+    /// 注意：走到这里时内容**已经写进剪贴板了**，失败的只是模拟 ⌘V，
+    /// 大多数情况是没给「辅助功能」权限。前端据此给用户一条明确提示，
+    /// 而不是假装成功（原来的实现就是静默吞掉，用户只会觉得「点了没反应」）。
+    pub fn paste(reason: String) -> Self {
+        Self::new("paste_failed", reason, false)
+    }
+
+    /// 来源图标解析失败（非致命：前端会退回 emoji）。
+    pub fn icon(reason: String) -> Self {
+        Self::new("icon_failed", reason, true)
     }
 }
 

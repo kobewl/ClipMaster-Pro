@@ -23,6 +23,13 @@ export const commands = {
   pasteClipboardItem(id: string): Promise<void> {
     return invoke("paste_clipboard_item", { id });
   },
+  /**
+   * 解析来源应用的真实图标，返回 {应用名: PNG 绝对路径}。
+   * 系统里找不到的应用不会出现在结果里（前端退回 emoji）。
+   */
+  getSourceIcons(apps: string[]): Promise<Record<string, string>> {
+    return invoke("get_source_icons", { apps });
+  },
   clearHistory(keepGrouped: boolean): Promise<number> {
     return invoke("clear_history", { keepGrouped });
   },

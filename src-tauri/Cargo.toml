@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
-tauri = { version = "2.11.5", features = [] }
+tauri = { version = "2.11.5", features = ["protocol-asset"] }
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -41,6 +41,35 @@ async-trait = "0.1.92"
 # macOS 剪贴板读写（含图片支持，默认启用 image feature）。
 [target.'cfg(target_os = "macos")'.dependencies]
 clipboard-rs = "0.3.5"
+
+# 通过 AppKit 取来源应用的真实图标（NSWorkspace），以及模拟 ⌘V。
+# 这几个 crate 本来就在 Tauri 的依赖树里（见 Cargo.lock），这里只是显式引用，
+# 不引入新的下载量。features 按最小集合开，避免多编译一堆没用的绑定。
+objc2 = "0.6.4"
+objc2-foundation = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSArray",
+    "NSData",
+    "NSDictionary",
+    "NSGeometry",
+    "NSString",
+    "NSURL",
+] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "NSBitmapImageRep",
+    "NSImage",
+    "NSImageRep",
+    "NSRunningApplication",
+    "NSWorkspace",
+] }
+objc2-core-graphics = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CGEvent",
+    "CGEventSource",
+    "CGEventTypes",
+    "CGRemoteOperation",
+] }
 
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"

@@ -23,6 +23,14 @@ export const commands = {
   pasteClipboardItem(id: string): Promise<void> {
     return invoke("paste_clipboard_item", { id });
   },
+  /** 把一段文本写进剪贴板（多选合并复制用），不写入历史记录。 */
+  copyTextToClipboard(text: string): Promise<void> {
+    return invoke("copy_text_to_clipboard", { text });
+  },
+  /** 合并复制后直接粘贴：写剪贴板 → 隐藏窗口 → 模拟 ⌘V。 */
+  pasteText(text: string): Promise<void> {
+    return invoke("paste_text", { text });
+  },
   /**
    * 解析来源应用的真实图标，返回 {应用名: PNG 绝对路径}。
    * 系统里找不到的应用不会出现在结果里（前端退回 emoji）。

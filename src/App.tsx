@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SearchBar } from "@/components/SearchBar";
 import { GroupBar } from "@/components/GroupBar";
@@ -6,10 +6,13 @@ import { HistoryList } from "@/components/HistoryList";
 import { StatusBar } from "@/components/StatusBar";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { PreviewDialog } from "@/components/PreviewDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { commands } from "@/lib/commands";
+import { mergeSelectedItems } from "@/lib/mergeItems";
+import { getSourceIconPath } from "@/lib/sourceIcons";
 import type { AppSettings } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 
@@ -21,6 +24,11 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
+  /** 正在查看全部内容的那一条（null = 弹窗关着）。 */
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  /** 多选模式。 */
+  const [multiSelect, setMultiSelect] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const toastTimerRef = useRef<number | null>(null);
   const toastFadeTimerRef = useRef<number | null>(null);
@@ -77,11 +85,138 @@ export default function App() {
     };
   }, []);
 
-  // Esc 的优先级：设置面板 → 清空确认 → 清空搜索词。
+  /**
+   * 粘贴失败时的统一收尾。「一键粘贴」和「合并后粘贴」共用，
+   * 免得两条路径给出不一样的提示。
+   */
+  const recoverFromPasteFailure = useCallback(
+    async (error: unknown, fallbackCopy: () => Promise<void>) => {
+      if (isCommandError(error) && error.code === "paste_failed") {
+        try {
+          const currentWindow = getCurrentWindow();
+          await currentWindow.show();
+          await currentWindow.setFocus();
+        } catch {
+          /* 窗口控制失败不影响提示本身 */
+        }
+        showToast(error.message, 6000);
+        return;
+      }
+      try {
+        await fallbackCopy();
+        showToast("已复制 ✓");
+      } catch {
+        /* 失败提示由 hook 统一写入 errorMessage */
+      }
+    },
+    [showToast],
+  );
+
+  // -------------------------------------------------------------------------
+  //  多选：选择集与合并
+  // -------------------------------------------------------------------------
+
+  const exitMultiSelect = useCallback(() => {
+    setMultiSelect(false);
+    setSelectedIds(new Set());
+  }, []);
+
+  const enterMultiSelect = useCallback((seedId?: string) => {
+    setMultiSelect(true);
+    setSelectedIds(seedId ? new Set([seedId]) : new Set());
+  }, []);
+
+  /**
+   * 勾选 / 取消一条。
+   *
+   * Shift 点击做「连选」：从上次点的那条一路选到这一条。多选场景下用户
+   * 十有八九是要一段连续区间（几段相邻的调研结论），逐个点太费事。
+   */
+  const lastPickedRef = useRef<string | null>(null);
+  const togglePick = useCallback(
+    (id: string, shiftKey: boolean) => {
+      setSelectedIds((prev) => {
+        const next = new Set(prev);
+        const anchor = lastPickedRef.current;
+
+        if (shiftKey && anchor && anchor !== id && items.some((it) => it.id === anchor)) {
+          const from = items.findIndex((it) => it.id === anchor);
+          const to = items.findIndex((it) => it.id === id);
+          const [start, end] = from < to ? [from, to] : [to, from];
+          for (let i = start; i <= end; i += 1) next.add(items[i].id);
+        } else if (next.has(id)) {
+          next.delete(id);
+        } else {
+          next.add(id);
+        }
+
+        return next;
+      });
+      lastPickedRef.current = id;
+    },
+    [items],
+  );
+
+  /** 全选当前已加载的条目（⌘A）。 */
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(items.map((item) => item.id)));
+  }, [items]);
+
+  /**
+   * 合并选中的内容：跳过图片，按列表顺序拼接。
+   *
+   * `skipped` 不直接用 —— 界面上的提示是「选中里有图片就会被跳过」，
+   * 而不是「跳过了 N 张」，所以只需要知道有没有。
+   */
+  const merged = useMemo(() => {
+    if (!multiSelect || selectedIds.size === 0) {
+      return { text: "", hasImages: false };
+    }
+    const result = mergeSelectedItems(items, selectedIds);
+    return { text: result.text, hasImages: result.skipped > 0 };
+  }, [items, selectedIds, multiSelect]);
+
+  const canMerge = merged.text.length > 0;
+
+  /** 预览弹窗要显示的那一条。列表刷新后它可能已经不在了，这时弹窗自动关闭。 */
+  const previewItem = useMemo(
+    () => (previewId === null ? null : items.find((item) => item.id === previewId) ?? null),
+    [previewId, items],
+  );
+
+  const handleCopyMerged = useCallback(async () => {
+    if (!canMerge) return;
+    try {
+      await commands.copyTextToClipboard(merged.text);
+      exitMultiSelect();
+      showToast(`已复制 ${selectedIds.size} 条 ✓`);
+    } catch {
+      showToast("合并复制失败");
+    }
+  }, [canMerge, merged.text, exitMultiSelect, showToast, selectedIds.size]);
+
+  const handlePasteMerged = useCallback(async () => {
+    if (!canMerge) return;
+    try {
+      await commands.pasteText(merged.text);
+      exitMultiSelect();
+    } catch (error) {
+      await recoverFromPasteFailure(error, async () => {
+        await commands.copyTextToClipboard(merged.text);
+      });
+      exitMultiSelect();
+    }
+  }, [canMerge, merged.text, exitMultiSelect, recoverFromPasteFailure]);
+
+  // Esc 的优先级：预览弹窗 → 多选 → 设置面板 → 清空确认 → 清空搜索词。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
-      if (settingsOpen) {
+      if (previewId !== null) {
+        setPreviewId(null);
+      } else if (multiSelect) {
+        exitMultiSelect();
+      } else if (settingsOpen) {
         setSettingsOpen(false);
       } else if (confirmClearOpen) {
         setConfirmClearOpen(false);
@@ -91,7 +226,18 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, confirmClearOpen, searchInput]);
+  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect]);
+
+  // 列表刷新（删除、换分组）后把已不存在的 id 从选择集里摘掉，
+  // 否则底部会显示「已选 3 条」而列表里只有 2 条被勾上。
+  useEffect(() => {
+    if (!multiSelect) return;
+    const alive = new Set(items.map((item) => item.id));
+    setSelectedIds((prev) => {
+      const next = new Set([...prev].filter((id) => alive.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+  }, [items, multiSelect]);
 
   /**
    * 一键粘贴：先写入剪贴板并模拟 ⌘V（窗口会自动隐藏）。
@@ -107,26 +253,10 @@ export default function App() {
       try {
         await commands.pasteClipboardItem(id);
       } catch (error) {
-        if (isCommandError(error) && error.code === "paste_failed") {
-          try {
-            const currentWindow = getCurrentWindow();
-            await currentWindow.show();
-            await currentWindow.setFocus();
-          } catch {
-            /* 窗口控制失败不影响提示本身 */
-          }
-          showToast(error.message, 6000);
-          return;
-        }
-        try {
-          await copyItem(id);
-          showToast("已复制 ✓");
-        } catch {
-          /* 失败提示由 hook 统一写入 errorMessage */
-        }
+        await recoverFromPasteFailure(error, () => copyItem(id));
       }
     },
-    [copyItem, showToast],
+    [copyItem, recoverFromPasteFailure],
   );
 
   const handleSetGroup = useCallback(
@@ -211,7 +341,13 @@ export default function App() {
           keyword={trimmedSearch}
           resetKey={`${activeGroupId ?? "all"}::${trimmedSearch}`}
           groupFilterActive={activeGroupId !== null}
+          multiSelect={multiSelect}
+          selected={selectedIds}
           onPaste={handlePaste}
+          onPreview={setPreviewId}
+          onTogglePick={togglePick}
+          onPasteMerged={handlePasteMerged}
+          onSelectAll={selectAll}
           onSetGroup={handleSetGroup}
           onDelete={handleDelete}
           onLoadMore={loadMore}
@@ -223,6 +359,15 @@ export default function App() {
           captureEnabled={settings?.capture_enabled ?? true}
           onToggleCapture={handleToggleCapture}
           onClearHistory={() => setConfirmClearOpen(true)}
+          multiSelect={multiSelect}
+          selectedCount={selectedIds.size}
+          selectedChars={merged.text.length}
+          hasImagesSelected={merged.hasImages}
+          canMerge={canMerge}
+          onEnterMultiSelect={() => enterMultiSelect()}
+          onCancelMultiSelect={exitMultiSelect}
+          onCopyMerged={handleCopyMerged}
+          onPasteMerged={handlePasteMerged}
         />
       </section>
 
@@ -256,6 +401,25 @@ export default function App() {
         confirmLabel="清空"
         onConfirm={handleClear}
         onCancel={() => setConfirmClearOpen(false)}
+      />
+
+      <PreviewDialog
+        item={previewItem}
+        iconSrc={getSourceIconPath(previewItem?.source_app ?? null)}
+        onCopy={async (id) => {
+          try {
+            await copyItem(id);
+            setPreviewId(null);
+            showToast("已复制 ✓");
+          } catch {
+            /* 失败提示由 hook 统一写入 errorMessage */
+          }
+        }}
+        onPaste={(id) => {
+          setPreviewId(null);
+          handlePaste(id);
+        }}
+        onClose={() => setPreviewId(null)}
       />
     </main>
   );

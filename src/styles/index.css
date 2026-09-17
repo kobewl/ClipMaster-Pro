@@ -115,7 +115,10 @@ button {
 .source-tile svg { width: 18px; height: 18px; }
 /* 来源应用的真实图标：macOS 应用图标自带圆角与留白，容器里留 7px 内边距刚好不顶边。 */
 .source-tile img { width: 22px; height: 22px; object-fit: contain; }
-.history-card__body { min-width: 0; padding-right: 50px; }
+/* 右侧留白＝操作条总宽（3 个 28px 按钮 + 2 个 3px 间隙 = 90px）+ 它距右边缘的 10px
+   − 行自身的 padding-right 12px = 88px，取 90px 留余量。
+   少了这行，长文本会钻到按钮底下。 */
+.history-card__body { min-width: 0; padding-right: 90px; }
 .history-card__meta { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--cm-faint); font-size: 10px; line-height: 16px; }
 .history-card__meta > span:first-child { color: var(--cm-muted); font-weight: 650; }
 .meta-dot { width: 3px; height: 3px; flex: none; border-radius: 99px; background: #c7c9d4; }
@@ -139,6 +142,47 @@ button {
 .image-preview strong { font-size: 12px; }.image-preview span { color: var(--cm-faint); font-size: 10px; }
 .list-divider { display: flex; align-items: center; gap: 8px; padding: 12px 11px 7px; color: var(--cm-faint); font-size: 9px; font-weight: 700; letter-spacing: .05em; }
 .list-divider span:last-child { height: 1px; flex: 1; background: var(--cm-line); }
+
+/* ---- 多选：最左侧多出一列勾选框，行内容整体右移 ---- */
+.history-card--multi { grid-template-columns: 22px 38px minmax(0,1fr); }
+.history-card--picked { border-color: rgba(91,95,239,.18); background: var(--cm-primary-soft); }
+.pick { display: flex; width: 22px; align-items: center; justify-content: center; }
+.pick__box { display: flex; width: 16px; height: 16px; align-items: center; justify-content: center; border: 1.5px solid rgba(30,35,65,.22); border-radius: 5px; background: var(--cm-elevated); color: transparent; transition: .12s ease; }
+.pick__box svg { width: 10px; height: 10px; }
+/* 悬停整行时勾选框描边变强调色，暗示「这里可以点」 */
+.history-card--multi:hover .pick__box { border-color: var(--cm-primary); }
+.pick__box--on { border-color: var(--cm-primary); background: var(--cm-primary); color: #fff; }
+
+/* ---- 多选模式下接管状态栏的批量操作条 ---- */
+.status-bar--batch { min-height: 42px; border-top-color: rgba(91,95,239,.22); background: var(--cm-primary-soft); }
+.batch-info { display: flex; min-width: 0; align-items: center; gap: 7px; color: #4448d6; font-size: 11px; }
+.batch-info strong { font-weight: 650; }
+.batch-info__icon { display: inline-flex; width: 20px; height: 20px; flex: none; align-items: center; justify-content: center; border-radius: 6px; background: var(--cm-primary); color: #fff; }
+.batch-info__icon svg { width: 12px; height: 12px; }
+.batch-sep { opacity: .45; }
+.batch-note { color: var(--cm-muted); }
+.batch-actions { display: flex; flex: none; align-items: center; gap: 7px; }
+.batch-ghost { height: 30px; border: 0; border-radius: 8px; background: transparent; padding: 0 9px; color: #4448d6; font-size: 11px; font-weight: 600; cursor: pointer; transition: .15s; }
+.batch-ghost:hover { background: rgba(91,95,239,.1); }
+.button--compact { height: 30px; min-width: 58px; font-size: 11px; }
+.button:disabled { cursor: not-allowed; opacity: .45; transform: none; }
+
+.status-hints { color: var(--cm-faint); }
+.status-hints kbd { border: 1px solid var(--cm-line); border-radius: 4px; background: rgba(255,255,255,.7); padding: 1px 4px; font-size: 9px; }
+.status-action--multi { color: var(--cm-muted); }
+.status-action--multi svg { width: 12px; height: 12px; }
+
+/* ---- 查看全部内容弹窗 ---- */
+.preview-card { width: min(560px, calc(100vw - 32px)); }
+.preview-card__appicon { width: 22px; height: 22px; object-fit: contain; }
+.preview-body { max-height: 300px; overflow-y: auto; margin-top: 13px; border: 1px solid var(--cm-line); border-radius: 12px; background: #f7f8fb; padding: 13px 14px; overscroll-behavior: contain; }
+/* 正文比列表里松一档（1.55 → 1.78），长文才不累眼 */
+.preview-body__text { margin: 0; color: var(--cm-text); font-size: 13px; line-height: 1.78; white-space: pre-wrap; word-break: break-word; user-select: text; }
+.preview-body__image { display: block; max-width: 100%; border-radius: 8px; }
+.preview-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; }
+.preview-foot__hint { color: var(--cm-faint); font-size: 10px; }
+.preview-foot__hint kbd { border: 1px solid var(--cm-line); border-radius: 4px; background: rgba(255,255,255,.7); padding: 1px 4px; font-size: 9px; }
+.preview-foot__actions { display: flex; gap: 8px; }
 
 .empty-state { display: flex; flex: 1; flex-direction: column; align-items: center; justify-content: center; gap: 6px; color: var(--cm-faint); text-align: center; }
 .empty-state__icon { display: flex; width: 54px; height: 54px; align-items: center; justify-content: center; border: 1px solid var(--cm-line); border-radius: 16px; background: linear-gradient(145deg,#fff,var(--cm-primary-soft)); color: var(--cm-primary); box-shadow: 0 10px 28px rgba(91,95,239,.1); }
@@ -185,6 +229,11 @@ button {
   .paste-hint { background: rgba(25,26,36,.7); }.card-menu,.modal-card { background: rgba(35,36,48,.98); }
   .settings-section { background: rgba(255,255,255,.025); }.settings-section input[type="number"] { background: rgba(255,255,255,.035); }
   .empty-state__icon { background: linear-gradient(145deg,#22232f,rgba(91,95,239,.14)); }
+  .pick__box { border-color: rgba(255,255,255,.22); }
+  .preview-body { background: rgba(255,255,255,.03); }
+  .status-hints kbd, .preview-foot__hint kbd { background: rgba(255,255,255,.06); }
+  .batch-ghost { color: #a5a7fa; }
+  .batch-info { color: #a5a7fa; }
 }
 
 /* 输入框和文本区域仍允许选择 */

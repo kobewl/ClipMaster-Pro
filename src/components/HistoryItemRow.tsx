@@ -12,7 +12,12 @@ interface Props {
   keyword: string;
   /** 来源应用的真实图标路径（null 时退回 emoji / 图片图标）。 */
   iconSrc: string | null;
+  /** 多选模式：最左侧多一列勾选框，单击整行 = 勾选而不是粘贴。 */
+  multiSelect: boolean;
+  picked: boolean;
   onPaste: (id: string) => void;
+  onPreview: (id: string) => void;
+  onTogglePick: (id: string, shiftKey: boolean) => void;
   onSetGroup: (id: string, groupId: string | null) => void;
   onDelete: (id: string) => void;
 }
@@ -48,7 +53,11 @@ export const HistoryItemRow = memo(function HistoryItemRow({
   groups,
   keyword,
   iconSrc,
+  multiSelect,
+  picked,
   onPaste,
+  onPreview,
+  onTogglePick,
   onSetGroup,
   onDelete,
 }: Props) {
@@ -68,8 +77,10 @@ export const HistoryItemRow = memo(function HistoryItemRow({
   }, []);
 
   useEffect(() => {
-    if (active) rowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [active]);
+    if (active && !multiSelect) {
+      rowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    }
+  }, [active, multiSelect]);
 
   // 点击菜单以外任何地方、或按 Esc，都关掉菜单。
   useEffect(() => {
@@ -107,7 +118,13 @@ export const HistoryItemRow = memo(function HistoryItemRow({
     setMenuOpen(false);
   }
 
-  function handleRowClick() {
+  function handleRowClick(event: React.MouseEvent) {
+    // 多选模式下单击整行 = 勾选。点那个 16px 的小方框太容易点空，
+    // 而粘贴这个核心操作走底部的「粘贴」按钮，不会因此变难用。
+    if (multiSelect) {
+      onTogglePick(item.id, event.shiftKey);
+      return;
+    }
     if (Date.now() < suppressPasteUntil) return;
     onPaste(item.id);
   }
@@ -124,14 +141,19 @@ export const HistoryItemRow = memo(function HistoryItemRow({
     <li
       ref={rowRef}
       role="option"
-      aria-selected={active}
+      aria-selected={multiSelect ? picked : active}
       onClick={handleRowClick}
-      className={`history-card group ${
-        active
-          ? "history-card--active"
-          : ""
-      }`}
+      className={`history-card group ${multiSelect ? "history-card--multi" : ""} ${
+        multiSelect && picked ? "history-card--picked" : ""
+      } ${active && !multiSelect ? "history-card--active" : ""}`}
     >
+      {multiSelect && (
+        <span className="pick" aria-hidden>
+          <span className={`pick__box ${picked ? "pick__box--on" : ""}`}>
+            <Icon name="check" />
+          </span>
+        </span>
+      )}
       <div className="source-tile" aria-hidden>
         {iconUrl ? (
           <img src={iconUrl} alt="" loading="lazy" onError={() => setBrokenIconSrc(iconSrc)} />
@@ -167,11 +189,13 @@ export const HistoryItemRow = memo(function HistoryItemRow({
           </p>
         )}
       </div>
-      {active && <kbd className="paste-hint">↵ 粘贴</kbd>}
+      {active && !multiSelect && <kbd className="paste-hint">↵ 粘贴</kbd>}
 
       {/* 悬停时出现的操作区。未悬停时不可点击，避免误触看不见的按钮。
           菜单打开时必须强制可见：容器上的 opacity 会一并作用到菜单子树。
-          focus-within 让键盘 Tab 进来时按钮同样可见。 */}
+          focus-within 让键盘 Tab 进来时按钮同样可见。
+          多选模式下整行点击已经是勾选，工具条没有意义，直接不渲染。 */}
+      {!multiSelect && (
       <div
         className={`history-actions ${
           menuOpen
@@ -179,6 +203,19 @@ export const HistoryItemRow = memo(function HistoryItemRow({
             : "pointer-events-none opacity-0 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
         }`}
       >
+        <button
+          type="button"
+          title="查看全部内容"
+          aria-label="查看全部内容"
+          onClick={(event) => {
+            event.stopPropagation();
+            onPreview(item.id);
+          }}
+          className="card-action"
+        >
+          <Icon name="eye" />
+        </button>
+
         <div ref={menuRef} className="relative">
           <button
             type="button"
@@ -254,6 +291,7 @@ export const HistoryItemRow = memo(function HistoryItemRow({
           <Icon name="trash" />
         </button>
       </div>
+      )}
     </li>
   );
 });

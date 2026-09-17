@@ -7,9 +7,10 @@ pub mod lifecycle;
 use tauri::Manager;
 
 use crate::commands::clipboard_commands::{
-    clear_history, copy_clipboard_item, create_group, delete_clipboard_item, delete_group,
-    get_settings, get_source_icons, list_clipboard_items, list_groups, paste_clipboard_item,
-    set_capture_enabled, set_item_group, update_group, update_settings, update_shortcut,
+    clear_history, copy_clipboard_item, copy_text_to_clipboard, create_group, delete_clipboard_item,
+    delete_group, get_settings, get_source_icons, list_clipboard_items, list_groups,
+    paste_clipboard_item, paste_text, set_capture_enabled, set_item_group, update_group,
+    update_settings, update_shortcut,
 };
 use crate::lifecycle::runtime::{build_runtime, AppRuntime};
 use crate::lifecycle::shortcut::register_global_shortcut;
@@ -58,6 +59,8 @@ pub fn run() {
             set_item_group,
             copy_clipboard_item,
             paste_clipboard_item,
+            copy_text_to_clipboard,
+            paste_text,
             clear_history,
             list_groups,
             create_group,

@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ClipMaster Pro",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "identifier": "pro.clipmaster.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -23,7 +23,10 @@
       "csp": null,
       "assetProtocol": {
         "enable": true,
-        "scope": ["$APPDATA/images/**", "$APPDATA/appicons/**"]
+        "scope": [
+          "$APPDATA/images/**",
+          "$APPDATA/appicons/**"
+        ]
       }
     }
   },

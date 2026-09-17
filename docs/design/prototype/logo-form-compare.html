@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Logo 定稿对比</title>
+<style>
+  body{margin:0; padding:32px 36px 46px; background:#e9ebf1; color:#14161f;
+    font:400 13px/1.55 -apple-system,BlinkMacSystemFont,"SF Pro Text","PingFang SC",sans-serif;
+    -webkit-font-smoothing:antialiased}
+  h1{margin:0 0 3px; font-size:21px; font-weight:680; letter-spacing:-.022em}
+  .sub{margin:0 0 24px; color:#5a5f72; font-size:12.5px}
+  .card{background:#fff; border-radius:15px; padding:17px 18px 18px; margin-bottom:17px;
+    box-shadow:0 1px 2px rgba(16,19,44,.05), 0 12px 30px -16px rgba(16,19,44,.22)}
+  .card h3{margin:0 0 3px; font-size:14px; font-weight:655; letter-spacing:-.012em}
+  .card p{margin:0 0 15px; color:#8a8fa3; font-size:11.5px; line-height:1.5}
+  .stage{display:flex; align-items:flex-end; gap:20px; padding:17px;
+    border-radius:11px; background:#f5f6fa; flex-wrap:wrap}
+  .stage.dark{background:#16181f; margin-top:12px; align-items:center}
+  .item{text-align:center}
+  .cap{color:#8a8fa3; font-size:9.5px; margin-top:7px; font-variant-numeric:tabular-nums}
+  .dark .cap{color:#7c8193}
+  .verdict{margin-top:13px; padding:10px 13px; border-radius:9px;
+    background:#f2f3ff; color:#3c3fbe; font-size:11.5px; line-height:1.6}
+  .verdict b{font-weight:650}
+  .tag{display:inline-block; margin-left:7px; padding:1.5px 6px; border-radius:4px;
+    background:#14161f; color:#fff; font-size:9.5px; font-weight:700; letter-spacing:.04em; vertical-align:1px}
+</style>
+</head>
+<body>
+
+<h1>Logo 定稿对比</h1>
+<p class="sub">A 的材质（柔光底板 + 渐层纸张 + 投影）+ 两种内容线画法。只差这一点，定下来就出最终资产。</p>
+
+<div id="out"></div>
+
+<script>
+function defs(id) {
+  return `<defs>
+    <linearGradient id="bg${id}" x1="0.08" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#7C79FF"/>
+      <stop offset="0.48" stop-color="#5B5FEF"/>
+      <stop offset="1" stop-color="#4346D6"/>
+    </linearGradient>
+    <radialGradient id="glow${id}" cx="0.16" cy="0.06" r="0.82">
+      <stop offset="0" stop-color="#B4B2FF" stop-opacity="0.62"/>
+      <stop offset="0.55" stop-color="#B4B2FF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#B4B2FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="paper${id}" x1="0.1" y1="0" x2="0.42" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.62" stop-color="#FCFCFF"/>
+      <stop offset="1" stop-color="#EDEEFB"/>
+    </linearGradient>
+    <linearGradient id="ink${id}" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#6D6AFA"/>
+      <stop offset="1" stop-color="#4B4EE4"/>
+    </linearGradient>
+    <filter id="ds${id}" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#141645" flood-opacity="0.30"/>
+    </filter>
+  </defs>`;
+}
+
+const BG = (id) => `
+  <rect width="512" height="512" rx="116" fill="url(#bg${id})"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow${id})"/>
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+        stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>`;
+
+const SHELL = (id, inner) => `<svg viewBox="0 0 512 512" fill="none" xmlns="http://www.w3.org/2000/svg">${defs(id)}${BG(id)}${inner}</svg>`;
+
+/* --- P1：两条线（克制、留白多）--- */
+const P1 = (id) => SHELL(id, `
+  <g filter="url(#ds${id})"><rect x="124" y="116" width="264" height="280" rx="58" fill="url(#paper${id})"/></g>
+  <rect x="204" y="88" width="104" height="58" rx="29" fill="url(#ink${id})"/>
+  <rect x="176" y="216" width="160" height="32" rx="16" fill="url(#ink${id})"/>
+  <rect x="176" y="270" width="112" height="32" rx="16" fill="url(#ink${id})" opacity="0.42"/>`);
+
+/* --- P2：三条线（节奏更强、更像"一列历史"）--- */
+const P2 = (id) => SHELL(id, `
+  <g filter="url(#ds${id})"><rect x="124" y="112" width="264" height="288" rx="58" fill="url(#paper${id})"/></g>
+  <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#ink${id})"/>
+  <rect x="176" y="206" width="160" height="34" rx="17" fill="url(#ink${id})"/>
+  <rect x="176" y="262" width="124" height="34" rx="17" fill="url(#ink${id})" opacity="0.55"/>
+  <rect x="176" y="318" width="146" height="34" rx="17" fill="url(#ink${id})" opacity="0.26"/>`);
+
+/* --- 小尺寸剪影版（同样带材质）--- */
+const SMALL = (id) => SHELL(id, `
+  <g filter="url(#ds${id})"><rect x="124" y="116" width="264" height="280" rx="58" fill="url(#paper${id})"/></g>
+  <rect x="204" y="88" width="104" height="58" rx="29" fill="url(#ink${id})"/>`);
+
+const V = [
+  { k:"P1", t:"两条线", d:"留白更多，更克制。适合「工具」调性。", f:P1,
+    v:"在 48px 以上两条线的呼吸感更好；但内容感弱，读起来更像「一张纸」而不是「一列历史」。" },
+  { k:"P2", t:"三条线", d:"节奏更强，一眼看出是「一列记录」。", f:P2,
+    v:"在 64px 以上三条线明显更耐看，且语义更准；48px 仍能分辨三条，32px 开始并拢（已在 22px 以下交给剪影版）。" },
+];
+
+const SIZES = [192, 128, 96, 64, 48, 32, 24];
+
+document.getElementById("out").innerHTML = V.map((c) => `
+  <div class="card">
+    <h3>${c.k} · ${c.t}<span class="tag">${c.k === "P2" ? "采用" : "备选"}</span></h3>
+    <p>${c.d}</p>
+    <div class="stage">
+      ${SIZES.map((s, i) => `<div class="item">
+        ${c.f("m" + c.k + i).replace("<svg ", `<svg style="width:${s}px;height:${s}px;border-radius:${Math.round(s*0.226)}px;box-shadow:0 8px 20px -10px rgba(10,12,32,.45)" `)}
+        <div class="cap">${s}</div></div>`).join("")}
+    </div>
+    <div class="stage dark">
+      ${[96, 64, 40, 24, 16].map((s, i) => c.f("k" + c.k + i)
+        .replace("<svg ", `<svg style="width:${s}px;height:${s}px;border-radius:${Math.round(s*0.226)}px" `)).join("")}
+      <span style="margin-left:auto;color:#7c8193;font-size:11px">深色背景</span>
+    </div>
+    <div class="verdict">${c.v}</div>
+  </div>`).join("") + `
+  <div class="card">
+    <h3>小尺寸剪影版 <span class="tag">≤24px 使用</span></h3>
+    <p>去掉全部内容线，只留外轮廓和夹子。材质保留（柔光 + 投影），所以即使在托盘里也不会显得比主图标「廉价」。</p>
+    <div class="stage">
+      ${[32, 24, 20, 16, 12].map((s, i) => `<div class="item">
+        ${SMALL("sm" + i).replace("<svg ", `<svg style="width:${s}px;height:${s}px;border-radius:${Math.round(s*0.226)}px" `)}
+        <div class="cap">${s}</div></div>`).join("")}
+    </div>
+    <div class="stage dark">
+      ${[32, 24, 16].map((s, i) => SMALL("sd" + i)
+        .replace("<svg ", `<svg style="width:${s}px;height:${s}px;border-radius:${Math.round(s*0.226)}px" `)).join("")}
+      <span style="margin-left:auto;color:#7c8193;font-size:11px">深色背景</span>
+    </div>
+  </div>`;
+</script>
+</body>
+</html>

@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClipMaster Pro · 平面降级版（无 filter 依赖）
+
+  和主 Logo 形状、配色完全一致，但去掉了柔光 / 投影 / 纸张渐层，
+  改用平色 + 一层「纸张下方加深」来暗示层次。
+
+  什么时候用它：
+  - 渲染器不支持 SVG filter（部分图标生成工具、老版本 resvg）
+  - 需要极致小的体积（比如内联进 HTML）
+  - 单色印刷 / 激光雕刻等无法表现渐变的场景
+
+  什么时候不要用它：任何能看到主 Logo 的场合——它明显比主版「平」。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>ClipMaster Pro（平面降级版）</title>
+  <defs>
+    <linearGradient id="cmBgF" x1="0.08" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#7C79FF"/>
+      <stop offset="0.48" stop-color="#5B5FEF"/>
+      <stop offset="1" stop-color="#4346D6"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#cmBgF)"/>
+
+  <!-- 用一层深色偏移块暗示投影，不依赖 filter -->
+  <rect x="124" y="116" width="264" height="288" rx="58" fill="#3A3CBE" opacity="0.34"/>
+  <rect x="124" y="112" width="264" height="288" rx="58" fill="#FFFFFF"/>
+
+  <!-- 夹子：加深 + 描边 -->
+  <rect x="204" y="84" width="104" height="58" rx="29" fill="#3A3DCC"
+        stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+
+  <rect x="176" y="206" width="160" height="34" rx="17" fill="#5B5FEF"/>
+  <rect x="176" y="262" width="124" height="34" rx="17" fill="#5B5FEF" opacity="0.55"/>
+  <rect x="176" y="318" width="146" height="34" rx="17" fill="#5B5FEF" opacity="0.26"/>
+
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+        stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>
+</svg>

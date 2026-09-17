@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClipMaster Pro · 单色版
+  用于极简场景（系统菜单栏模板图、单色印刷、水印）。颜色由使用方通过 currentColor 决定。
+
+  注意：单色版刻意不画夹子的“缺口”——单色小尺寸下缺口会变成噪点。
+  它就是一块剪贴板剪影，形状与主 Logo 的外轮廓完全一致。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>ClipMaster Pro（单色）</title>
+  <rect x="124" y="112" width="264" height="288" rx="58" fill="currentColor"/>
+</svg>

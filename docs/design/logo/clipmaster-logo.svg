@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClipMaster Pro · 主 Logo（≥22px 使用）
+
+  设计要点（「好看」主要来自这四处，复用时不要精简）：
+  - 底板：45° 品牌渐变 + 左上柔光 + 1.25px 边缘高光（模拟材质倒角）
+  - 纸张：自上而下的微渐层（纯白 → 极浅蓝紫），不是平涂
+  - 投影：向下 12px、模糊 15px，让纸张真正「浮」在底板上
+  - 夹子：比内容线更深一档。夹子位于图标顶部，而那里恰好是底板渐变最亮的位置，
+    用同一个渐变会和背景糊在一起，加深后才能「立」住。
+  - 内容线：三条递弱（100% / 55% / 26%），形成节奏，暗示一列历史记录
+
+  ⚠️ 本文件依赖 SVG filter（feDropShadow）。浏览器、Figma、Sketch、macOS 图标生成
+  都完整支持；若某渲染器不支持，请改用 clipmaster-logo-flat.svg（纯色降级版）。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>ClipMaster Pro</title>
+  <defs>
+    <linearGradient id="cmBg" x1="0.08" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#7C79FF"/>
+      <stop offset="0.48" stop-color="#5B5FEF"/>
+      <stop offset="1" stop-color="#4346D6"/>
+    </linearGradient>
+    <radialGradient id="cmGlow" cx="0.16" cy="0.06" r="0.82">
+      <stop offset="0" stop-color="#B4B2FF" stop-opacity="0.62"/>
+      <stop offset="0.55" stop-color="#B4B2FF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#B4B2FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cmPaper" x1="0.1" y1="0" x2="0.42" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.62" stop-color="#FCFCFF"/>
+      <stop offset="1" stop-color="#EDEEFB"/>
+    </linearGradient>
+    <!-- 夹子：深靛蓝，与底板拉开明度差 -->
+    <linearGradient id="cmClip" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#4B4EE4"/>
+      <stop offset="1" stop-color="#2F32A8"/>
+    </linearGradient>
+    <!-- 内容线：亮品牌渐变，和纸张形成清晰对比 -->
+    <linearGradient id="cmInk" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#6D6AFA"/>
+      <stop offset="1" stop-color="#4B4EE4"/>
+    </linearGradient>
+    <filter id="cmShadow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#141645" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <!-- 底板 -->
+  <rect width="512" height="512" rx="116" fill="url(#cmBg)"/>
+  <rect width="512" height="512" rx="116" fill="url(#cmGlow)"/>
+
+  <!-- 纸张 -->
+  <g filter="url(#cmShadow)">
+    <rect x="124" y="112" width="264" height="288" rx="58" fill="url(#cmPaper)"/>
+  </g>
+
+  <!-- 夹子（深色 + 细描边，确保在任何背景亮度下都分得开） -->
+  <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#cmClip)"
+        stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+
+  <!-- 内容线：三条递弱 -->
+  <rect x="176" y="206" width="160" height="34" rx="17" fill="url(#cmInk)"/>
+  <rect x="176" y="262" width="124" height="34" rx="17" fill="url(#cmInk)" opacity="0.55"/>
+  <rect x="176" y="318" width="146" height="34" rx="17" fill="url(#cmInk)" opacity="0.26"/>
+
+  <!-- 边缘高光 -->
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+        stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>
+</svg>

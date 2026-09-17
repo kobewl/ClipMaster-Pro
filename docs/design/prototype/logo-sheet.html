@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ClipMaster Pro · Logo 资产</title>
+<link rel="stylesheet" href="proto.css">
+<style>
+  body{padding:34px 38px 46px}
+  .sheet{display:flex;align-items:flex-end;gap:24px;flex-wrap:wrap;margin-bottom:26px}
+  .lbl{text-align:center}
+  .lbl div{margin-top:9px;color:#5a5f72;font-size:11px;font-variant-numeric:tabular-nums}
+  .dark{display:flex;align-items:center;gap:24px;padding:22px 24px;border-radius:14px;
+    background:#171a21;margin-bottom:22px}
+  .dark .lbl div{color:#7c8193}
+  .soft{display:flex;align-items:center;gap:22px;padding:20px 24px;border-radius:14px;
+    border:1px solid rgba(17,20,45,.09);margin-bottom:22px;flex-wrap:wrap}
+  .soft h4{margin:0 0 4px;font-size:12px;font-weight:640;color:#5a5f72}
+  .soft p{margin:0;font-size:11px;color:#8a8fa3;line-height:1.55}
+  h4.sec{margin:0 0 14px;font-size:13px;font-weight:655;letter-spacing:-.01em}
+</style>
+</head>
+<body>
+
+<h1 class="board-title">ClipMaster Pro · Logo 资产</h1>
+<p class="board-sub">剪贴板剪影 + 三条内容线 + 完整材质（柔光底板 / 渐层纸张 / 柔和投影）。≤24px 切换剪影版。</p>
+
+<div id="host"></div>
+
+<script>
+function defs(u) {
+  return `<defs>
+    <linearGradient id="bg${u}" x1="0.08" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#7C79FF"/><stop offset="0.48" stop-color="#5B5FEF"/><stop offset="1" stop-color="#4346D6"/>
+    </linearGradient>
+    <radialGradient id="glow${u}" cx="0.16" cy="0.06" r="0.82">
+      <stop offset="0" stop-color="#B4B2FF" stop-opacity="0.62"/>
+      <stop offset="0.55" stop-color="#B4B2FF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#B4B2FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="paper${u}" x1="0.1" y1="0" x2="0.42" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/><stop offset="0.62" stop-color="#FCFCFF"/><stop offset="1" stop-color="#EDEEFB"/>
+    </linearGradient>
+    <linearGradient id="ink${u}" x1="0" y1="0" x2="1" y2="0.6">
+      <stop offset="0" stop-color="#6D6AFA"/><stop offset="1" stop-color="#4B4EE4"/>
+    </linearGradient>
+    <linearGradient id="clip${u}" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#4B4EE4"/><stop offset="1" stop-color="#2F32A8"/>
+    </linearGradient>
+    <filter id="ds${u}" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#141645" flood-opacity="0.30"/>
+    </filter>
+  </defs>`;
+}
+const BASE = (u) => `<rect width="512" height="512" rx="116" fill="url(#bg${u})"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow${u})"/>`;
+const EDGE = `<rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+  stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>`;
+
+/** small = true 时输出剪影版（去掉内容线） */
+function logo(size, u, small, ring) {
+  const body = small
+    ? `<g filter="url(#ds${u})"><rect x="124" y="116" width="264" height="280" rx="58" fill="url(#paper${u})"/></g>
+       <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#clip${u})" stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>`
+    : `<g filter="url(#ds${u})"><rect x="124" y="112" width="264" height="288" rx="58" fill="url(#paper${u})"/></g>
+       <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#clip${u})" stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+       <rect x="176" y="206" width="160" height="34" rx="17" fill="url(#ink${u})"/>
+       <rect x="176" y="262" width="124" height="34" rx="17" fill="url(#ink${u})" opacity="0.55"/>
+       <rect x="176" y="318" width="146" height="34" rx="17" fill="url(#ink${u})" opacity="0.26"/>`;
+  return `<svg viewBox="0 0 512 512" fill="none"
+    style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.226)}px;display:block;
+    ${ring ? "box-shadow:0 10px 26px -12px rgba(10,12,32,.5)" : ""}">
+    ${defs(u)}${BASE(u)}${body}${EDGE}</svg>`;
+}
+
+let n = 0;
+const u = () => "u" + (n++);
+
+document.getElementById("host").innerHTML = `
+  <h4 class="sec">主版本 · ≥22px 使用</h4>
+  <div class="sheet">
+    ${[256, 160, 128, 96, 64, 48, 32, 22].map(s =>
+      `<div class="lbl">${logo(s, u(), false, true)}<div>${s}px</div></div>`).join("")}
+  </div>
+
+  <h4 class="sec">剪影版 · ≤24px 使用</h4>
+  <div class="sheet">
+    ${[48, 32, 24, 20, 16, 12].map(s =>
+      `<div class="lbl">${logo(s, u(), true, true)}<div>${s}px</div></div>`).join("")}
+  </div>
+
+  <h4 class="sec">深色背景</h4>
+  <div class="dark">
+    ${[128, 64, 40, 24].map(s => logo(s, u(), false, false)).join("")}
+    ${logo(16, u(), true, false)}
+    <span style="margin-left:auto;color:#8f95a8;font-size:12px">macOS 深色模式</span>
+  </div>
+
+  <div class="soft">
+    <div style="min-width:230px">
+      <h4>尺寸切换规则</h4>
+      <p>内容线在 24px 以下会并拢成一坨灰，所以 22px 起换剪影版。<br>
+         剪影版仍保留全部材质——它不是「简化配色」，只是去掉了画不出来的细节。</p>
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:14px;margin-left:auto">
+      ${logo(32, u(), false, true)}
+      ${logo(26, u(), false, true)}
+      <span style="color:#c9ccd6;font-size:19px;padding:0 4px">→</span>
+      ${logo(24, u(), true, true)}
+      ${logo(18, u(), true, true)}
+      ${logo(14, u(), true, true)}
+    </div>
+  </div>
+`;
+</script>
+</body>
+</html>

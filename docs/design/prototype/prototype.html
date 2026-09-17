@@ -1,0 +1,606 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>ClipMaster Pro · UI 原型</title>
+<link rel="stylesheet" href="proto.css">
+</head>
+<body>
+
+<h1 class="board-title">ClipMaster Pro · UI 现代化原型</h1>
+<p class="board-sub">
+  窗口 800 × 600（与 <code>tauri.conf.json</code> 当前尺寸一致）。所有界面状态按真实尺寸 1:1 绘制，
+  可直接作为设计交付与 Figma 对照稿。
+</p>
+
+<div id="board"></div>
+
+<div class="section-label">改动说明</div>
+<div class="notes">
+  <h3>这一版相对现有界面的主要改动</h3>
+  <ol>
+    <li><b>去掉「窗口中飘一张卡片」</b>：现有实现给应用外层套了 10px 内边距 + 20px 圆角 + 投影 + 径向渐变，看起来像网页嵌在壳里，还白白吃掉一圈可用面积。新版内容面直接铺满窗口，背景改为纯色。</li>
+    <li><b>字号从 5 档收敛到 4 档</b>：原来有 8 / 9 / 10 / 10.5 / 11 / 12.5 / 13 / 15px 混用，最小只有 8px（「PRO」角标）。新版统一为 11.5 / 12 / 13 / 14.5，最小 10.5px 只留给快捷键符号。</li>
+    <li><b>「管理分组」按钮移出滚动区</b>：现有实现把「＋ 管理」放在横向滚动容器里，分组一多就被滚出视野。新版固定在右侧，永远可见。</li>
+    <li><b>分组筛选条去掉「视图」标签</b>：这个标签占了 24px 宽却零信息量，「全部」本身就是最好的说明。</li>
+    <li><b>图片行不再重复提示语</b>：原来每条图片记录都写一遍「图片 / 点击即可粘贴原图」，十条图片就是十遍废话。新版只保留缩略图，信息由左侧图标承担。</li>
+    <li><b>悬停操作区改成实体工具条</b>：原来是两个各自带投影的圆形按钮，压在文字上会糊。新版是一个带描边的整体工具条，并且给行内容预留了 58px 右侧留白。</li>
+    <li><b>选中态改用「浅底 + 细描边 + 左侧短色条」</b>：替代原来的 3px 内阴影色条 + 斜向渐变。渐变在深色模式下几乎不可见，短色条两种模式都成立。</li>
+    <li><b>状态栏降噪</b>：采集状态用绿点 + 绿色文字（暂停时变灰，不用红色），键盘提示用小号 kbd 键帽，右侧「清空未分组」用危险色但只在悬停时显色。</li>
+    <li><b>搜索框快捷键提示改为分体键帽</b>：<code>⌘</code> <code>K</code> 两个独立小方块，比原来的「⌘ K」一整块更像 macOS 原生控件。</li>
+    <li><b>Logo 重做</b>：剪贴板剪影 + 两条内容线（一深一浅），16px 下只保留剪影。详见页面底部。</li>
+  </ol>
+</div>
+
+<script>
+/* ============================================================================
+   图标：全部 24×24 描边风格，线宽 1.7，与产品内 Icon 组件一致
+   ========================================================================== */
+const P = {
+  search:  '<circle cx="11" cy="11" r="6.5"/><path d="m16 16 4.5 4.5"/>',
+  settings:'<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06-2.86 2.86-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21h-4v-.1A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06-2.86-2.86.06-.06A1.7 1.7 0 0 0 4.2 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.4v-4h.1A1.7 1.7 0 0 0 4.2 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06L6.66 3.8l.06.06A1.7 1.7 0 0 0 8.6 4.2a1.7 1.7 0 0 0 1-.6A1.7 1.7 0 0 0 10 2.5v-.1h4v.1a1.7 1.7 0 0 0 1 1.7 1.7 1.7 0 0 0 1.88-.34l.06-.06 2.86 2.86-.06.06a1.7 1.7 0 0 0-.34 1.88 1.7 1.7 0 0 0 .6 1 1.7 1.7 0 0 0 1.1.4h.1v4h-.1a1.7 1.7 0 0 0-1.7 1Z"/>',
+  close:   '<path d="m6 6 12 12M18 6 6 18"/>',
+  folder:  '<path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2v-10Z"/>',
+  trash:   '<path d="M4.5 7h15M9 7V4.5h6V7m2.5 0-.7 13h-9.6L6.5 7M10 11v5.5M14 11v5.5"/>',
+  plus:    '<path d="M12 5v14M5 12h14"/>',
+  clipboard:'<rect x="5" y="5" width="14" height="16" rx="3"/><path d="M9 5.5V4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v1.5M9 11h6M9 15h6"/>',
+  image:   '<rect x="3" y="4" width="18" height="16" rx="3"/><circle cx="8.5" cy="9" r="1.5"/><path d="m4 17 4.5-4 3.5 3 3-2.5 5 4.5"/>',
+  check:   '<path d="m5 12.5 4.5 4.5L19 7.5"/>',
+  alert:   '<path d="M10.2 4.2 2.9 17a2 2 0 0 0 1.75 3h14.7a2 2 0 0 0 1.75-3L13.8 4.2a2 2 0 0 0-3.6 0Z"/><path d="M12 9v4M12 17h.01"/>',
+};
+
+const ic = (n, style = "") =>
+  `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+        stroke-linecap="round" stroke-linejoin="round" ${style ? `style="${style}"` : ""}>${P[n]}</svg>`;
+
+/* ============================================================================
+   新 Logo（定稿 P2）：剪贴板剪影 + 三条内容线 + 完整材质
+   ----------------------------------------------------------------------------
+   材质构成（这是「好看」的主要来源，不要随手删）：
+     底板  45° 品牌渐变 + 左上柔光 + 1.25px 内描边
+     纸张  自上而下的微渐层 + 向下 12px 柔和投影
+     内容线 三条递弱（100% / 55% / 26%），形成节奏
+   ========================================================================== */
+function logoDefs(id, uid) {
+  return `
+    <defs>
+      <linearGradient id="bg${uid}" x1="0.08" y1="0" x2="0.92" y2="1">
+        <stop offset="0" stop-color="#7C79FF"/>
+        <stop offset="0.48" stop-color="#5B5FEF"/>
+        <stop offset="1" stop-color="#4346D6"/>
+      </linearGradient>
+      <radialGradient id="glow${uid}" cx="0.16" cy="0.06" r="0.82">
+        <stop offset="0" stop-color="#B4B2FF" stop-opacity="0.62"/>
+        <stop offset="0.55" stop-color="#B4B2FF" stop-opacity="0.08"/>
+        <stop offset="1" stop-color="#B4B2FF" stop-opacity="0"/>
+      </radialGradient>
+      <linearGradient id="paper${uid}" x1="0.1" y1="0" x2="0.42" y2="1">
+        <stop offset="0" stop-color="#FFFFFF"/>
+        <stop offset="0.62" stop-color="#FCFCFF"/>
+        <stop offset="1" stop-color="#EDEEFB"/>
+      </linearGradient>
+      <linearGradient id="ink${uid}" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0" stop-color="#6D6AFA"/>
+        <stop offset="1" stop-color="#4B4EE4"/>
+      </linearGradient>
+      <linearGradient id="clip${uid}" x1="0" y1="0" x2="0.85" y2="1">
+        <stop offset="0" stop-color="#4B4EE4"/>
+        <stop offset="1" stop-color="#2F32A8"/>
+      </linearGradient>
+      <filter id="ds${uid}" x="-40%" y="-40%" width="180%" height="180%">
+        <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#141645" flood-opacity="0.30"/>
+      </filter>
+    </defs>`;
+}
+
+const LOGO_BASE = (uid) => `
+  <rect width="512" height="512" rx="116" fill="url(#bg${uid})"/>
+  <rect width="512" height="512" rx="116" fill="url(#glow${uid})"/>`;
+
+const LOGO_EDGE = `
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+        stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>`;
+
+/** 主 Logo：三条内容线，用于 ≥22px */
+function logoMark(size = 26, id = "g") {
+  return `<svg class="brand__mark" viewBox="0 0 512 512" fill="none"
+      style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.226)}px">
+    ${logoDefs(id, id)}
+    ${LOGO_BASE(id)}
+    <g filter="url(#ds${id})">
+      <rect x="124" y="112" width="264" height="288" rx="58" fill="url(#paper${id})"/>
+    </g>
+    <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#clip${id})"
+          stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+    <rect x="176" y="206" width="160" height="34" rx="17" fill="url(#ink${id})"/>
+    <rect x="176" y="262" width="124" height="34" rx="17" fill="url(#ink${id})" opacity="0.55"/>
+    <rect x="176" y="318" width="146" height="34" rx="17" fill="url(#ink${id})" opacity="0.26"/>
+    ${LOGO_EDGE}
+  </svg>`;
+}
+
+/** 剪影版：≤24px 使用，去掉内容线但保留材质 */
+function logoMarkSmall(size = 16, id = "gs") {
+  return `<svg class="brand__mark" viewBox="0 0 512 512" fill="none"
+      style="width:${size}px;height:${size}px;border-radius:${Math.round(size * 0.226)}px">
+    ${logoDefs(id, id)}
+    ${LOGO_BASE(id)}
+    <g filter="url(#ds${id})">
+      <rect x="124" y="112" width="264" height="288" rx="58" fill="url(#paper${id})"/>
+    </g>
+    <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#clip${id})"
+          stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+    ${LOGO_EDGE}
+  </svg>`;
+}
+
+/* ============================================================================
+   示例数据
+   ========================================================================== */
+const IMG = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="336" height="208">
+<defs><linearGradient id="a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#6366F1"/><stop offset="1" stop-color="#22D3EE"/></linearGradient></defs>
+<rect width="336" height="208" fill="url(#a)"/><circle cx="252" cy="56" r="76" fill="#fff" opacity=".2"/>
+<rect x="28" y="140" width="154" height="13" rx="6.5" fill="#fff" opacity=".8"/>
+<rect x="28" y="163" width="98" height="13" rx="6.5" fill="#fff" opacity=".5"/></svg>`);
+
+const IMG2 = "data:image/svg+xml;utf8," + encodeURIComponent(`<svg xmlns="http://www.w3.org/2000/svg" width="336" height="208">
+<rect width="336" height="208" fill="#1b1d26"/>
+<rect x="0" y="0" width="336" height="26" fill="#2a2d3a"/>
+<circle cx="14" cy="13" r="4" fill="#ff5f57"/><circle cx="28" cy="13" r="4" fill="#febc2e"/><circle cx="42" cy="13" r="4" fill="#28c840"/>
+<rect x="20" y="48" width="120" height="10" rx="5" fill="#5b5fef"/>
+<rect x="20" y="70" width="200" height="10" rx="5" fill="#3a3f52"/>
+<rect x="20" y="92" width="160" height="10" rx="5" fill="#3a3f52"/>
+<rect x="20" y="114" width="220" height="10" rx="5" fill="#3a3f52"/></svg>`);
+
+const B = (name, color) => ({ name, color });
+
+/** 把命中的词包成高亮标记，和后端 FTS 命中的观感一致 */
+function mark(text, word) {
+  if (!word) return text;
+  return text.split(word).join(`<mark class="cm-mark">${word}</mark>`);
+}
+
+const GROUPS = [
+  B("工作", "#3B82F6"),
+  B("设计", "#8B5CF6"),
+  B("链接", "#06B6D4"),
+];
+
+const ITEMS = [
+  { src:"developer.apple.com", ago:"刚刚", text:"https://developer.apple.com/design/human-interface-guidelines/materials", icon:"🌐" },
+  { src:"备忘录", ago:"3 分钟前", text:"把「设置分组」和「删除」都收进悬停操作区之后，行内容要留出右侧空白，否则长文本会压到按钮下面。", icon:"📝", group:0 },
+  { src:"iTerm2", ago:"12 分钟前", text:"SELECT id, content_type, preview, last_copied_at FROM clipboard_items WHERE content_text MATCH ? ORDER BY last_copied_at DESC LIMIT 100;", icon:"⬛", group:0 },
+  { src:"Figma", ago:"26 分钟前", image:true, group:1 },
+  { src:"微信", ago:"48 分钟前", text:"设计稿我看过了，主色调再往深一点的靛蓝走，圆角统一到 10px 左右会更耐看。", icon:"💬", group:1 },
+  { src:"iTerm2", ago:"1 小时前", text:"npm run tauri dev", icon:"⬛" },
+  { src:"Chrome", ago:"2 小时前", text:"Tauri v2 里 data-tauri-drag-region 只作用于带该属性的元素本身，子元素上的按钮依然可以正常点击。", icon:"🌐" },
+  { src:"未知来源", ago:"3 小时前", text:"「已暂停采集」的状态要在页脚用弱化的灰色，不要用红色，否则用户会以为出错了。", icon:"📋" },
+];
+
+/* ============================================================================
+   行渲染
+   ========================================================================== */
+function row(item, state = "") {
+  // 三种状态各自对应真实交互，不要混用：
+  //   "on"    键盘选中：浅底 + 左侧色条 + 「↵ 粘贴」提示，操作按钮不出现
+  //   "hover" 鼠标悬停：浮出操作工具条，粘贴提示让位
+  //   "menu"  分组菜单展开：操作工具条保持可见且文件夹按钮高亮
+  const hover = state === "hover" || state === "menu";
+  const on = state === "on" || state === "menu";
+  const menuOpen = state === "menu";
+
+  const groupBadge = item.group !== undefined
+    ? `<span class="badge" style="background:${GROUPS[item.group].color}1f;color:${GROUPS[item.group].color}">
+         <i style="background:${GROUPS[item.group].color}"></i>${GROUPS[item.group].name}</span>`
+    : "";
+
+  const body = item.image
+    ? `<div class="shot"><img src="${IMG}" alt=""></div>`
+    : `<p class="row__text">${mark(item.text, item.hit)}</p>`;
+
+  const actions = hover
+    ? `<div class="row__actions">
+         <span class="act ${menuOpen ? "act--on" : "act--hover"}">${ic("folder")}</span>
+         <span class="act">${ic("trash")}</span>
+       </div>`
+    : "";
+
+  const hint = state === "on" ? `<span class="hint-paste">↵ 粘贴</span>` : "";
+
+  return `<div class="row ${on ? "row--on" : ""} ${state === "hover" ? "row--hover" : ""}">
+    <span class="tile">${item.image ? ic("image") : `<span>${item.icon}</span>`}</span>
+    <div class="row__body">
+      <div class="row__meta">
+        <span class="row__source">${item.src}</span>
+        <span class="dot-sep"></span>
+        <span>${item.ago}</span>
+        ${groupBadge}
+      </div>
+      ${body}
+    </div>
+    ${actions}
+    ${hint}
+  </div>`;
+}
+
+/* ============================================================================
+   窗口骨架：头部 + 分组条 + 列表 + 状态栏
+   ========================================================================== */
+function header({ query = "", focused = false, uid = "a" } = {}) {
+  const keys = query
+    ? `<span class="act act--hover" style="position:absolute;right:7px;width:22px;height:22px;top:5px">${ic("close", "width:12px;height:12px")}</span>`
+    : `<span class="search__keys"><kbd>⌘</kbd><kbd>K</kbd></span>`;
+
+  return `<div class="app-header">
+    <div class="brand">
+      ${logoMark(26, "lg" + uid)}
+      <span class="brand__name">ClipMaster</span>
+      <span class="brand__edition">PRO</span>
+    </div>
+    <div class="search ${focused ? "search--focused" : ""}">
+      ${ic("search").replace("<svg ", '<svg class="search__icon" ')}
+      <input class="search__input" value="${query}" placeholder="搜索剪贴板历史…" readonly>
+      ${keys}
+    </div>
+    <span class="icon-btn">${ic("settings")}</span>
+  </div>`;
+}
+
+function groupBar(active = 0, addLabel = "分组") {
+  const chip = (g, i) => `<span class="chip ${i === active ? "chip--on" : ""}">
+      <span class="chip__dot" style="background:${g.color}"></span>${g.name}
+      <span class="chip__count">${[8, 5, 3][i]}</span></span>`;
+  return `<div class="group-bar">
+    <div class="group-bar__scroll">
+      <span class="chip ${active === -1 ? "chip--on" : ""}">全部<span class="chip__count">30</span></span>
+      ${GROUPS.map(chip).join("")}
+    </div>
+    <span class="chip chip--add">${ic("plus")}${addLabel}</span>
+  </div>`;
+}
+
+function status({ capture = true, total = 30, loaded = 8, paused = false } = {}) {
+  return `<div class="status">
+    <div class="status__left">
+      <span class="status__dot ${capture ? "" : "status__dot--off"}"></span>
+      <span class="status__live ${capture ? "" : "status__live--off"}">${capture ? "正在采集" : "已暂停"}</span>
+      <span class="vsep"></span>
+      <span class="status__count">共 ${total} 条${loaded < total ? ` · 已显示 ${loaded}` : ""}</span>
+    </div>
+    <div class="status__right">
+      <span class="status__hints"><kbd>↑</kbd><kbd>↓</kbd> 选择 <kbd style="margin-left:3px">↵</kbd> 粘贴</span>
+      <span class="chip" style="color:var(--fg-faint)">清空未分组</span>
+    </div>
+  </div>`;
+}
+
+function windowShell(inner, { title = "ClipMaster Pro", chrome = true } = {}) {
+  const bar = chrome
+    ? `<div class="window__bar">
+         <span class="lights"><i class="light light--r"></i><i class="light light--y"></i><i class="light light--g"></i></span>
+         <span class="window__title">${title}</span>
+         <span style="width:44px"></span>
+       </div>`
+    : "";
+  return `<div class="window" style="width:800px;height:600px">
+    ${bar}
+    <div class="window__body" ${chrome ? 'style="height:562px"' : 'style="height:600px"'}>
+      ${inner}
+    </div>
+  </div>`;
+}
+
+/* 主界面 */
+function mainScreen({ theme = "light", items = ITEMS,
+                      groupsActive = -1, states = {}, chrome = true,
+                      overlay = "", title, uid = "a", query = "" } = {}) {
+  const list = items.map((it, i) => {
+    if (i === 0) return row(it, states[0] ?? "");
+    return row(it, states[i] ?? "");
+  }).join("");
+
+  const inner = `${header({ uid, query })}
+    ${groupBar(groupsActive)}
+    <div class="list-region">
+      <div class="list">${list}</div>
+    </div>
+    ${status()}
+    ${overlay}`;
+
+  return `<div data-theme="${theme}">${windowShell(inner, { chrome, title })}</div>`;
+}
+
+/* ============================================================================
+   组装画板
+   ========================================================================== */
+const board = [];
+
+/* ---- 1. 主界面：亮 / 暗 ---- */
+board.push(`
+  <div class="pair">
+    <div>
+      <p class="caption"><b>01</b>主界面 · 浅色</p>
+      ${mainScreen({ theme: "light", states: { 1: "on" }, uid: "l" })}
+    </div>
+    <div>
+      <p class="caption"><b>02</b>主界面 · 深色</p>
+      ${mainScreen({ theme: "dark", states: { 1: "on" }, uid: "d" })}
+    </div>
+  </div>`);
+
+/* ---- 2. 搜索命中 + 悬停操作 ---- */
+const searchItems = [
+  { src:"iTerm2", ago:"12 分钟前", hit:"SELECT", text:"SELECT id, content_type, preview, last_copied_at FROM clipboard_items WHERE content_text MATCH ? ORDER BY last_copied_at DESC LIMIT 100;", icon:"⬛", group:0 },
+  { src:"Chrome", ago:"2 小时前", hit:"SELECT", text:"SQLite 里 SELECT 是最常用的语句，配合 FTS5 的 MATCH 做全文检索。", icon:"🌐" },
+  { src:"Chrome", ago:"2 小时前", hit:"SELECT", text:"SELECT name, color, sort_order FROM clip_groups ORDER BY sort_order ASC;", icon:"🌐" },
+];
+
+board.push(`
+  <div class="pair">
+    <div>
+      <p class="caption"><b>03</b>搜索命中 · 关键词高亮</p>
+      ${(() => {
+        const html = mainScreen({ theme:"light", items:searchItems, states:{ 0:"on" }, groupsActive:0, uid:"s", query:"SELECT" });
+        return html
+          .replace('<div class="search ', '<div class="search search--focused ')
+          .replace('value=""', 'value="SELECT"');
+      })()}
+    </div>
+    <div>
+      <p class="caption"><b>04</b>鼠标悬停 · 操作区展开</p>
+      ${mainScreen({ theme:"light", items:ITEMS, states:{ 2:"hover" }, uid:"h" })}
+    </div>
+  </div>`);
+
+/* ---- 3. 分组菜单 + 图片行细节 ---- */
+const menuOverlay = `<div class="menu" style="top:118px;right:22px">
+  <div class="menu__item menu__item--muted menu__item--hover">移出分组</div>
+  ${GROUPS.map((g, i) => `<div class="menu__item ${i === 0 ? "menu__item--cur" : ""}">
+      <span class="menu__dot" style="background:${g.color}"></span>${g.name}
+    </div>`).join("")}
+</div>`;
+
+board.push(`
+  <div class="pair">
+    <div>
+      <p class="caption"><b>05</b>分组菜单展开</p>
+      ${mainScreen({ theme:"light", items:ITEMS, states:{ 1:"menu" }, uid:"m", overlay:menuOverlay })}
+    </div>
+    <div>
+      <p class="caption"><b>06</b>图片型记录 · 缩略图为主角</p>
+      ${mainScreen({ theme:"light", items:[
+        { src:"Figma", ago:"26 分钟前", image:true, group:1 },
+        { src:"预览", ago:"1 小时前", image:true },
+        { src:"ChatGPT", ago:"3 小时前", image:true, group:0 },
+        ...ITEMS.slice(5, 8),
+      ], states:{ 0:"on" }, groupsActive:1, uid:"i" })}
+    </div>
+  </div>`);
+
+/* ---- 4. 弹窗 ---- */
+const settingsDialog = `<div class="modal">
+  <div class="dialog">
+    <div class="dialog__head">
+      <span class="dialog__icon">${ic("settings")}</span>
+      <div>
+        <h2 class="dialog__title">偏好设置</h2>
+        <p class="dialog__sub">让 ClipMaster 更符合你的工作方式</p>
+      </div>
+      <span class="act act--hover" style="width:28px;height:28px">${ic("close")}</span>
+    </div>
+
+    <div class="fieldset">
+      <span class="fieldset__legend">数据保留</span>
+      <label class="field">最大历史数量
+        <input class="input" value="1000" readonly>
+        <span class="field__hint">超出上限时自动清理最旧的记录</span>
+      </label>
+      <label class="field">保留天数 <span style="color:var(--fg-faint);font-size:10.5px">（0 = 不按天清理）</span>
+        <input class="input" value="30" readonly>
+      </label>
+      <span class="check">
+        <span class="box">${ic("check", "width:10px;height:10px")}</span>
+        启用剪贴板采集
+      </span>
+    </div>
+
+    <div class="fieldset">
+      <span class="fieldset__legend">全局快捷键</span>
+      <label class="field">显示 / 隐藏主窗口
+        <span class="kbd-input ${"kbd-input--rec"}">
+          <kbd>⌘</kbd><kbd>⇧</kbd><kbd>V</kbd>
+        </span>
+      </label>
+      <span class="field__hint">点击后按新组合即可修改 · 改完立即生效 · Delete 清除 · Esc 取消</span>
+    </div>
+
+    <div class="dialog__footer">
+      <span class="btn btn--secondary">取消</span>
+      <span class="btn btn--primary">保存</span>
+    </div>
+  </div>
+</div>`;
+
+const groupDialog = `<div class="modal">
+  <div class="dialog" style="max-width:430px">
+    <div class="dialog__head">
+      <span class="dialog__icon">${ic("folder")}</span>
+      <div>
+        <h2 class="dialog__title">管理分组</h2>
+        <p class="dialog__sub">用颜色和名称整理常用内容</p>
+      </div>
+      <span class="act act--hover" style="width:28px;height:28px">${ic("close")}</span>
+    </div>
+
+    <div style="margin-top:11px">
+      ${GROUPS.map((g, i) => `<div class="grow">
+        <div class="grow__line">
+          <span class="grow__dot" style="background:${g.color}"></span>
+          <span class="grow__name">${g.name}</span>
+          <span class="grow__count">${[8,5,3][i]}</span>
+          <span class="grow__act ${i === 0 ? "grow__act--hover" : ""}">编辑</span>
+          <span class="grow__act">删除</span>
+        </div>
+        ${i === 0 ? `<div class="swatches">
+          ${["#EF4444","#F97316","#F59E0B","#22C55E","#06B6D4","#3B82F6","#8B5CF6","#EC4899","#6B7280"]
+            .map((c, k) => `<span class="swatch ${k === 5 ? "swatch--on" : ""}" style="background:${c};color:${c}"></span>`).join("")}
+        </div>` : ""}
+      </div>`).join("")}
+    </div>
+
+    <div class="newgroup">
+      <div class="grow__line">
+        <span class="grow__dot" style="background:#8B5CF6"></span>
+        <span class="newgroup__input" style="color:var(--fg-faint)">新分组名称，例如：工作</span>
+        <span class="btn btn--primary btn--mini">添加</span>
+      </div>
+    </div>
+
+    <div class="dialog__footer">
+      <span class="btn btn--primary">完成</span>
+    </div>
+  </div>
+</div>`;
+
+const confirmDialog = `<div class="modal">
+  <div class="dialog dialog--sm">
+    <span class="dialog__big-icon">${ic("trash")}</span>
+    <h2 class="dialog__title">清空未分组历史</h2>
+    <p style="margin:7px 0 0;color:var(--fg-muted);font-size:12px;line-height:1.6">
+      将删除所有未分组的记录，已分组内容不受影响。此操作不可撤销。
+    </p>
+    <div class="dialog__footer">
+      <span class="btn btn--secondary">取消</span>
+      <span class="btn btn--danger">清空</span>
+    </div>
+  </div>
+</div>`;
+
+board.push(`
+  <div class="pair">
+    <div>
+      <p class="caption"><b>07</b>偏好设置</p>
+      ${mainScreen({ theme:"light", items:ITEMS, uid:"st", overlay:settingsDialog })}
+    </div>
+    <div>
+      <p class="caption"><b>08</b>管理分组</p>
+      ${mainScreen({ theme:"light", items:ITEMS, uid:"gd", overlay:groupDialog })}
+    </div>
+  </div>`);
+
+board.push(`
+  <div class="pair">
+    <div>
+      <p class="caption"><b>09</b>危险操作二次确认</p>
+      ${mainScreen({ theme:"light", items:ITEMS, uid:"cf", overlay:confirmDialog })}
+    </div>
+    <div>
+      <p class="caption"><b>10</b>设置面板 · 深色</p>
+      ${mainScreen({ theme:"dark", items:ITEMS, uid:"sd", overlay:settingsDialog })}
+    </div>
+  </div>`);
+
+/* ---- 5. 空状态 / 骨架屏 / 错误 ---- */
+const emptyScreen = (kind) => {
+  if (kind === "empty") {
+    return `${header({ uid:"e1" })}${groupBar(-1)}
+      <div class="list-region" style="flex:1">
+        <div class="empty" style="padding-top:120px">
+          <span class="empty__icon">${ic("clipboard")}</span>
+          <span class="empty__title">开始收集你的剪贴板</span>
+          <span class="empty__hint">复制的文本、链接和图片会自动出现在这里</span>
+        </div>
+      </div>${status({ total:0, loaded:0 })}`;
+  }
+  if (kind === "search") {
+    return `${header({ query:"react hooks", uid:"e2" })}${groupBar(-1)}
+      <div class="list-region" style="flex:1">
+        <div class="empty" style="padding-top:120px">
+          <span class="empty__icon">${ic("search")}</span>
+          <span class="empty__title">没有找到匹配的记录</span>
+          <span class="empty__hint">换个关键词试试，或清空搜索看全部</span>
+        </div>
+      </div>${status({ total:0, loaded:0 })}`;
+  }
+  if (kind === "error") {
+    return `${header({ uid:"e3" })}${groupBar(-1)}
+      <div class="list-region" style="flex:1">
+        <div class="empty" style="padding-top:120px">
+          <span class="empty__icon empty__icon--warn">${ic("alert")}</span>
+          <span class="empty__title">加载失败</span>
+          <span class="empty__hint">历史记录读不出来，稍后再试一次</span>
+        </div>
+      </div>${status({ total:0, loaded:0 })}`;
+  }
+  // 骨架屏
+  const sk = Array.from({ length: 7 }, (_, i) => `<div class="row">
+      <span class="skel" style="width:30px;height:30px;border-radius:9px"></span>
+      <div style="padding-top:3px">
+        <span class="skel" style="display:block;width:${96 + (i * 29) % 70}px;height:9px"></span>
+        <span class="skel" style="display:block;width:${58 + (i * 17) % 40}%;height:11px;margin-top:9px"></span>
+      </div>
+    </div>`).join("");
+  return `${header({ uid:"e4" })}${groupBar(-1)}
+    <div class="list-region" style="flex:1"><div class="list">${sk}</div></div>
+    ${status({ total:0, loaded:0 })}`;
+};
+
+board.push(`
+  <div class="grid3">
+    <div>
+      <p class="caption"><b>11</b>空状态 · 首次使用</p>
+      ${windowShell(emptyScreen("empty"), { chrome:false })}
+    </div>
+    <div>
+      <p class="caption"><b>12</b>空状态 · 搜索无结果</p>
+      ${windowShell(emptyScreen("search"), { chrome:false })}
+    </div>
+    <div>
+      <p class="caption"><b>13</b>加载骨架屏</p>
+      ${windowShell(emptyScreen("skeleton"), { chrome:false })}
+    </div>
+  </div>`);
+
+/* ---- 6. Logo 定稿 ---- */
+board.push(`
+  <div class="notes" style="max-width:802px">
+    <h3>Logo 定稿</h3>
+    <div style="display:flex;align-items:flex-end;gap:26px;flex-wrap:wrap;margin:18px 0 6px">
+      ${[128, 96, 64, 48, 32, 24].map((s, i) => `
+        <div style="text-align:center">
+          ${logoMark(s, "lg" + i)}
+          <div style="margin-top:9px;color:#5a5f72;font-size:11px">${s}px</div>
+        </div>`).join("")}
+    </div>
+    <div style="display:flex;align-items:center;gap:22px;margin-top:14px;padding:16px 18px;border-radius:12px;border:1px solid rgba(17,20,45,.08)">
+      <span style="color:#5a5f72;font-size:11.5px;min-width:74px">剪影版<br><span style="color:#8a8fa3;font-size:10px">≤24px 使用</span></span>
+      ${[32, 24, 20, 16, 12].map((s, i) => logoMarkSmall(s, "sm" + i)).join("")}
+    </div>
+    <div style="display:flex;align-items:center;gap:22px;margin-top:14px;padding:18px;border-radius:12px;background:#171a21">
+      ${[96, 56, 30, 18].map((s, i) => logoMark(s, "dk" + i)).join("")}
+      ${logoMarkSmall(16, "dks")}
+      <span style="margin-left:auto;color:#8f95a8;font-size:11.5px">深色背景</span>
+    </div>
+    <ol style="margin-top:18px">
+      <li><b>形状是剪贴板剪影</b>——四轮探索后的结论：越抽象的方案（分段环、纯叠卡）在小尺寸下越容易和其他图标撞脸。剪贴板任何尺寸都能一眼认出来。</li>
+      <li><b>「好看」主要来自材质，不是来自形状。</b>底板加了一道左上柔光 + 1.25px 边缘高光，纸张从纯白渐到极浅蓝紫，并带一层向下 12px 的柔和投影——所以它是「浮」在底板上的，而不是平贴。</li>
+      <li><b>三条内容线递弱</b>（100% / 55% / 26%）形成节奏，一眼看出是「一列记录」。两条线则更像「一张纸」，信息量偏弱。</li>
+      <li><b>≤24px 换成剪影版</b>：只留外轮廓和夹子，但<b>材质全部保留</b>——否则托盘里的小图标会比 Dock 里的大图标显得廉价，两者应该是同一个东西。</li>
+      <li>另附 <code>clipmaster-logo-flat.svg</code> 平面降级版，给不支持 SVG filter 的渲染器兜底（形状一致，只是没有光影）。</li>
+    </ol>
+  </div>`);
+
+document.getElementById("board").innerHTML = board.join("");
+
+/* 让 flex 布局的列表区把剩余高度吃满 */
+document.querySelectorAll(".list-region").forEach((el) => {
+  const body = el.closest(".window__body");
+  if (!body) return;
+  if (el.getAttribute("style")?.includes("flex")) return;
+  el.style.flex = "1";
+  el.style.minHeight = "0";
+  el.style.overflow = "hidden";
+});
+</script>
+</body>
+</html>

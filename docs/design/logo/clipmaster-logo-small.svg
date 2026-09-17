@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  ClipMaster Pro · 小尺寸剪影版（≤24px 使用）
+
+  只保留外轮廓和夹子——内容线在 24px 以下会并拢成一坨灰。
+  但材质（柔光 + 纸张渐层 + 投影 + 边缘高光）全部保留：
+  托盘里的小图标不应该比 Dock 里的大图标显得廉价，它们是同一个东西。
+
+  夹子同样使用加深的靛蓝，保证在最小的尺寸下也能和底板分开。
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>ClipMaster Pro（小尺寸剪影版）</title>
+  <defs>
+    <linearGradient id="cmBgS" x1="0.08" y1="0" x2="0.92" y2="1">
+      <stop offset="0" stop-color="#7C79FF"/>
+      <stop offset="0.48" stop-color="#5B5FEF"/>
+      <stop offset="1" stop-color="#4346D6"/>
+    </linearGradient>
+    <radialGradient id="cmGlowS" cx="0.16" cy="0.06" r="0.82">
+      <stop offset="0" stop-color="#B4B2FF" stop-opacity="0.62"/>
+      <stop offset="0.55" stop-color="#B4B2FF" stop-opacity="0.08"/>
+      <stop offset="1" stop-color="#B4B2FF" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cmPaperS" x1="0.1" y1="0" x2="0.42" y2="1">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.62" stop-color="#FCFCFF"/>
+      <stop offset="1" stop-color="#EDEEFB"/>
+    </linearGradient>
+    <linearGradient id="cmClipS" x1="0" y1="0" x2="0.85" y2="1">
+      <stop offset="0" stop-color="#4B4EE4"/>
+      <stop offset="1" stop-color="#2F32A8"/>
+    </linearGradient>
+    <filter id="cmShadowS" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="12" stdDeviation="15" flood-color="#141645" flood-opacity="0.30"/>
+    </filter>
+  </defs>
+
+  <rect width="512" height="512" rx="116" fill="url(#cmBgS)"/>
+  <rect width="512" height="512" rx="116" fill="url(#cmGlowS)"/>
+
+  <g filter="url(#cmShadowS)">
+    <rect x="124" y="112" width="264" height="288" rx="58" fill="url(#cmPaperS)"/>
+  </g>
+  <rect x="204" y="84" width="104" height="58" rx="29" fill="url(#cmClipS)"
+        stroke="#ffffff" stroke-opacity="0.22" stroke-width="2.5"/>
+
+  <rect x="1.25" y="1.25" width="509.5" height="509.5" rx="114.75" fill="none"
+        stroke="#ffffff" stroke-opacity="0.20" stroke-width="2.5"/>
+</svg>

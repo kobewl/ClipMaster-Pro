@@ -7,8 +7,12 @@ interface ConfirmDialogProps {
   onCancel: () => void;
 }
 
+import { Icon } from "./Icon";
+
 /**
  * 通用二次确认弹窗。用于 FR-MGT-005：清空全部历史时必须二次确认。
+ *
+ * Esc 关闭由 App 统一监听（避免多个弹层各自抢按键），这里只负责视觉与点击遮罩关闭。
  */
 export function ConfirmDialog({
   open,
@@ -22,36 +26,42 @@ export function ConfirmDialog({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30"
+      className="modal-backdrop cm-fade-in"
       role="alertdialog"
       aria-modal="true"
       aria-labelledby="confirm-dialog-title"
-      onKeyDown={(event) => {
-        if (event.key === "Escape") onCancel();
+      aria-describedby="confirm-dialog-description"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onCancel();
       }}
     >
-      <div className="w-72 rounded-lg bg-white p-4 shadow-lg dark:bg-neutral-800">
+      <div className="modal-card confirm-card cm-pop-in">
+        <span className="confirm-card__icon"><Icon name="trash" /></span>
         <h2
           id="confirm-dialog-title"
           className="text-sm font-semibold text-neutral-800 dark:text-neutral-100"
         >
           {title}
         </h2>
-        <p className="mt-2 text-xs text-neutral-500 dark:text-neutral-400">
+        <p
+          id="confirm-dialog-description"
+          className="mt-2 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400"
+        >
           {description}
         </p>
-        <div className="mt-4 flex justify-end gap-2">
+        <div className="modal-footer">
           <button
             type="button"
             onClick={onCancel}
-            className="rounded-md px-3 py-1.5 text-xs text-neutral-600 hover:bg-black/5 dark:text-neutral-300 dark:hover:bg-white/10"
+            className="button button--secondary"
           >
             取消
           </button>
           <button
             type="button"
             onClick={onConfirm}
-            className="rounded-md bg-red-500 px-3 py-1.5 text-xs text-white hover:bg-red-600"
+            autoFocus
+            className="button button--danger"
           >
             {confirmLabel}
           </button>

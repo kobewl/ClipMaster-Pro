@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SearchBar } from "@/components/SearchBar";
 import { GroupBar } from "@/components/GroupBar";
 import { HistoryList } from "@/components/HistoryList";
@@ -10,6 +11,7 @@ import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
 import { commands } from "@/lib/commands";
 import type { AppSettings } from "@/types/clipboard";
+import { isCommandError } from "@/types/clipboard";
 
 export default function App() {
   const [searchInput, setSearchInput] = useState("");
@@ -20,12 +22,25 @@ export default function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
 
+  const toastTimerRef = useRef<number | null>(null);
+  const toastFadeTimerRef = useRef<number | null>(null);
+
   const debouncedSearch = useDebouncedValue(searchInput, 200);
   const { groups, reload: reloadGroups } = useGroups();
 
   const {
-    items, total, loadState, errorMessage, reload,
-    setItemGroup, deleteItem, copyItem,
+    items,
+    total,
+    loadState,
+    loadingMore,
+    hasMore,
+    errorMessage,
+    clearError,
+    reload,
+    loadMore,
+    setItemGroup,
+    deleteItem,
+    copyItem,
   } = useClipboardHistory({
     groupId: activeGroupId,
     search: debouncedSearch,
@@ -35,37 +50,100 @@ export default function App() {
     commands.getSettings().then(setSettings).catch(() => {});
   }, []);
 
+  // 选中的分组被删掉时，自动退回「全部」，否则会停在一个永远为空的列表上。
   useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key === "Escape") {
-        if (settingsOpen) setSettingsOpen(false);
-        else if (confirmClearOpen) setConfirmClearOpen(false);
-      }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [settingsOpen, confirmClearOpen]);
+    if (activeGroupId === null) return;
+    if (groups.some((group) => group.id === activeGroupId)) return;
+    setActiveGroupId(null);
+  }, [groups, activeGroupId]);
 
-  const showToast = useCallback((msg: string) => {
-    setToast(msg);
+  /** 统一的提示条：后来的提示会顶掉前一个，不会出现"前一个的定时器把新的关掉"。 */
+  const showToast = useCallback((message: string, durationMs = 1600) => {
+    if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+    if (toastFadeTimerRef.current !== null) window.clearTimeout(toastFadeTimerRef.current);
+
+    setToast(message);
     setToastVisible(true);
-    const t = setTimeout(() => {
+    toastTimerRef.current = window.setTimeout(() => {
       setToastVisible(false);
-      setTimeout(() => setToast(null), 200);
-    }, 1600);
-    return () => clearTimeout(t);
+      toastFadeTimerRef.current = window.setTimeout(() => setToast(null), 200);
+    }, durationMs);
   }, []);
 
-  const handlePaste = useCallback(async (id: string) => {
-    try {
-      await commands.pasteClipboardItem(id);
-    } catch {
-      try {
-        await copyItem(id);
-        showToast("已复制 ✓");
-      } catch { /* hook handles error */ }
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current !== null) window.clearTimeout(toastTimerRef.current);
+      if (toastFadeTimerRef.current !== null) window.clearTimeout(toastFadeTimerRef.current);
+    };
+  }, []);
+
+  // Esc 的优先级：设置面板 → 清空确认 → 清空搜索词。
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== "Escape") return;
+      if (settingsOpen) {
+        setSettingsOpen(false);
+      } else if (confirmClearOpen) {
+        setConfirmClearOpen(false);
+      } else if (searchInput.length > 0) {
+        setSearchInput("");
+      }
     }
-  }, [copyItem, showToast]);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [settingsOpen, confirmClearOpen, searchInput]);
+
+  /**
+   * 一键粘贴：先写入剪贴板并模拟 ⌘V（窗口会自动隐藏）。
+   *
+   * 失败要分两种，处理方式完全不同：
+   * - `paste_failed`：内容**已经写进剪贴板了**，只是模拟 ⌘V 没成功（几乎都是没给
+   *   「辅助功能」权限）。此时窗口已经隐藏，得先把它叫回来，否则用户什么都看不到 ——
+   *   这正是「点了没反应」的来源。
+   * - 其它错误：连写剪贴板都没成功，退化成「只复制」。
+   */
+  const handlePaste = useCallback(
+    async (id: string) => {
+      try {
+        await commands.pasteClipboardItem(id);
+      } catch (error) {
+        if (isCommandError(error) && error.code === "paste_failed") {
+          try {
+            const currentWindow = getCurrentWindow();
+            await currentWindow.show();
+            await currentWindow.setFocus();
+          } catch {
+            /* 窗口控制失败不影响提示本身 */
+          }
+          showToast(error.message, 6000);
+          return;
+        }
+        try {
+          await copyItem(id);
+          showToast("已复制 ✓");
+        } catch {
+          /* 失败提示由 hook 统一写入 errorMessage */
+        }
+      }
+    },
+    [copyItem, showToast],
+  );
+
+  const handleSetGroup = useCallback(
+    async (id: string, groupId: string | null) => {
+      await setItemGroup(id, groupId);
+      reloadGroups();
+    },
+    [setItemGroup, reloadGroups],
+  );
+
+  const handleDelete = useCallback(
+    async (id: string) => {
+      await deleteItem(id);
+      reloadGroups();
+    },
+    [deleteItem, reloadGroups],
+  );
 
   const handleClear = useCallback(async () => {
     setConfirmClearOpen(false);
@@ -79,54 +157,83 @@ export default function App() {
     }
   }, [reload, reloadGroups, showToast]);
 
-  const handleSetGroup = useCallback(async (id: string, gid: string | null) => {
-    await setItemGroup(id, gid);
-    reloadGroups();
-  }, [setItemGroup, reloadGroups]);
+  const handleToggleCapture = useCallback(async () => {
+    if (!settings) return;
+    try {
+      const next = await commands.setCaptureEnabled(!settings.capture_enabled);
+      setSettings(next);
+      showToast(next.capture_enabled ? "已恢复采集" : "已暂停采集");
+    } catch {
+      showToast("操作失败");
+    }
+  }, [settings, showToast]);
+
+  const trimmedSearch = debouncedSearch.trim();
 
   return (
-    <div className="flex h-screen flex-col overflow-hidden bg-white text-neutral-900 dark:bg-neutral-900 dark:text-neutral-100">
-      <SearchBar
-        value={searchInput}
-        onChange={setSearchInput}
-        onOpenSettings={() => setSettingsOpen(true)}
-        autoFocus
-      />
+    <main className="app-shell">
+      <section className="app-surface">
+        <SearchBar
+          value={searchInput}
+          onChange={setSearchInput}
+          onOpenSettings={() => setSettingsOpen(true)}
+          autoFocus
+        />
 
-      <GroupBar
-        groups={groups}
-        activeGroupId={activeGroupId}
-        onSelect={setActiveGroupId}
-        onGroupsReload={reloadGroups}
-      />
+        <GroupBar
+          groups={groups}
+          activeGroupId={activeGroupId}
+          onSelect={setActiveGroupId}
+          onGroupsReload={reloadGroups}
+        />
 
       {errorMessage && (
         <div className="flex items-center gap-1.5 bg-red-50 px-3 py-1 text-[11px] text-red-600 dark:bg-red-900/20 dark:text-red-400">
-          <span>⚠</span> {errorMessage}
+          <span>⚠</span>
+          <span className="min-w-0 flex-1 truncate">{errorMessage}</span>
+          <button
+            type="button"
+            onClick={clearError}
+            aria-label="关闭提示"
+            className="shrink-0 rounded px-1 leading-none transition-colors hover:bg-red-500/10"
+          >
+            ✕
+          </button>
         </div>
       )}
 
-      <HistoryList
-        items={items}
-        groups={groups}
-        loadState={loadState}
-        onPaste={handlePaste}
-        onSetGroup={handleSetGroup}
-        onDelete={deleteItem}
-        searchActive={debouncedSearch.trim().length > 0 || activeGroupId !== null}
-      />
+        <HistoryList
+          items={items}
+          groups={groups}
+          loadState={loadState}
+          loadingMore={loadingMore}
+          hasMore={hasMore}
+          keyword={trimmedSearch}
+          resetKey={`${activeGroupId ?? "all"}::${trimmedSearch}`}
+          groupFilterActive={activeGroupId !== null}
+          onPaste={handlePaste}
+          onSetGroup={handleSetGroup}
+          onDelete={handleDelete}
+          onLoadMore={loadMore}
+        />
 
-      <StatusBar
-        total={total}
-        captureEnabled={settings?.capture_enabled ?? true}
-        onClearHistory={() => setConfirmClearOpen(true)}
-      />
+        <StatusBar
+          total={total}
+          loaded={items.length}
+          captureEnabled={settings?.capture_enabled ?? true}
+          onToggleCapture={handleToggleCapture}
+          onClearHistory={() => setConfirmClearOpen(true)}
+        />
+      </section>
 
-      {/* Toast */}
       {toast && (
-        <div className={`pointer-events-none fixed bottom-10 left-1/2 -translate-x-1/2 rounded-full bg-neutral-800/90 px-4 py-1.5 text-xs font-medium text-white shadow-lg backdrop-blur-sm transition-all duration-200 dark:bg-neutral-200/90 dark:text-neutral-900 ${
-          toastVisible ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
-        }`}>
+        <div
+          role="status"
+          aria-live="polite"
+          className={`cm-fade-in pointer-events-none fixed bottom-10 left-1/2 max-w-[min(560px,calc(100%-32px))] -translate-x-1/2 rounded-2xl bg-neutral-800/90 px-4 py-2 text-center text-xs font-medium leading-relaxed text-white shadow-lg backdrop-blur-sm transition-all duration-200 dark:bg-neutral-200/90 dark:text-neutral-900 ${
+            toastVisible ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
+          }`}
+        >
           {toast}
         </div>
       )}
@@ -135,7 +242,10 @@ export default function App() {
         open={settingsOpen}
         settings={settings}
         onClose={() => setSettingsOpen(false)}
-        onSave={async (next) => { const saved = await commands.updateSettings(next); setSettings(saved); }}
+        onSave={async (next) => {
+          const saved = await commands.updateSettings(next);
+          setSettings(saved);
+        }}
         onSettingsChange={setSettings}
       />
 
@@ -147,6 +257,6 @@ export default function App() {
         onConfirm={handleClear}
         onCancel={() => setConfirmClearOpen(false)}
       />
-    </div>
+    </main>
   );
 }

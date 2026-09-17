@@ -91,9 +91,86 @@ pub async fn paste_clipboard_item(
         let _ = window.hide();
     }
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    // osascript 是同步阻塞的（几百毫秒），扔到阻塞线程池，别占着 async worker。
     #[cfg(target_os = "macos")]
-    crate::infrastructure::clipboard::macos::simulate_paste();
+    tokio::task::spawn_blocking(crate::infrastructure::appicon::macos::simulate_paste)
+        .await
+        .map_err(|err| CommandError::paste(format!("模拟粘贴任务异常: {err}")))?
+        .map_err(CommandError::paste)?;
+
     Ok(())
+}
+
+/// 解析一批来源应用的真实图标，返回 `{应用名: PNG 绝对路径}`。
+///
+/// 前端拿路径用 `convertFileSrc` 显示；系统里找不到的应用**不会**出现在结果里，
+/// 由前端退回 emoji 兜底。已经在缓存里的应用直接读盘，不会再走一次 AppKit。
+#[tauri::command]
+pub async fn get_source_icons(
+    app: AppHandle,
+    apps: Vec<String>,
+) -> Result<std::collections::HashMap<String, String>, CommandError> {
+    let mut result = std::collections::HashMap::new();
+
+    #[cfg(target_os = "macos")]
+    {
+        use crate::infrastructure::appicon;
+
+        let Some(cache_dir) = appicon::cache_dir(&app) else {
+            tracing::warn!("无法创建图标缓存目录，来源图标退回 emoji");
+            return Ok(result);
+        };
+
+        let mut missing: Vec<String> = Vec::new();
+        for name in apps {
+            let cached = cache_dir.join(appicon::cache_file_name(&name));
+            if cached.is_file() {
+                result.insert(name, cached.to_string_lossy().to_string());
+            } else {
+                missing.push(name);
+            }
+        }
+        if missing.is_empty() {
+            return Ok(result);
+        }
+
+        // AppKit 只在主线程用：整批一次性丢过去，省得每个应用来回一趟。
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        app.run_on_main_thread(move || {
+            let rendered: Vec<(String, Vec<u8>)> = missing
+                .into_iter()
+                .filter_map(|name| {
+                    appicon::macos::render_app_icon_png(&name).map(|bytes| (name, bytes))
+                })
+                .collect();
+            let _ = tx.send(rendered);
+        })
+        .map_err(|err| CommandError::icon(format!("调度图标渲染失败: {err}")))?;
+
+        // 主线程万一没跑到这个闭包，也不能把命令挂死在这里。
+        match tokio::time::timeout(std::time::Duration::from_secs(3), rx).await {
+            Ok(Ok(rendered)) => {
+                for (name, bytes) in rendered {
+                    let path = cache_dir.join(appicon::cache_file_name(&name));
+                    // 系统图标原图有 1~2MB，落盘时会用 sips 缩到 128px（约 10KB）。
+                    match appicon::macos::save_icon_png(&path, &bytes) {
+                        Ok(()) => {
+                            result.insert(name, path.to_string_lossy().to_string());
+                        }
+                        Err(err) => tracing::warn!(error = %err, app = %name, "写入图标缓存失败"),
+                    }
+                }
+            }
+            Ok(Err(_)) => tracing::warn!("图标渲染结果通道被提前关闭"),
+            Err(_) => tracing::warn!("渲染应用图标超时，本次跳过"),
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    let _ = apps;
+
+    Ok(result)
 }
 
 #[tauri::command]

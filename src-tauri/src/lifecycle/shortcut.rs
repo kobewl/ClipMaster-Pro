@@ -61,6 +61,11 @@ fn toggle_main_window(app_handle: &AppHandle) {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();
         } else {
+            // 趁前台还是用户原来在用的应用，把它记下来：一键粘贴时要把焦点还给它，
+            // 否则模拟出来的 ⌘V 会发回自己（窗口 `hide()` 不会让应用主动让出焦点）。
+            #[cfg(target_os = "macos")]
+            crate::infrastructure::appicon::macos::record_frontmost_app();
+
             let _ = window.show();
             let _ = window.set_focus();
         }

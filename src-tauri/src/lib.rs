@@ -8,8 +8,8 @@ use tauri::Manager;
 
 use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, create_group, delete_clipboard_item, delete_group,
-    get_settings, list_clipboard_items, list_groups, paste_clipboard_item, set_capture_enabled,
-    set_item_group, update_group, update_settings, update_shortcut,
+    get_settings, get_source_icons, list_clipboard_items, list_groups, paste_clipboard_item,
+    set_capture_enabled, set_item_group, update_group, update_settings, update_shortcut,
 };
 use crate::lifecycle::runtime::{build_runtime, AppRuntime};
 use crate::lifecycle::shortcut::register_global_shortcut;
@@ -44,6 +44,12 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|_window, event| {
+            // 窗口失焦时，如果前台已经换成了别的应用（比如隐藏窗口后系统把焦点交还了），
+            // 顺势把它记下来，一键粘贴时才知道该把 ⌘V 发给谁。
+            #[cfg(target_os = "macos")]
+            if let tauri::WindowEvent::Focused(false) = event {
+                crate::infrastructure::appicon::macos::record_frontmost_app();
+            }
             if let tauri::WindowEvent::Destroyed = event {}
         })
         .invoke_handler(tauri::generate_handler![
@@ -61,6 +67,7 @@ pub fn run() {
             update_settings,
             set_capture_enabled,
             update_shortcut,
+            get_source_icons,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

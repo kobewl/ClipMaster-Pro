@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { ClipGroup } from "@/types/clipboard";
 import { GroupDialog } from "./GroupDialog";
+import { Icon } from "./Icon";
 
 interface GroupBarProps {
   groups: ClipGroup[];
@@ -19,31 +20,38 @@ export function GroupBar({
 
   return (
     <>
-      <div className="scrollbar-thin flex items-center gap-1 overflow-x-auto border-b border-black/[0.05] px-2 py-1.5 dark:border-white/[0.06]">
+      <nav className="group-bar" aria-label="剪贴板分组">
+        <span className="group-bar__label">视图</span>
+        <div className="scrollbar-thin group-bar__scroller">
         <TabButton
           active={activeGroupId === null}
           onClick={() => onSelect(null)}
           label="全部"
+          title="显示所有记录"
         />
-        {groups.map((g) => (
+        {groups.map((group) => (
           <TabButton
-            key={g.id}
-            active={activeGroupId === g.id}
-            onClick={() => onSelect(g.id)}
-            label={g.name}
-            color={g.color}
-            count={g.item_count}
+            key={group.id}
+            active={activeGroupId === group.id}
+            onClick={() => onSelect(group.id)}
+            label={group.name}
+            color={group.color}
+            count={group.item_count}
+            title={`${group.name} · ${group.item_count} 条`}
           />
         ))}
         <button
           type="button"
           onClick={() => setManageOpen(true)}
-          className="ml-0.5 shrink-0 rounded-md px-1.5 py-1 text-[11px] text-neutral-400 transition-colors hover:bg-black/[0.05] hover:text-neutral-600 dark:hover:bg-white/[0.08] dark:hover:text-neutral-300"
           title="管理分组"
+          aria-label="管理分组"
+          className="group-add"
         >
-          ＋
+          <Icon name="plus" />
+          <span>管理</span>
         </button>
-      </div>
+        </div>
+      </nav>
 
       {manageOpen && (
         <GroupDialog
@@ -62,32 +70,36 @@ function TabButton({
   label,
   color,
   count,
+  title,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
   color?: string;
   count?: number;
+  title?: string;
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium transition-all ${
+      title={title}
+      aria-pressed={active}
+      className={`group-chip ${
         active
-          ? "bg-blue-500/15 text-blue-600 ring-1 ring-blue-500/20 dark:bg-blue-400/20 dark:text-blue-300 dark:ring-blue-400/20"
-          : "text-neutral-500 hover:bg-black/[0.04] hover:text-neutral-700 dark:text-neutral-400 dark:hover:bg-white/[0.06] dark:hover:text-neutral-200"
+          ? "group-chip--active"
+          : ""
       }`}
     >
       {color && (
         <span
-          className="inline-block h-2 w-2 rounded-full"
+          className="inline-block h-2 w-2 shrink-0 rounded-full"
           style={{ backgroundColor: color }}
         />
       )}
-      {label}
+      <span className="max-w-[110px] truncate">{label}</span>
       {count !== undefined && count > 0 && (
-        <span className="text-[10px] opacity-60">{count}</span>
+        <span className="text-[10px] tabular-nums opacity-60">{count}</span>
       )}
     </button>
   );

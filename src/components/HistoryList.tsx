@@ -99,22 +99,43 @@ export function HistoryList({
       const tag = targetElement?.tagName;
       const typing =
         tag === "INPUT" || tag === "TEXTAREA" || targetElement?.isContentEditable === true;
+
       // 搜索框里的回车 = 粘贴当前选中的那条 —— 这是本应用最核心的操作，
       // 用户的预期就是「搜到 → 回车 → 粘到刚才那个应用里」。
       // 其它输入控件（设置面板、分组弹窗）里的回车留给控件自己处理。
-      const enterFromSearch =
-        event.key === "Enter" && targetElement?.id === SEARCH_INPUT_ID;
-      if (typing && !enterFromSearch && event.key !== "ArrowDown" && event.key !== "ArrowUp") {
-        return;
-      }
-      if (items.length === 0) return;
+      const isSearchInput = targetElement?.id === SEARCH_INPUT_ID;
+      const enterFromSearch = event.key === "Enter" && isSearchInput;
 
-      // 空格预览和 ⌘A 全选只在多选/普通模式下各自的语义里生效。
+      // ⌘A 全选：多选模式下**必须先于输入框判断**。
+      // 搜索框是自动聚焦的，如果放在下面，⌘A 会被当成「全选搜索框里的文字」而失效。
       if (multiSelect && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
         event.preventDefault();
         onSelectAll();
         return;
       }
+
+      // 空格预览：搜索框**空着**时也生效。
+      //
+      // 这是实测才发现的问题：搜索框自动聚焦，如果按「在输入框里就一律放行给输入」，
+      // 那这个快捷键在默认状态下永远打不开预览 —— 只会往搜索框里打一个空格，
+      // 而状态栏还写着「空格 预览」。
+      //
+      // 判定规则：框里有内容 = 正在打字，空格归输入框；框是空的 = 空格归预览。
+      // 代价是查不了以空格开头的搜索词，那种查询本来也没有意义。
+      const searchIsEmpty =
+        isSearchInput && (targetElement as HTMLInputElement).value.length === 0;
+      const spaceForPreview = event.key === " " && (!typing || searchIsEmpty);
+
+      if (
+        typing &&
+        !enterFromSearch &&
+        !spaceForPreview &&
+        event.key !== "ArrowDown" &&
+        event.key !== "ArrowUp"
+      ) {
+        return;
+      }
+      if (items.length === 0) return;
 
       if (event.key === "ArrowDown") {
         event.preventDefault();
@@ -122,7 +143,7 @@ export function HistoryList({
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
         setActiveIndex((prev) => Math.max(prev - 1, 0));
-      } else if (event.key === " " && !typing) {
+      } else if (spaceForPreview) {
         // 空格 = 预览（沿用 macOS Quick Look 的习惯）。
         // 多选模式下改成勾选当前行，和「单击整行 = 勾选」保持一致。
         const current = items[activeIndex];

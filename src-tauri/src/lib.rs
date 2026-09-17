@@ -12,6 +12,8 @@ use crate::commands::clipboard_commands::{
     paste_clipboard_item, paste_text, set_capture_enabled, set_item_group, update_group,
     update_settings, update_shortcut,
 };
+use crate::commands::system_commands::{get_autostart_enabled, set_autostart_enabled};
+use crate::lifecycle::autostart::{launched_by_autostart, AUTOSTART_FLAG};
 use crate::lifecycle::runtime::{build_runtime, AppRuntime};
 use crate::lifecycle::shortcut::register_global_shortcut;
 
@@ -26,8 +28,22 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
+        // 注册登录项时带上 --autostart，启动时据此决定要不要藏窗口。
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec![AUTOSTART_FLAG]),
+        ))
         .setup(|app| {
             let handle = app.handle();
+
+            // 开机自启拉起来的不弹窗口：用户多半还在等系统启动完成，
+            // 这个应用只是常驻后台等全局快捷键，弹窗会打断他。
+            if launched_by_autostart(std::env::args()) {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.hide();
+                }
+            }
+
             let runtime = build_runtime(handle).map_err(|e| {
                 tracing::error!(error = %e, "初始化 AppRuntime 失败");
                 e
@@ -71,6 +87,8 @@ pub fn run() {
             set_capture_enabled,
             update_shortcut,
             get_source_icons,
+            get_autostart_enabled,
+            set_autostart_enabled,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

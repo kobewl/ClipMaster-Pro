@@ -116,6 +116,14 @@ impl CommandError {
     pub fn icon(reason: String) -> Self {
         Self::new("icon_failed", reason, true)
     }
+
+    /// 系统集成操作失败（开机自启等）。
+    ///
+    /// 用 `system_` 前缀而不是复用通用错误：这类失败的原因和剪贴板、数据库都无关，
+    /// 大多是被系统策略挡住（比如 LaunchAgents 目录不可写），前端要能把它们分开提示。
+    pub fn system(reason: String) -> Self {
+        Self::new("system_integration_failed", reason, false)
+    }
 }
 
 impl From<AppError> for CommandError {

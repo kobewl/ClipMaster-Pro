@@ -48,6 +48,11 @@ export function SettingsPanel({
   const [shortcutError, setShortcutError] = useState<string | null>(null);
   const [shortcutSaving, setShortcutSaving] = useState(false);
 
+  // 开机自启：状态来自系统而不是 settings，且点一下立即生效，不走「保存」。
+  const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [autostartSaving, setAutostartSaving] = useState(false);
+  const [autostartError, setAutostartError] = useState<string | null>(null);
+
   // 快捷键保存失败时要回滚成"当前真实生效的值"，用 ref 保证拿到的是最新的 props。
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -60,9 +65,17 @@ export function SettingsPanel({
     setShortcut(settings.shortcut);
   }, [settings]);
 
-  // 每次打开面板都清掉上一次的错误提示。
+  // 每次打开面板都清掉上一次的错误提示，并重新读一次自启状态
+  // （用户可能在系统设置里改过，缓存一份会显示成错的）。
   useEffect(() => {
-    if (open) setError(null);
+    if (!open) return;
+    setError(null);
+    setAutostartError(null);
+    setAutostart(null);
+    commands
+      .getAutostartEnabled()
+      .then(setAutostart)
+      .catch(() => setAutostartError("读取开机自启状态失败"));
   }, [open]);
 
   if (!open) return null;
@@ -112,6 +125,26 @@ export function SettingsPanel({
       setShortcut(settingsRef.current?.shortcut ?? "");
     } finally {
       setShortcutSaving(false);
+    }
+  }
+
+  /**
+   * 开机自启同样立即生效：它改的是系统里的登录项，不是本应用的配置。
+   *
+   * 失败时把开关**弹回原值** —— 让控件停在用户点的位置上，他会以为已经设好了。
+   */
+  async function handleAutostartToggle(next: boolean) {
+    const previous = autostart;
+    setAutostartError(null);
+    setAutostart(next); // 先动一下，点击有即时反馈
+    setAutostartSaving(true);
+    try {
+      await commands.setAutostartEnabled(next);
+    } catch (err: unknown) {
+      setAutostart(previous);
+      setAutostartError(isCommandError(err) ? err.message : "设置开机自启失败");
+    } finally {
+      setAutostartSaving(false);
     }
   }
 
@@ -205,6 +238,28 @@ export function SettingsPanel({
           <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
             点击后按新组合即可修改 · 改完立即生效 · Delete 清除 · Esc 取消
           </p>
+        </fieldset>
+
+        <fieldset className="settings-section mt-3">
+          <legend className="px-1.5 text-[11px] font-medium text-neutral-400">系统</legend>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+            <input
+              type="checkbox"
+              checked={autostart ?? false}
+              disabled={autostart === null || autostartSaving}
+              onChange={(event) => handleAutostartToggle(event.target.checked)}
+              className="accent-blue-500 disabled:opacity-50"
+            />
+            {autostartSaving ? "设置中…" : "开机时自动启动"}
+          </label>
+          <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
+            {autostart === null && !autostartError
+              ? "正在读取…"
+              : "启动后安静地待在后台，不会弹出窗口；按全局快捷键随时唤起。"}
+          </p>
+          {autostartError && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-red-500">⚠ {autostartError}</p>
+          )}
         </fieldset>
 
         {error && <p className="mt-2 text-xs text-red-500">⚠ {error}</p>}

@@ -69,6 +69,15 @@ export const commands = {
   updateShortcut(shortcut: string): Promise<AppSettings> {
     return invoke("update_shortcut", { shortcut });
   },
+
+  // 系统集成
+  /** 读实际生效的开机自启状态（查系统，不查数据库）。 */
+  getAutostartEnabled(): Promise<boolean> {
+    return invoke("get_autostart_enabled");
+  },
+  setAutostartEnabled(enabled: boolean): Promise<void> {
+    return invoke("set_autostart_enabled", { enabled });
+  },
 };
 
 export type { ClipboardItem };

@@ -3,6 +3,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 import type { ClipboardItem } from "@/types/clipboard";
 import { extractDomain, getAppIcon } from "@/lib/sourceIcons";
 import { Icon } from "./Icon";
+import { ImageZoom } from "./ImageZoom";
 
 interface Props {
   item: ClipboardItem | null;
@@ -64,7 +65,9 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
         if (event.target === event.currentTarget) onClose();
       }}
     >
-      <div className="modal-card preview-card cm-pop-in">
+      <div
+        className={`modal-card preview-card ${meta.isImage ? "preview-card--image" : ""} cm-pop-in`}
+      >
         <header className="modal-header">
           <span className="modal-header__icon">
             {/* 真实图标 > 图片图标 > emoji，与列表行保持同一套兜底顺序 */}
@@ -92,21 +95,19 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
           </button>
         </header>
 
-        <div ref={bodyRef} className="preview-body scrollbar-thin">
-          {meta.isImage ? (
-            <img
-              src={convertFileSrc(item.content_text)}
-              alt="剪贴板图片"
-              className="preview-body__image"
-            />
-          ) : (
+        {meta.isImage ? (
+          <div className="preview-image-wrap">
+            <ImageZoom src={convertFileSrc(item.content_text)} alt="剪贴板图片" />
+          </div>
+        ) : (
+          <div ref={bodyRef} className="preview-body scrollbar-thin">
             <p className="preview-body__text">{item.content_text}</p>
-          )}
-        </div>
+          </div>
+        )}
 
         <footer className="preview-foot">
           <span className="preview-foot__hint">
-            {meta.isImage ? "点「粘贴」插入这张图" : "可以直接拖选文字"} · <kbd>Esc</kbd> 关闭
+            {meta.isImage ? "点图片可放大 · ⌘ 滚轮缩放" : "可以直接拖选文字"} · <kbd>Esc</kbd> 关闭
           </span>
           <div className="preview-foot__actions">
             <button

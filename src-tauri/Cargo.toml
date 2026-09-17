@@ -37,6 +37,7 @@ sha2 = "0.10.9"
 hex = "0.4.3"
 unicode-normalization = "0.1.25"
 async-trait = "0.1.92"
+tauri-plugin-autostart = "2.5.1"
 
 # macOS 剪贴板读写（含图片支持，默认启用 image feature）。
 [target.'cfg(target_os = "macos")'.dependencies]

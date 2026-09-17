@@ -18,7 +18,16 @@ interface Props {
   resetKey: string;
   /** 是否已经按某个分组过滤（过滤时不画"未分组"分隔线）。 */
   groupFilterActive: boolean;
+  /** 多选模式：勾选框列 + 单击行 = 勾选。 */
+  multiSelect: boolean;
+  /** 已勾选的 id，按列表顺序无关（合并时按列表顺序走）。 */
+  selected: ReadonlySet<string>;
   onPaste: (id: string) => void;
+  onPreview: (id: string) => void;
+  onTogglePick: (id: string, shiftKey: boolean) => void;
+  /** 多选模式下回车 = 粘贴已选内容（合并后直接送到刚才那个应用）。 */
+  onPasteMerged: () => void;
+  onSelectAll: () => void;
   onSetGroup: (id: string, groupId: string | null) => void;
   onDelete: (id: string) => void;
   onLoadMore: () => void;
@@ -33,7 +42,13 @@ export function HistoryList({
   keyword,
   resetKey,
   groupFilterActive,
+  multiSelect,
+  selected,
   onPaste,
+  onPreview,
+  onTogglePick,
+  onPasteMerged,
+  onSelectAll,
   onSetGroup,
   onDelete,
   onLoadMore,
@@ -94,21 +109,49 @@ export function HistoryList({
       }
       if (items.length === 0) return;
 
+      // 空格预览和 ⌘A 全选只在多选/普通模式下各自的语义里生效。
+      if (multiSelect && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        onSelectAll();
+        return;
+      }
+
       if (event.key === "ArrowDown") {
         event.preventDefault();
         setActiveIndex((prev) => Math.min(prev + 1, items.length - 1));
       } else if (event.key === "ArrowUp") {
         event.preventDefault();
         setActiveIndex((prev) => Math.max(prev - 1, 0));
+      } else if (event.key === " " && !typing) {
+        // 空格 = 预览（沿用 macOS Quick Look 的习惯）。
+        // 多选模式下改成勾选当前行，和「单击整行 = 勾选」保持一致。
+        const current = items[activeIndex];
+        if (!current) return;
+        event.preventDefault();
+        if (multiSelect) {
+          onTogglePick(current.id, false);
+        } else {
+          onPreview(current.id);
+        }
       } else if (event.key === "Enter") {
         const selected = items[activeIndex];
-        if (selected) {
-          event.preventDefault();
-          onPaste(selected.id);
-        }
+        if (!selected) return;
+        event.preventDefault();
+        // 多选模式下回车 = 粘贴已选内容，由 App 决定粘什么。
+        if (multiSelect) onPasteMerged();
+        else onPaste(selected.id);
       }
     },
-    [items, activeIndex, onPaste],
+    [
+      items,
+      activeIndex,
+      onPaste,
+      onPreview,
+      multiSelect,
+      onTogglePick,
+      onSelectAll,
+      onPasteMerged,
+    ],
   );
 
   useEffect(() => {
@@ -186,7 +229,11 @@ export function HistoryList({
             groups={groups}
             keyword={keyword}
             iconSrc={getSourceIconPath(item.source_app)}
+            multiSelect={multiSelect}
+            picked={selected.has(item.id)}
             onPaste={onPaste}
+            onPreview={onPreview}
+            onTogglePick={onTogglePick}
             onSetGroup={onSetGroup}
             onDelete={onDelete}
           />

@@ -87,6 +87,34 @@ pub async fn paste_clipboard_item(
     if let Ok(item) = runtime.history.get(&id).await {
         emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
     }
+    hide_window_and_simulate_paste(&app).await
+}
+
+/// 把一段文本写进剪贴板（多选合并复制用），不写入历史记录。
+#[tauri::command]
+pub async fn copy_text_to_clipboard(
+    runtime: State<'_, AppRuntime>,
+    text: String,
+) -> Result<(), CommandError> {
+    runtime.history.copy_text_to_clipboard(&text).await.map_err(CommandError::from)
+}
+
+/// 合并复制之后直接粘贴：写剪贴板 → 隐藏窗口 → 模拟 ⌘V。
+#[tauri::command]
+pub async fn paste_text(
+    app: AppHandle,
+    runtime: State<'_, AppRuntime>,
+    text: String,
+) -> Result<(), CommandError> {
+    runtime.history.copy_text_to_clipboard(&text).await.map_err(CommandError::from)?;
+    hide_window_and_simulate_paste(&app).await
+}
+
+/// 隐藏主窗口，等焦点回到用户原来的应用，再投一次 ⌘V。
+///
+/// 「一键粘贴」和「合并后粘贴」共用同一段收尾逻辑，两处必须完全一致：
+/// 少等那 150ms，事件就会打在一个正在失去焦点的窗口上，表现为「点了没反应」。
+async fn hide_window_and_simulate_paste(app: &AppHandle) -> Result<(), CommandError> {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.hide();
     }

@@ -170,6 +170,23 @@ impl HistoryService {
         Ok(())
     }
 
+    /// 把任意文本写进剪贴板（多选合并复制用）。
+    ///
+    /// 与 [`Self::copy_to_clipboard`] 的关键差别：**不调用 `insert_or_touch`**。
+    /// 合并出来的文本是临时产物，没有对应的来源应用和时间，塞进历史只会变成
+    /// 一条查不到出处、也没法解释的记录。
+    ///
+    /// 那它会不会被采集管线当成「用户新复制的内容」收进去？不会 ——
+    /// `ClipboardWriter` 写剪贴板前会记下这次写入的 fingerprint，
+    /// 采集侧读到同样的内容时会消费掉这个标记并跳过（self-write guard）。
+    pub async fn copy_text_to_clipboard(&self, text: &str) -> Result<(), AppError> {
+        if text.is_empty() {
+            return Err(AppError::Domain(DomainError::EmptyContent));
+        }
+        self.writer.write_text(text).map_err(AppError::Clipboard)?;
+        Ok(())
+    }
+
     pub async fn run_retention_cleanup(&self, retention_days: i64) -> Result<u64, AppError> {
         let result = self.repository.enforce_retention_days(retention_days).await?;
         spawn_image_cleanup(result.image_paths);

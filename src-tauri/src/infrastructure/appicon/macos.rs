@@ -3,7 +3,7 @@
 //! 图标渲染由调用方通过 `AppHandle::run_on_main_thread` 调度到主线程执行，
 //! 避免 AppKit 在后台线程上出问题。
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
@@ -27,37 +27,92 @@ static PREVIOUS_FRONTMOST: Mutex<Option<String>> = Mutex::new(None);
 //  应用图标
 // ---------------------------------------------------------------------------
 
-/// 把某个应用的名字（前台应用名，如 "Safari"）解析成 `.app` 的绝对路径。
+/// 把某个应用的名字（System Events 报的进程名，如 "idea"）解析成 `.app` 的绝对路径。
 fn find_app_bundle_path(app_name: &str) -> Option<String> {
     if let Some(path) = find_running_app_path(app_name) {
         return Some(path);
     }
-    // 应用没在运行（或者名字对不上）时退回按名字扫常见目录。
+
+    // 应用没在运行时只能按目录名找。这里的名字来自进程名，和 `.app` 的目录名
+    // 经常对不上（"idea" vs "IntelliJ IDEA.app"），所以先查别名表，再逐个目录
+    // 不区分大小写地比对。
     let home = std::env::var("HOME").unwrap_or_default();
-    [
-        format!("/Applications/{app_name}.app"),
-        format!("/System/Applications/{app_name}.app"),
-        format!("/System/Applications/Utilities/{app_name}.app"),
-        format!("{home}/Applications/{app_name}.app"),
-    ]
-    .into_iter()
-    .find(|path| Path::new(path).is_dir())
+    let dirs = [
+        PathBuf::from("/Applications"),
+        PathBuf::from("/System/Applications"),
+        PathBuf::from("/System/Applications/Utilities"),
+        PathBuf::from(&home).join("Applications"),
+    ];
+
+    let mut candidates = vec![app_name];
+    if let Some(alias) = bundle_alias(app_name) {
+        candidates.push(alias);
+    }
+
+    for candidate in candidates {
+        let file_name = format!("{candidate}.app");
+        for dir in &dirs {
+            let direct = dir.join(&file_name);
+            if direct.is_dir() {
+                return Some(direct.to_string_lossy().to_string());
+            }
+            if let Some(found) = find_case_insensitive(dir, &file_name) {
+                return Some(found);
+            }
+        }
+    }
+    None
+}
+
+/// 进程名 → `.app` 目录名的别名表。
+///
+/// 只收「进程名和目录名差得比较远、靠大小写匹配也找不到」的常见应用；
+/// 能靠可执行文件名对上的（WebStorm、PyCharm、GoLand…）不需要在这里登记。
+const BUNDLE_ALIASES: &[(&str, &str)] = &[
+    ("idea", "IntelliJ IDEA"),
+    ("idea ce", "IntelliJ IDEA CE"),
+    ("code", "Visual Studio Code"),
+    ("chrome", "Google Chrome"),
+    ("msedge", "Microsoft Edge"),
+    ("wechat", "WeChat"),
+];
+
+fn bundle_alias(app_name: &str) -> Option<&'static str> {
+    let wanted = app_name.to_lowercase();
+    BUNDLE_ALIASES
+        .iter()
+        .find(|(process_name, _)| *process_name == wanted)
+        .map(|(_, bundle_name)| *bundle_name)
+}
+
+/// 在目录里不区分大小写地找一个条目。找不到返回 `None`。
+fn find_case_insensitive(dir: &Path, file_name: &str) -> Option<String> {
+    let wanted = file_name.to_lowercase();
+    let entries = std::fs::read_dir(dir).ok()?;
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().to_lowercase() == wanted {
+            return Some(entry.path().to_string_lossy().to_string());
+        }
+    }
+    None
 }
 
 /// 在正在运行的应用里按名字找。返回 `.app` 的绝对路径。
+///
+/// 要同时比对**本地化显示名**和**可执行文件名**，因为 System Events 报的是后者：
+/// IntelliJ IDEA 的显示名是 "IntelliJ IDEA"，进程名却是 "idea"。
+/// 早期的实现只比对显示名且区分大小写，`"IntelliJ IDEA".contains("idea")` 为 false，
+/// 于是 IDEA 的图标一直取不到，界面上只能看到一个 emoji 兜底。
 fn find_running_app_path(app_name: &str) -> Option<String> {
     let workspace = NSWorkspace::sharedWorkspace();
     let running = workspace.runningApplications();
+    let wanted = app_name.to_lowercase();
 
     // 精确同名优先；名字只是「包含」关系时先记下来，循环结束再用，
     // 免得 "Chrome" 抢在 "Google Chrome" 前面匹配上。
     let mut fuzzy: Option<String> = None;
     for index in 0..running.count() {
         let app = running.objectAtIndex(index);
-        let Some(localized) = app.localizedName() else {
-            continue;
-        };
-        let name = localized.to_string();
         let Some(url) = app.bundleURL() else {
             continue;
         };
@@ -65,10 +120,23 @@ fn find_running_app_path(app_name: &str) -> Option<String> {
             continue;
         };
         let path = path.to_string();
-        if name == app_name {
+
+        let localized = app
+            .localizedName()
+            .map(|name| name.to_string().to_lowercase())
+            .unwrap_or_default();
+        let executable = app
+            .executableURL()
+            .and_then(|url| url.path())
+            .map(|path| path.to_string())
+            .and_then(|path| path.rsplit('/').next().map(str::to_string))
+            .map(|name| name.to_lowercase())
+            .unwrap_or_default();
+
+        if localized == wanted || executable == wanted {
             return Some(path);
         }
-        if fuzzy.is_none() && name.contains(app_name) {
+        if fuzzy.is_none() && (localized.contains(&wanted) || executable.contains(&wanted)) {
             fuzzy = Some(path);
         }
     }
@@ -323,5 +391,40 @@ mod tests {
     #[test]
     fn key_v_is_the_ansi_virtual_keycode() {
         assert_eq!(KEY_V, 9, "kVK_ANSI_V = 0x09");
+    }
+
+    #[test]
+    fn bundle_alias_maps_process_names_to_real_bundle_names() {
+        // IDEA 的进程名是 "idea"、目录名是 "IntelliJ IDEA.app"，
+        // 只有走别名表才能在应用没运行时也找到它。
+        assert_eq!(bundle_alias("idea"), Some("IntelliJ IDEA"));
+        assert_eq!(bundle_alias("IDEA"), Some("IntelliJ IDEA"), "别名匹配不区分大小写");
+        assert_eq!(bundle_alias("code"), Some("Visual Studio Code"));
+    }
+
+    #[test]
+    fn bundle_alias_leaves_unknown_apps_alone() {
+        // 表里没有的应用必须原样返回 None，否则会拿错误的路径去渲染图标。
+        assert_eq!(bundle_alias("Safari"), None);
+        assert_eq!(bundle_alias("企业微信"), None);
+        // 不要「包含」就命中：webstorm 有自己的 .app，不需要别名。
+        assert_eq!(bundle_alias("webstorm"), None);
+    }
+
+    #[test]
+    fn find_case_insensitive_finds_app_by_different_casing() {
+        // 目录名是 "IntelliJ IDEA.app"，但进程名是小写的 "idea"，
+        // 大小写不敏感比对是这两者之间唯一的桥梁。
+        let dir = std::env::temp_dir().join(format!("cm-icon-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(dir.join("IntelliJ IDEA.app")).unwrap();
+
+        let found = find_case_insensitive(&dir, "intellij idea.app");
+        assert!(found.is_some(), "大小写不同也应该能找到");
+        assert!(found.unwrap().ends_with("IntelliJ IDEA.app"));
+
+        assert_eq!(find_case_insensitive(&dir, "Nowhere.app"), None);
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -178,7 +178,34 @@ button {
 .preview-body { max-height: 300px; overflow-y: auto; margin-top: 13px; border: 1px solid var(--cm-line); border-radius: 12px; background: #f7f8fb; padding: 13px 14px; overscroll-behavior: contain; }
 /* 正文比列表里松一档（1.55 → 1.78），长文才不累眼 */
 .preview-body__text { margin: 0; color: var(--cm-text); font-size: 13px; line-height: 1.78; white-space: pre-wrap; word-break: break-word; user-select: text; }
-.preview-body__image { display: block; max-width: 100%; border-radius: 8px; }
+
+/* 图片弹窗比文字弹窗宽：放大看细节需要地方。
+   视口高度写死是为了「适应窗口」的比例可预期 —— 如果让它跟着图片高度长，
+   每张图算出来的基准都不一样，缩放档位就失去意义了。 */
+.preview-card--image { width: min(680px, calc(100vw - 32px)); }
+.preview-image-wrap { margin-top: 13px; }
+
+.image-zoom { display: flex; flex-direction: column; gap: 8px; }
+.image-zoom__viewport { display: flex; height: 340px; align-items: center; justify-content: center; overflow: auto; border: 1px solid var(--cm-line); border-radius: 12px; background: #f7f8fb; overscroll-behavior: contain; }
+.image-zoom__viewport--pannable { cursor: grab; }
+.image-zoom__viewport--dragging { cursor: grabbing; }
+/* 拖拽时禁止选中，否则鼠标划过会把图片和文字一起选蓝 */
+.image-zoom__viewport--dragging img { user-select: none; }
+.image-zoom__image { display: block; flex: none; }
+/* 适应窗口：交给容器约束尺寸，图片自己等比缩放 */
+.image-zoom__image--fit { max-width: 100%; max-height: 100%; width: auto; height: auto; object-fit: contain; }
+.image-zoom__image:not(.image-zoom__image--fit) { cursor: zoom-out; user-select: none; }
+.image-zoom__image--fit { cursor: zoom-in; }
+
+.image-zoom__bar { display: flex; align-items: center; gap: 6px; }
+.image-zoom__btn { display: inline-flex; width: 24px; height: 24px; align-items: center; justify-content: center; border: 1px solid var(--cm-line); border-radius: 7px; background: var(--cm-elevated); color: var(--cm-muted); font-size: 14px; line-height: 1; cursor: pointer; transition: .15s; }
+.image-zoom__btn:hover:not(:disabled) { border-color: rgba(91,95,239,.3); color: var(--cm-primary); }
+.image-zoom__btn:disabled { cursor: not-allowed; opacity: .4; }
+.image-zoom__percent { min-width: 52px; height: 24px; border: 1px solid var(--cm-line); border-radius: 7px; background: var(--cm-elevated); color: var(--cm-muted); font-size: 11px; font-variant-numeric: tabular-nums; cursor: pointer; transition: .15s; }
+.image-zoom__percent:hover { border-color: rgba(91,95,239,.3); color: var(--cm-primary); }
+.image-zoom__percent--fit { border-color: rgba(91,95,239,.22); background: var(--cm-primary-soft); color: #4448d6; }
+.image-zoom__size { color: var(--cm-faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+.image-zoom__hint { margin-left: auto; color: var(--cm-faint); font-size: 10px; }
 .preview-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 13px; }
 .preview-foot__hint { color: var(--cm-faint); font-size: 10px; }
 .preview-foot__hint kbd { border: 1px solid var(--cm-line); border-radius: 4px; background: rgba(255,255,255,.7); padding: 1px 4px; font-size: 9px; }
@@ -231,6 +258,9 @@ button {
   .empty-state__icon { background: linear-gradient(145deg,#22232f,rgba(91,95,239,.14)); }
   .pick__box { border-color: rgba(255,255,255,.22); }
   .preview-body { background: rgba(255,255,255,.03); }
+  .image-zoom__viewport { background: rgba(255,255,255,.03); }
+  .image-zoom__btn, .image-zoom__percent { background: rgba(255,255,255,.055); }
+  .image-zoom__percent--fit { color: #a5a7fa; }
   .status-hints kbd, .preview-foot__hint kbd { background: rgba(255,255,255,.06); }
   .batch-ghost { color: #a5a7fa; }
   .batch-info { color: #a5a7fa; }

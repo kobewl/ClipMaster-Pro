@@ -4,6 +4,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { AppSettings, UpdateStatus } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
+import { onUpdateInstalling, onUpdateProgress } from "@/lib/events";
 import { ShortcutInput } from "./ShortcutInput";
 import { Icon } from "./Icon";
 
@@ -63,6 +64,10 @@ export function SettingsPanel({
   const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
   const [updateChecking, setUpdateChecking] = useState(false);
   const [updateError, setUpdateError] = useState<string | null>(null);
+  /** 应用内更新流程：downloading 时展示进度条，installing 提示即将重启。 */
+  const [updateDownloading, setUpdateDownloading] = useState(false);
+  const [updateProgress, setUpdateProgress] = useState(0);
+  const [updateInstalling, setUpdateInstalling] = useState(false);
 
   // 快捷键保存失败时要回滚成"当前真实生效的值"，用 ref 保证拿到的是最新的 props。
   const settingsRef = useRef(settings);
@@ -90,6 +95,19 @@ export function SettingsPanel({
     // 版本号不常变，读到一次就够；失败也不影响面板其它部分。
     getVersion().then(setAppVersion).catch(() => {});
   }, [open]);
+
+  // 更新进度事件：面板开着才 meaningful，但常驻监听也无妨（没有更新流程时事件不会来）。
+  useEffect(() => {
+    const unlistenProgress = onUpdateProgress((percent) => setUpdateProgress(percent));
+    const unlistenInstalling = onUpdateInstalling(() => {
+      setUpdateDownloading(false);
+      setUpdateInstalling(true);
+    });
+    return () => {
+      unlistenProgress.then((fn) => fn());
+      unlistenInstalling.then((fn) => fn());
+    };
+  }, []);
 
   if (!open) return null;
 
@@ -153,6 +171,23 @@ export function SettingsPanel({
       setUpdateError(isCommandError(err) ? err.message : "检查更新失败");
     } finally {
       setUpdateChecking(false);
+    }
+  }
+
+  /** 应用内一键更新：下载 → 验签安装 → 自动重启。进度靠 update-progress 事件。 */
+  async function handleInstallUpdate() {
+    setUpdateError(null);
+    setUpdateDownloading(true);
+    setUpdateProgress(0);
+    try {
+      await commands.downloadAndInstallUpdate();
+      // 正常情况不会走到这里：安装完应用直接重启了。
+    } catch (err: unknown) {
+      // 失败要退出「下载中」状态，让按钮恢复可点。
+      setUpdateDownloading(false);
+      setUpdateInstalling(false);
+      setUpdateProgress(0);
+      setUpdateError(isCommandError(err) ? err.message : "安装更新失败");
     }
   }
 
@@ -314,14 +349,43 @@ export function SettingsPanel({
                 <p className="text-[10px] leading-relaxed text-[var(--cm-success)]">
                   发现新版本 {updateStatus.latest_version}（当前 {updateStatus.current_version}）
                 </p>
-                <button
-                  type="button"
-                  onClick={() => openUrl(updateStatus.release_url ?? RELEASES_URL)}
-                  className="button button--primary button--compact"
-                >
-                  前往下载
-                </button>
+                {updateInstalling ? (
+                  <p className="text-[10px] text-[var(--cm-fg-muted)]">正在安装，即将重启…</p>
+                ) : updateDownloading ? (
+                  <p className="tabular-nums text-[10px] text-[var(--cm-fg-muted)]">
+                    下载中 {updateProgress}%
+                  </p>
+                ) : (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={handleInstallUpdate}
+                      className="button button--primary button--compact"
+                    >
+                      立即更新
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => openUrl(updateStatus.release_url ?? RELEASES_URL)}
+                      className="button button--secondary button--compact"
+                    >
+                      前往下载
+                    </button>
+                  </div>
+                )}
               </div>
+              {updateDownloading && (
+                <div
+                  className="h-1 w-full overflow-hidden rounded-full bg-[var(--cm-surface3)]"
+                  role="progressbar"
+                  aria-label="更新下载进度"
+                >
+                  <div
+                    className="h-full rounded-full bg-[var(--cm-accent)] transition-[width] duration-200"
+                    style={{ width: `${Math.max(updateProgress, 3)}%` }}
+                  />
+                </div>
+              )}
               {updateStatus.notes && (
                 <p className="line-clamp-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
                   {updateStatus.notes.split("\n").find((line) => line.trim())?.trim()}

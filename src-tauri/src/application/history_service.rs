@@ -185,11 +185,15 @@ impl HistoryService {
     pub fn build_search_query(
         group_id: Option<String>,
         search: Option<String>,
+        content_type: Option<ContentType>,
+        since: Option<String>,
         limit: u32,
         offset: u32,
     ) -> SearchQuery {
         SearchQuery {
             group_id,
+            content_type,
+            since,
             search_text: search
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty())

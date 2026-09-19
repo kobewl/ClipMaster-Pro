@@ -5,6 +5,7 @@ use crate::commands::dto::{
     UpdateGroupDto,
 };
 use crate::domain::error::CommandError;
+use crate::domain::model::ContentType;
 use crate::lifecycle::runtime::AppRuntime;
 use crate::lifecycle::shortcut::swap_shortcut;
 
@@ -16,6 +17,27 @@ fn emit_or_warn<T: serde::Serialize + Clone>(app: &AppHandle, event: &str, paylo
 
 const MAX_PAGE_SIZE: u32 = 500;
 
+/// 把前端的预设时间档换算成筛选起点（RFC3339 / UTC，与 created_at 列的存储
+/// 格式一致 —— 字符串比较即时间比较）。None = 不限时间。
+///
+/// 「今天」按本地时区的零点算，换算完**必须转回 UTC** 再序列化：否则
+/// `+08:00` 和 `+00:00` 两种后缀混在一起，字典序就不再是时间序。
+fn time_range_to_since(range: Option<&str>) -> Option<String> {
+    match range? {
+        "today" => {
+            let midnight_local = chrono::Local::now().date_naive().and_hms_opt(0, 0, 0)?;
+            let midnight_utc = midnight_local
+                .and_local_timezone(chrono::Local)
+                .single()?
+                .with_timezone(&chrono::Utc);
+            Some(midnight_utc.to_rfc3339())
+        }
+        "week" => Some((chrono::Utc::now() - chrono::Duration::days(7)).to_rfc3339()),
+        "month" => Some((chrono::Utc::now() - chrono::Duration::days(30)).to_rfc3339()),
+        _ => None,
+    }
+}
+
 // ---------------------------------------------------------------------------
 //  Clipboard CRUD
 // ---------------------------------------------------------------------------
@@ -26,9 +48,20 @@ pub async fn list_clipboard_items(
     query: ListQueryDto,
 ) -> Result<ListResultDto, CommandError> {
     let limit = query.limit.clamp(1, MAX_PAGE_SIZE);
+    // 非法的类型字符串 → 稳定错误码 invalid_content_type（透传到前端显示）。
+    let content_type = query
+        .content_type
+        .as_deref()
+        .map(|s| s.parse::<ContentType>())
+        .transpose()
+        .map_err(|err| {
+            CommandError::from(crate::domain::error::AppError::Domain(err))
+        })?;
     let search_query = crate::application::history_service::HistoryService::build_search_query(
         query.group_id,
         query.search,
+        content_type,
+        time_range_to_since(query.time_range.as_deref()),
         limit,
         query.offset,
     );

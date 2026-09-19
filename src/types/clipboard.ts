@@ -24,6 +24,10 @@ export interface ClipGroup {
 export interface ListQuery {
   group_id: string | null;
   search: string | null;
+  /** 按内容类型筛选："text" | "image" | "html" | "files"。null = 全部。 */
+  content_type: string | null;
+  /** 预设时间档："today" | "week" | "month"。null = 全部时间。 */
+  time_range: string | null;
   limit: number;
   offset: number;
 }

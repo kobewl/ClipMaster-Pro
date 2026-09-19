@@ -17,7 +17,10 @@ export type IconName =
   | "pause"
   | "play"
   | "eye"
-  | "checkSquare";
+  | "checkSquare"
+  | "type"
+  | "code"
+  | "clock";
 
 const paths: Record<IconName, React.ReactNode> = {
   search: <><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></>,
@@ -37,6 +40,9 @@ const paths: Record<IconName, React.ReactNode> = {
   play: <path d="m9 7 8 5-8 5V7Z" />,
   eye: <><path d="M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12Z" /><circle cx="12" cy="12" r="2.8" /></>,
   checkSquare: <><rect x="3.5" y="3.5" width="17" height="17" rx="5" /><path d="m8.5 12.2 2.6 2.6L16 9.5" /></>,
+  type: <path d="M5 7V4.5h14V7M12 4.5v15M9.5 19.5h5" />,
+  code: <><path d="m8.5 8-4 4 4 4" /><path d="m15.5 8 4 4-4 4" /></>,
+  clock: <><circle cx="12" cy="12" r="8.5" /><path d="M12 7.5V12l3 2" /></>,
 };
 
 export function Icon({ name, ...props }: { name: IconName } & SVGProps<SVGSVGElement>) {

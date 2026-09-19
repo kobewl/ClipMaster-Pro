@@ -56,3 +56,15 @@ export function onCaptureChanged(
 export function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
   return listen("ui://open-settings", () => handler());
 }
+
+/** 应用内更新的下载进度（0-100；总数未知时后端发 0）。 */
+export function onUpdateProgress(
+  handler: (percent: number) => void,
+): Promise<UnlistenFn> {
+  return listen<number>("update-progress", (e) => handler(e.payload));
+}
+
+/** 更新包下载完毕、开始安装 —— 安装完应用会自动重启。 */
+export function onUpdateInstalling(handler: () => void): Promise<UnlistenFn> {
+  return listen("update-installing", () => handler());
+}

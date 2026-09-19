@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SearchBar } from "@/components/SearchBar";
-import { GroupBar } from "@/components/GroupBar";
+import { Toolbar } from "@/components/Toolbar";
 import { HistoryList } from "@/components/HistoryList";
 import { StatusBar } from "@/components/StatusBar";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -20,6 +20,9 @@ import { isCommandError } from "@/types/clipboard";
 export default function App() {
   const [searchInput, setSearchInput] = useState("");
   const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  /** 列表筛选：内容类型与时间档（null = 全部）。 */
+  const [filterType, setFilterType] = useState<string | null>(null);
+  const [filterTimeRange, setFilterTimeRange] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -53,6 +56,8 @@ export default function App() {
   } = useClipboardHistory({
     groupId: activeGroupId,
     search: debouncedSearch,
+    contentType: filterType,
+    timeRange: filterTimeRange,
   });
 
   useEffect(() => {
@@ -319,11 +324,15 @@ export default function App() {
           autoFocus
         />
 
-        <GroupBar
+        <Toolbar
           groups={groups}
           activeGroupId={activeGroupId}
           onSelect={setActiveGroupId}
           onGroupsReload={reloadGroups}
+          contentType={filterType}
+          timeRange={filterTimeRange}
+          onContentTypeChange={setFilterType}
+          onTimeRangeChange={setFilterTimeRange}
         />
 
       {errorMessage && (

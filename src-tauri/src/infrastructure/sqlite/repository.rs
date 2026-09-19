@@ -265,6 +265,17 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 conditions.push(format!("clipboard_items.group_id = ?{pidx}"));
                 param_values.push(Box::new(gid.clone()));
             }
+            if let Some(ref content_type) = query.content_type {
+                pidx += 1;
+                conditions.push(format!("clipboard_items.content_type = ?{pidx}"));
+                param_values.push(Box::new(content_type.as_str().to_string()));
+            }
+            if let Some(ref since) = query.since {
+                pidx += 1;
+                // created_at 是 RFC3339 UTC 文本，字典序即时间序（见 time_range_to_since）。
+                conditions.push(format!("clipboard_items.created_at >= ?{pidx}"));
+                param_values.push(Box::new(since.clone()));
+            }
             if use_fts {
                 pidx += 1;
                 conditions.push(format!("clipboard_items_fts MATCH ?{pidx}"));

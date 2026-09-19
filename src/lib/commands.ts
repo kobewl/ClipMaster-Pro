@@ -81,9 +81,13 @@ export const commands = {
   },
 
   // 更新
-  /** 检查应用更新。更新源未配置时后端返回 `update_source_not_configured` 错误码。 */
+  /** 检查应用更新。实时查询 GitHub 最新 release 并比较版本。 */
   checkForUpdates(): Promise<UpdateStatus> {
     return invoke("check_for_updates");
+  },
+  /** 应用内一键更新：下载、验签、安装后自动重启。进度见 update-progress 事件。 */
+  downloadAndInstallUpdate(): Promise<void> {
+    return invoke("download_and_install_update");
   },
 };
 

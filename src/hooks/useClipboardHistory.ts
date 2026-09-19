@@ -19,6 +19,10 @@ export type LoadState = "idle" | "loading" | "error";
 interface Options {
   groupId: string | null;
   search: string;
+  /** 按内容类型筛选："text" | "image" | "html" | "files"。null = 全部。 */
+  contentType: string | null;
+  /** 预设时间档："today" | "week" | "month"。null = 全部时间。 */
+  timeRange: string | null;
 }
 
 /** 把未知异常翻译成能给用户看的中文提示。 */
@@ -46,7 +50,7 @@ function appendUnique(prev: ClipboardItem[], incoming: ClipboardItem[]): Clipboa
  *    才真正回到第一页 —— 否则用户刚往下滚动，一次系统复制就把他弹回顶部。
  */
 export function useClipboardHistory(options: Options) {
-  const { groupId, search } = options;
+  const { groupId, search, contentType, timeRange } = options;
 
   const [items, setItems] = useState<ClipboardItem[]>([]);
   const [total, setTotal] = useState(0);
@@ -59,16 +63,18 @@ export function useClipboardHistory(options: Options) {
   const loadedCountRef = useRef(0);
 
   // 渲染期同步查询条件与已加载数量：effect 与事件回调都晚于本次渲染，写进来的必定是最新值。
-  const queryRef = useRef({ groupId, search });
-  queryRef.current = { groupId, search };
+  const queryRef = useRef({ groupId, search, contentType, timeRange });
+  queryRef.current = { groupId, search, contentType, timeRange };
   loadedCountRef.current = items.length;
 
   const buildQuery = useCallback((limit: number, offset: number): ListQuery => {
-    const { groupId: currentGroup, search: keyword } = queryRef.current;
+    const { groupId: currentGroup, search: keyword, contentType: type, timeRange: range } = queryRef.current;
     const trimmed = keyword.trim();
     return {
       group_id: currentGroup,
       search: trimmed.length > 0 ? trimmed : null,
+      content_type: type,
+      time_range: range,
       limit,
       offset,
     };
@@ -110,10 +116,10 @@ export function useClipboardHistory(options: Options) {
 
   const reload = useCallback(() => fetchFirstPage(false), [fetchFirstPage]);
 
-  // 分组 / 关键词变化 → 回到第一页。
+  // 分组 / 关键词 / 筛选条件变化 → 回到第一页。
   useEffect(() => {
     fetchFirstPage(true);
-  }, [groupId, search, fetchFirstPage]);
+  }, [groupId, search, contentType, timeRange, fetchFirstPage]);
 
   /** 续拉下一页，追加到列表尾部。 */
   const loadMore = useCallback(() => {

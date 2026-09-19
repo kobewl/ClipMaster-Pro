@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ClipMaster Pro",
-  "version": "0.1.0-beta.2",
+  "version": "1.0.4",
   "identifier": "pro.clipmaster.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -32,8 +32,10 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "",
-      "endpoints": []
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEM5NDg4REY0M0I2REQ4NzMKUldSejJHMDc5STFJeWU1NjFYUC9hcjYwR2xYQXZZWjZuZHlIQjUwcmdQOGIwQW9LQXBSa3RYUTcK",
+      "endpoints": [
+        "https://github.com/kobewl/ClipMaster-Pro/releases/latest/download/latest.json"
+      ]
     }
   },
   "bundle": {

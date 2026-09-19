@@ -12,7 +12,9 @@ use crate::commands::clipboard_commands::{
     paste_clipboard_item, paste_text, set_capture_enabled, set_item_group, update_group,
     update_settings, update_shortcut,
 };
-use crate::commands::system_commands::{check_for_updates, get_autostart_enabled, set_autostart_enabled};
+use crate::commands::system_commands::{
+    check_for_updates, download_and_install_update, get_autostart_enabled, set_autostart_enabled,
+};
 use crate::lifecycle::autostart::{launched_by_autostart, AUTOSTART_FLAG};
 use crate::lifecycle::runtime::{build_runtime, AppRuntime};
 use crate::lifecycle::shortcut::register_global_shortcut;
@@ -114,6 +116,7 @@ pub fn run() {
             get_autostart_enabled,
             set_autostart_enabled,
             check_for_updates,
+            download_and_install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

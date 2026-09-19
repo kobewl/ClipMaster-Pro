@@ -71,6 +71,10 @@ fn file_names_summary(files_text: &str) -> String {
 pub struct ListQueryDto {
     pub group_id: Option<String>,
     pub search: Option<String>,
+    /// 按内容类型筛选："text" | "image" | "html" | "files"。None = 全部。
+    pub content_type: Option<String>,
+    /// 预设时间档："today" | "week" | "month"。None = 全部时间。
+    pub time_range: Option<String>,
     pub limit: u32,
     pub offset: u32,
 }

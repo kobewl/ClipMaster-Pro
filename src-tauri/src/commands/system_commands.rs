@@ -87,6 +87,19 @@ fn is_newer(current: &str, latest_tag: &str) -> bool {
     }
 }
 
+/// 把错误及其 source 链拼成一行 —— reqwest 的连接失败根因（DNS、TLS、代理）
+/// 都藏在错误链里，只看顶层 message 是一句没有信息量的 "error sending request"。
+fn error_chain(err: &dyn std::error::Error) -> String {
+    let mut chain = err.to_string();
+    let mut src = err.source();
+    while let Some(s) = src {
+        chain.push_str(" ← ");
+        chain.push_str(&s.to_string());
+        src = s.source();
+    }
+    chain
+}
+
 /// 请求 GitHub API 的 `releases/latest`（当前仓库最新正式发布）。
 async fn fetch_latest_release() -> Result<LatestRelease, CommandError> {
     let url = format!("https://api.github.com/repos/{GITHUB_REPO}/releases/latest");
@@ -100,7 +113,10 @@ async fn fetch_latest_release() -> Result<LatestRelease, CommandError> {
         .send()
         .await
         .map_err(|err| {
-            CommandError::system(format!("无法连接 GitHub（请检查网络后重试）：{err}"))
+            CommandError::system(format!(
+                "无法连接 GitHub（请检查网络后重试）: {}",
+                error_chain(&err)
+            ))
         })?;
 
     // 404 = 仓库存在但还没发过任何 release，这是可解释的状态，不是故障。
@@ -128,10 +144,8 @@ async fn fetch_latest_release() -> Result<LatestRelease, CommandError> {
 /// 做法学自 Tabularis（TabularisDB/tabularis）：**检查**和**安装**分开。
 /// 检查直接请求 GitHub API 拿最新 release、自己比较版本号 —— 不需要
 /// Apple 证书，也不需要 updater 插件的 minisign 密钥，只要 GitHub 上
-/// 发了 release 这里就能查到。发现新版本后前端展示说明并打开 release
-/// 页面下载。「应用内自动下载安装」是进阶项：届时才需要生成 minisign
-/// 密钥对、配置 `plugins.updater` 并在 release 里附 latest.json，
-/// 步骤见 `docs/release/RELEASE.md`。
+/// 发了 release 这里就能查到。发现新版本后前端展示说明，可直接应用内
+/// 一键更新（见 [`download_and_install_update`]），也可打开 release 页面手动下载。
 #[tauri::command]
 pub async fn check_for_updates(app: AppHandle) -> Result<UpdateStatusDto, CommandError> {
     let current = app.package_info().version.to_string();
@@ -144,6 +158,66 @@ pub async fn check_for_updates(app: AppHandle) -> Result<UpdateStatusDto, Comman
         notes: (!release.body.is_empty()).then_some(release.body),
         release_url: Some(release.html_url),
     })
+}
+
+/// 应用内一键更新：下载发布渠道的最新更新包并安装，完成后自动重启应用。
+///
+/// 安装包由 minisign 私钥（`~/.tauri/clipmaster-updater.key`，构建时通过
+/// `TAURI_SIGNING_PRIVATE_KEY` 环境变量提供）签名，插件先用 `tauri.conf.json`
+/// 里的公钥验签、验签不过直接拒绝安装 —— 保证更新包没有被替换或篡改。
+/// 前置条件：GitHub 最新 release 里要附带 `latest.json` 清单和对应签名的
+/// 更新包（没有时这里会报「发布渠道还没就绪」），发布步骤见
+/// `docs/release/RELEASE.md`。下载进度通过 `update-progress`（百分比）、
+/// 安装前通过 `update-installing` 事件通知前端。
+#[tauri::command]
+pub async fn download_and_install_update(app: AppHandle) -> Result<(), CommandError> {
+    use tauri::Emitter;
+    use tauri_plugin_updater::UpdaterExt;
+
+    let updater = app
+        .updater_builder()
+        .build()
+        .map_err(|err| CommandError::system(format!("初始化更新失败: {err}")))?;
+
+    let update = match updater.check().await {
+        Ok(Some(update)) => update,
+        Ok(None) => {
+            return Err(CommandError::new(
+                "already_up_to_date",
+                "已经是最新版本，没有可安装的更新".to_string(),
+                false,
+            ));
+        }
+        Err(err) => {
+            // 最常见的原因：endpoints 指向的 latest.json 还不存在（发了
+            // release 但没附更新清单），或网络不通。
+            return Err(CommandError::system(format!(
+                "获取更新包失败（发布渠道可能还没就绪，可先用「前往下载」手动安装）: {err}"
+            )));
+        }
+    };
+
+    let mut downloaded: u64 = 0;
+    let progress_app = app.clone();
+    let installing_app = app.clone();
+    update
+        .download_and_install(
+            move |chunk, total| {
+                downloaded += chunk as u64;
+                let percent = total
+                    .map(|total| (downloaded as f64 / total as f64 * 100.0) as u32)
+                    .unwrap_or(0);
+                let _ = progress_app.emit("update-progress", percent);
+            },
+            move || {
+                // 装包前先告诉前端，好让界面切到「正在安装」提示。
+                let _ = installing_app.emit("update-installing", ());
+            },
+        )
+        .await
+        .map_err(|err| CommandError::system(format!("安装更新失败: {err}")))?;
+
+    app.restart();
 }
 
 #[cfg(test)]

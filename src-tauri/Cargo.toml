@@ -1,6 +1,6 @@
 [package]
 name = "clipmaster-pro"
-version = "0.1.0"
+version = "1.0.4"
 description = "ClipMaster Pro 0.01 Beta - 轻量级本地优先剪贴板助手"
 authors = ["ClipMaster Pro"]
 license = "MIT"
@@ -48,8 +48,9 @@ tauri-plugin-opener = "2"
 
 # 检查更新：请求 GitHub API（releases/latest）+ 比较版本号。
 # 这两个包已被 tauri-plugin-updater 拉进依赖树，这里只是显式声明使用，零新增下载。
-# TLS 用 native-tls（macOS 系统自带），与依赖树里已有的 rustls 共存，避免
-# 默认特性把 aws-lc-rs 拉进来（构建需要 cmake，纯属麻烦）。
+# TLS 用 native-tls（macOS 系统自带）避开默认的 aws-lc-rs（构建需要 cmake）。
+# 刻意不启用 system-proxy：reqwest 读了 macOS 系统代理设置后，只要系统里
+# 配着失效的代理就会全部请求失败；实测直连 api.github.com 是通的。
 reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "native-tls",

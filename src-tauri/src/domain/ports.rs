@@ -1,7 +1,7 @@
 //! Domain 定义的端口（接口）。Infrastructure 负责实现。
 
 use crate::domain::error::{ClipboardSourceError, RepositoryError};
-use crate::domain::model::{ClipGroup, ClipboardItem, ClipboardItemId, NewClipboardItem};
+use crate::domain::model::{ClipGroup, ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::settings::AppSettings;
 use async_trait::async_trait;
 
@@ -14,6 +14,11 @@ pub struct SearchQuery {
     /// 按分组过滤。None = 全部条目。
     pub group_id: Option<String>,
     pub search_text: Option<String>,
+    /// 按内容类型过滤（如只看图片）。None = 全部类型。
+    pub content_type: Option<ContentType>,
+    /// 只返回 created_at 不早于该时刻的条目（RFC3339 字符串，与列的存储
+    /// 格式一致，字典序即时间序）。None = 不限时间。
+    pub since: Option<String>,
     pub limit: u32,
     pub offset: u32,
 }

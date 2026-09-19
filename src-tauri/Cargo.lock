@@ -527,7 +527,7 @@ dependencies = [
 
 [[package]]
 name = "clipmaster-pro"
-version = "0.1.0"
+version = "1.0.4"
 dependencies = [
  "async-trait",
  "chrono",

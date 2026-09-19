@@ -3,6 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::domain::model::{build_preview, ClipGroup, ClipboardItem};
+use crate::domain::normalize::strip_html_tags;
 use crate::domain::settings::AppSettings;
 
 #[derive(Debug, Clone, Serialize)]
@@ -23,9 +24,17 @@ pub struct ClipboardItemDto {
 impl From<ClipboardItem> for ClipboardItemDto {
     fn from(item: ClipboardItem) -> Self {
         use crate::domain::model::ContentType;
+        // 列表行的两行正文。HTML 用去标签后的纯文本（含空白折叠），
+        // 文件用文件名清单 —— 完整内容点开「查看全部」都能看到。
         let preview = match item.content_type {
             ContentType::Text => build_preview(&item.content_text),
             ContentType::Image => "[图片]".to_string(),
+            ContentType::Html => {
+                let plain: String =
+                    strip_html_tags(&item.content_text).split_whitespace().collect::<Vec<_>>().join(" ");
+                build_preview(&plain)
+            }
+            ContentType::Files => build_preview(&file_names_summary(&item.content_text)),
         };
         ClipboardItemDto {
             id: item.id.to_string(),
@@ -40,6 +49,21 @@ impl From<ClipboardItem> for ClipboardItemDto {
             source_url: item.source_url,
         }
     }
+}
+
+/// 文件条目的列表预览：只要文件名，不要整串路径（路径太长会把两行占满）。
+fn file_names_summary(files_text: &str) -> String {
+    files_text
+        .lines()
+        .filter(|path| !path.trim().is_empty())
+        .map(|path| {
+            std::path::Path::new(path)
+                .file_name()
+                .map(|name| name.to_string_lossy().to_string())
+                .unwrap_or_else(|| path.to_string())
+        })
+        .collect::<Vec<_>>()
+        .join("、")
 }
 
 #[derive(Debug, Deserialize)]

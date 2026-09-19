@@ -56,7 +56,8 @@ pub fn swap_shortcut(
     Ok(())
 }
 
-fn toggle_main_window(app_handle: &AppHandle) {
+/// 显隐主窗口的统一动作：全局快捷键与托盘「显示 / 隐藏主窗口」共用。
+pub(crate) fn toggle_main_window(app_handle: &AppHandle) {
     if let Some(window) = app_handle.get_webview_window("main") {
         if window.is_visible().unwrap_or(false) {
             let _ = window.hide();

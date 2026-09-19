@@ -130,11 +130,12 @@ export const HistoryItemRow = memo(function HistoryItemRow({
   }
 
   const isImage = item.content_type === "image";
+  const isFiles = item.content_type === "files";
   const domain = extractDomain(item.source_url);
   const appIcon = getAppIcon(item.source_app);
   const group = item.group_id ? groups.find((g) => g.id === item.group_id) : null;
 
-  // 真实的来源应用图标优先；取不到时才退回「图片类型 → 图片图标 / 文本类型 → emoji」。
+  // 真实的来源应用图标优先；取不到时才退回「图片类型 → 图片图标 / 文件类型 → 📁 / 其余 → emoji」。
   const iconUrl = iconSrc && iconSrc !== brokenIconSrc ? convertFileSrc(iconSrc) : null;
 
   return (
@@ -159,6 +160,8 @@ export const HistoryItemRow = memo(function HistoryItemRow({
           <img src={iconUrl} alt="" loading="lazy" onError={() => setBrokenIconSrc(iconSrc)} />
         ) : isImage ? (
           <Icon name="image" />
+        ) : isFiles ? (
+          <span aria-hidden>📁</span>
         ) : (
           <span>{appIcon}</span>
         )}
@@ -175,13 +178,13 @@ export const HistoryItemRow = memo(function HistoryItemRow({
           )}
         </div>
         {isImage ? (
+          /* 差异清单 #5：只留缩略图。「图片 / 点击即可粘贴原图」十条图片就是十遍废话。 */
           <div className="image-preview">
             {imageBroken ? (
               <span className="image-preview__fallback"><Icon name="image" /></span>
             ) : (
               <img src={convertFileSrc(item.content_text)} alt="剪贴板图片" loading="lazy" onError={() => setImageBroken(true)} />
             )}
-            <div><strong>图片</strong><span>点击即可粘贴原图</span></div>
           </div>
         ) : (
           <p className="history-card__text">
@@ -246,13 +249,13 @@ export const HistoryItemRow = memo(function HistoryItemRow({
                     onSetGroup(item.id, null);
                     closeMenu();
                   }}
-                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-neutral-500 hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                  className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] text-[var(--cm-fg-muted)] hover:bg-[var(--cm-hover)]"
                 >
                   移出分组
                 </button>
               )}
               {groups.length === 0 && (
-                <p className="px-3 py-1.5 text-[11px] text-neutral-400">
+                <p className="px-3 py-1.5 text-[11px] text-[var(--cm-fg-faint)]">
                   还没有分组，先在顶部「＋」里创建
                 </p>
               )}
@@ -264,10 +267,10 @@ export const HistoryItemRow = memo(function HistoryItemRow({
                     onSetGroup(item.id, g.id);
                     closeMenu();
                   }}
-                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-black/[0.04] dark:hover:bg-white/[0.06] ${
+                  className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-[11px] hover:bg-[var(--cm-hover)] ${
                     item.group_id === g.id
-                      ? "font-medium text-blue-500"
-                      : "text-neutral-700 dark:text-neutral-200"
+                      ? "font-medium text-[var(--cm-accent-text)]"
+                      : "text-[var(--cm-fg)]"
                   }`}
                 >
                   <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: g.color }} />

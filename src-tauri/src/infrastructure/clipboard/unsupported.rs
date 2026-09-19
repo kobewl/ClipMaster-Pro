@@ -33,4 +33,14 @@ impl ClipboardWriter for UnsupportedClipboardWriter {
             "当前平台的剪贴板写入尚未实现，0.01 Beta 只承诺 macOS".to_string(),
         ))
     }
+    fn write_html(&self, _html: &str) -> Result<(), ClipboardSourceError> {
+        Err(ClipboardSourceError::WriteFailed(
+            "当前平台的剪贴板写入尚未实现，0.01 Beta 只承诺 macOS".to_string(),
+        ))
+    }
+    fn write_files(&self, _paths: &[String]) -> Result<(), ClipboardSourceError> {
+        Err(ClipboardSourceError::WriteFailed(
+            "当前平台的剪贴板写入尚未实现，0.01 Beta 只承诺 macOS".to_string(),
+        ))
+    }
 }

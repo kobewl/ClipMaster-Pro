@@ -1,9 +1,14 @@
 import { useEffect, useRef, useState } from "react";
-import type { AppSettings } from "@/types/clipboard";
+import { getVersion } from "@tauri-apps/api/app";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { AppSettings, UpdateStatus } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
 import { ShortcutInput } from "./ShortcutInput";
 import { Icon } from "./Icon";
+
+/** 发现新版本时跳去这里下载（更新通道就绪前，「检查更新」也会提示这条路径）。 */
+const RELEASES_URL = "https://github.com/kobewl/ClipMaster-Pro/releases/latest";
 
 interface Props {
   open: boolean;
@@ -53,6 +58,12 @@ export function SettingsPanel({
   const [autostartSaving, setAutostartSaving] = useState(false);
   const [autostartError, setAutostartError] = useState<string | null>(null);
 
+  // 应用版本 + 检查更新。
+  const [appVersion, setAppVersion] = useState<string | null>(null);
+  const [updateStatus, setUpdateStatus] = useState<UpdateStatus | null>(null);
+  const [updateChecking, setUpdateChecking] = useState(false);
+  const [updateError, setUpdateError] = useState<string | null>(null);
+
   // 快捷键保存失败时要回滚成"当前真实生效的值"，用 ref 保证拿到的是最新的 props。
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -76,6 +87,8 @@ export function SettingsPanel({
       .getAutostartEnabled()
       .then(setAutostart)
       .catch(() => setAutostartError("读取开机自启状态失败"));
+    // 版本号不常变，读到一次就够；失败也不影响面板其它部分。
+    getVersion().then(setAppVersion).catch(() => {});
   }, [open]);
 
   if (!open) return null;
@@ -128,6 +141,21 @@ export function SettingsPanel({
     }
   }
 
+  /** 应用更新入口见 docs/release/RELEASE.md；更新源没配置时后端返回稳定的错误码。 */
+  async function handleCheckUpdates() {
+    setUpdateChecking(true);
+    setUpdateError(null);
+    setUpdateStatus(null);
+    try {
+      const status = await commands.checkForUpdates();
+      setUpdateStatus(status);
+    } catch (err: unknown) {
+      setUpdateError(isCommandError(err) ? err.message : "检查更新失败");
+    } finally {
+      setUpdateChecking(false);
+    }
+  }
+
   /**
    * 开机自启同样立即生效：它改的是系统里的登录项，不是本应用的配置。
    *
@@ -163,8 +191,8 @@ export function SettingsPanel({
         </div>
 
         <fieldset className="settings-section mt-4">
-          <legend className="px-1.5 text-[11px] font-medium text-neutral-400">数据保留</legend>
-          <label className="block text-xs text-neutral-500 dark:text-neutral-400">
+          <legend className="px-1.5 text-[11px] font-medium text-[var(--cm-fg-faint)]">数据保留</legend>
+          <label className="block text-xs text-[var(--cm-fg-muted)]">
             最大历史数量
             <input
               type="number"
@@ -184,14 +212,14 @@ export function SettingsPanel({
                   ),
                 )
               }
-              className="mt-1 w-full rounded-lg border border-black/[0.08] bg-transparent px-2.5 py-1.5 text-sm text-neutral-800 outline-none focus:border-blue-500/40 focus:ring-1 focus:ring-blue-500/20 dark:border-white/[0.1] dark:text-neutral-100"
+              className="mt-1 w-full rounded-lg border border-[var(--cm-line)] bg-transparent px-2.5 py-1.5 text-sm text-neutral-800 outline-none focus:border-[var(--cm-accent-ring)] focus:ring-1 focus:ring-[var(--cm-accent-ring)] dark:text-neutral-100"
             />
-            <span className="mt-1 block text-[10px] text-neutral-400">
+            <span className="mt-1 block text-[10px] text-[var(--cm-fg-faint)]">
               超出上限时自动清理最旧的记录
             </span>
           </label>
-          <label className="mt-3 block text-xs text-neutral-500 dark:text-neutral-400">
-            保留天数 <span className="text-[10px] text-neutral-400">（0 = 不按天清理）</span>
+          <label className="mt-3 block text-xs text-[var(--cm-fg-muted)]">
+            保留天数 <span className="text-[10px] text-[var(--cm-fg-faint)]">（0 = 不按天清理）</span>
             <input
               type="number"
               inputMode="numeric"
@@ -210,23 +238,23 @@ export function SettingsPanel({
                   ),
                 )
               }
-              className="mt-1 w-full rounded-lg border border-black/[0.08] bg-transparent px-2.5 py-1.5 text-sm text-neutral-800 outline-none focus:border-blue-500/40 focus:ring-1 focus:ring-blue-500/20 dark:border-white/[0.1] dark:text-neutral-100"
+              className="mt-1 w-full rounded-lg border border-[var(--cm-line)] bg-transparent px-2.5 py-1.5 text-sm text-neutral-800 outline-none focus:border-[var(--cm-accent-ring)] focus:ring-1 focus:ring-[var(--cm-accent-ring)] dark:text-neutral-100"
             />
           </label>
-          <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+          <label className="mt-3 flex cursor-pointer items-center gap-2 text-xs text-[var(--cm-fg-muted)]">
             <input
               type="checkbox"
               checked={captureEnabled}
               onChange={(event) => setCaptureEnabled(event.target.checked)}
-              className="accent-blue-500"
+              className="accent-[var(--cm-accent)]"
             />
             启用剪贴板采集
           </label>
         </fieldset>
 
         <fieldset className="settings-section mt-3">
-          <legend className="px-1.5 text-[11px] font-medium text-neutral-400">全局快捷键</legend>
-          <label className="block text-xs text-neutral-500 dark:text-neutral-400">
+          <legend className="px-1.5 text-[11px] font-medium text-[var(--cm-fg-faint)]">全局快捷键</legend>
+          <label className="block text-xs text-[var(--cm-fg-muted)]">
             显示/隐藏主窗口
             <ShortcutInput
               value={shortcut}
@@ -235,34 +263,78 @@ export function SettingsPanel({
               error={shortcutError}
             />
           </label>
-          <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
+          <p className="mt-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
             点击后按新组合即可修改 · 改完立即生效 · Delete 清除 · Esc 取消
           </p>
         </fieldset>
 
         <fieldset className="settings-section mt-3">
-          <legend className="px-1.5 text-[11px] font-medium text-neutral-400">系统</legend>
-          <label className="flex cursor-pointer items-center gap-2 text-xs text-neutral-500 dark:text-neutral-400">
+          <legend className="px-1.5 text-[11px] font-medium text-[var(--cm-fg-faint)]">系统</legend>
+          <label className="flex cursor-pointer items-center gap-2 text-xs text-[var(--cm-fg-muted)]">
             <input
               type="checkbox"
               checked={autostart ?? false}
               disabled={autostart === null || autostartSaving}
               onChange={(event) => handleAutostartToggle(event.target.checked)}
-              className="accent-blue-500 disabled:opacity-50"
+              className="accent-[var(--cm-accent)] disabled:opacity-50"
             />
             {autostartSaving ? "设置中…" : "开机时自动启动"}
           </label>
-          <p className="mt-2 text-[10px] leading-relaxed text-neutral-400">
+          <p className="mt-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
             {autostart === null && !autostartError
               ? "正在读取…"
               : "启动后安静地待在后台，不会弹出窗口；按全局快捷键随时唤起。"}
           </p>
           {autostartError && (
-            <p className="mt-1.5 text-[10px] leading-relaxed text-red-500">⚠ {autostartError}</p>
+            <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--cm-danger)]">⚠ {autostartError}</p>
+          )}
+
+          <div className="mt-3 flex items-center justify-between gap-2 border-t border-black/[0.06] pt-3 dark:border-white/[0.08]">
+            <div className="text-xs text-[var(--cm-fg-muted)]">
+              应用版本{" "}
+              <span className="tabular-nums text-[var(--cm-fg-faint)]">{appVersion ?? "…"}</span>
+            </div>
+            <button
+              type="button"
+              onClick={handleCheckUpdates}
+              disabled={updateChecking}
+              className="button button--secondary button--compact"
+            >
+              {updateChecking ? "检查中…" : "检查更新"}
+            </button>
+          </div>
+          {updateStatus && !updateStatus.update_available && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
+              已是最新版本 ✓
+            </p>
+          )}
+          {updateStatus?.update_available && (
+            <div className="mt-1.5 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-[10px] leading-relaxed text-[var(--cm-success)]">
+                  发现新版本 {updateStatus.latest_version}（当前 {updateStatus.current_version}）
+                </p>
+                <button
+                  type="button"
+                  onClick={() => openUrl(updateStatus.release_url ?? RELEASES_URL)}
+                  className="button button--primary button--compact"
+                >
+                  前往下载
+                </button>
+              </div>
+              {updateStatus.notes && (
+                <p className="line-clamp-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
+                  {updateStatus.notes.split("\n").find((line) => line.trim())?.trim()}
+                </p>
+              )}
+            </div>
+          )}
+          {updateError && (
+            <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">⚠ {updateError}</p>
           )}
         </fieldset>
 
-        {error && <p className="mt-2 text-xs text-red-500">⚠ {error}</p>}
+        {error && <p className="mt-2 text-xs text-[var(--cm-danger)]">⚠ {error}</p>}
 
         <div className="modal-footer">
           <button

@@ -21,25 +21,27 @@ export function GroupBar({
   return (
     <>
       <nav className="group-bar" aria-label="剪贴板分组">
-        <span className="group-bar__label">视图</span>
+        {/* 滚动区只装分组 chip；「管理」固定在右侧 —— 分组再多入口也永远在原地
+            （设计规范差异清单 #3、#4：去掉「视图」标签，它零信息量）。 */}
         <div className="scrollbar-thin group-bar__scroller">
-        <TabButton
-          active={activeGroupId === null}
-          onClick={() => onSelect(null)}
-          label="全部"
-          title="显示所有记录"
-        />
-        {groups.map((group) => (
           <TabButton
-            key={group.id}
-            active={activeGroupId === group.id}
-            onClick={() => onSelect(group.id)}
-            label={group.name}
-            color={group.color}
-            count={group.item_count}
-            title={`${group.name} · ${group.item_count} 条`}
+            active={activeGroupId === null}
+            onClick={() => onSelect(null)}
+            label="全部"
+            title="显示所有记录"
           />
-        ))}
+          {groups.map((group) => (
+            <TabButton
+              key={group.id}
+              active={activeGroupId === group.id}
+              onClick={() => onSelect(group.id)}
+              label={group.name}
+              color={group.color}
+              count={group.item_count}
+              title={`${group.name} · ${group.item_count} 条`}
+            />
+          ))}
+        </div>
         <button
           type="button"
           onClick={() => setManageOpen(true)}
@@ -50,7 +52,6 @@ export function GroupBar({
           <Icon name="plus" />
           <span>管理</span>
         </button>
-        </div>
       </nav>
 
       {manageOpen && (

@@ -202,7 +202,7 @@ export function HistoryList({
 
   if (loadState === "error" && items.length === 0) {
     return (
-      <div className="empty-state text-red-400">
+      <div className="empty-state text-[var(--cm-danger)]">
         <span className="empty-state__icon"><Icon name="alert" /></span>
         <strong>加载失败</strong>
         <span>请稍后再试</span>
@@ -241,7 +241,7 @@ export function HistoryList({
               className="list-divider"
             >
               <span className="shrink-0">未分组</span>
-              <span className="h-px flex-1 bg-black/[0.06] dark:bg-white/[0.08]" />
+              <span className="h-px flex-1 bg-[var(--cm-line)]" />
             </li>
           )}
           <HistoryItemRow
@@ -264,7 +264,7 @@ export function HistoryList({
       <li
         ref={sentinelRef}
         aria-hidden
-        className="px-3 py-2 text-center text-[11px] text-neutral-400"
+        className="px-3 py-2 text-center text-[11px] text-[var(--cm-fg-faint)]"
       >
         {loadingMore ? (
           <span className="animate-pulse">加载中…</span>
@@ -272,7 +272,7 @@ export function HistoryList({
           <button
             type="button"
             onClick={onLoadMore}
-            className="rounded px-2 py-0.5 transition-colors hover:bg-black/[0.04] hover:text-neutral-600 dark:hover:bg-white/[0.06]"
+            className="rounded px-2 py-0.5 transition-colors hover:bg-[var(--cm-hover)] hover:text-[var(--cm-fg-muted)] dark:hover:bg-white/[0.06]"
           >
             加载更多
           </button>
@@ -291,12 +291,12 @@ function ListSkeleton() {
       {Array.from({ length: 7 }, (_, index) => (
         <div key={index} className="flex flex-col gap-1.5 rounded-lg px-3 py-2">
           <div className="flex justify-between">
-            <span className="h-2.5 w-24 animate-pulse rounded bg-black/[0.06] dark:bg-white/[0.08]" />
-            <span className="h-2.5 w-12 animate-pulse rounded bg-black/[0.06] dark:bg-white/[0.08]" />
+            <span className="h-2.5 w-24 animate-pulse rounded bg-[var(--cm-line)]" />
+            <span className="h-2.5 w-12 animate-pulse rounded bg-[var(--cm-line)]" />
           </div>
-          <span className="h-3 w-full animate-pulse rounded bg-black/[0.05] dark:bg-white/[0.06]" />
+          <span className="h-3 w-full animate-pulse rounded bg-[var(--cm-hover)]" />
           <span
-            className="h-3 animate-pulse rounded bg-black/[0.05] dark:bg-white/[0.06]"
+            className="h-3 animate-pulse rounded bg-[var(--cm-hover)]"
             style={{ width: `${45 + ((index * 13) % 40)}%` }}
           />
         </div>

@@ -1,4 +1,4 @@
-export type ContentType = "text" | "image";
+export type ContentType = "text" | "image" | "html" | "files";
 
 export interface ClipboardItem {
   id: string;
@@ -45,6 +45,16 @@ export interface CommandError {
   message: string;
   retryable: boolean;
   details?: unknown;
+}
+
+/** 检查更新的结果（后端 check_for_updates 命令）。 */
+export interface UpdateStatus {
+  current_version: string;
+  update_available: boolean;
+  latest_version: string | null;
+  notes: string | null;
+  /** 最新 release 的 GitHub 页面地址，「前往下载」直接打开它。 */
+  release_url: string | null;
 }
 
 export function isCommandError(value: unknown): value is CommandError {

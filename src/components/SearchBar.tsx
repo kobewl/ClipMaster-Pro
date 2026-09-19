@@ -100,7 +100,12 @@ export function SearchBar({
             <Icon name="close" />
           </button>
         )}
-        <kbd>⌘ K</kbd>
+        {/* 两个独立键帽更像 macOS 原生控件（设计规范差异清单 #9）。
+            开始输入后由 CSS 换成「清空」按钮，右侧空间两者不共存。 */}
+        <span className="search-field__keys" aria-hidden>
+          <kbd>⌘</kbd>
+          <kbd>K</kbd>
+        </span>
       </div>
       <button
         type="button"

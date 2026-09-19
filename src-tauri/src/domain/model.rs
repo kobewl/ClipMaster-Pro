@@ -40,6 +40,10 @@ impl std::str::FromStr for ClipboardItemId {
 pub enum ContentType {
     Text,
     Image,
+    /// 富文本（HTML）。`content_text` 存原始 HTML；搜索与预览用去标签后的纯文本。
+    Html,
+    /// 一组文件引用（Finder 里 ⌘C 文件）。`content_text` 存各文件绝对路径，以 `\n` 分隔。
+    Files,
 }
 
 impl ContentType {
@@ -47,6 +51,8 @@ impl ContentType {
         match self {
             ContentType::Text => "text",
             ContentType::Image => "image",
+            ContentType::Html => "html",
+            ContentType::Files => "files",
         }
     }
 }
@@ -57,6 +63,8 @@ impl std::str::FromStr for ContentType {
         match s {
             "text" => Ok(ContentType::Text),
             "image" => Ok(ContentType::Image),
+            "html" => Ok(ContentType::Html),
+            "files" => Ok(ContentType::Files),
             other => Err(crate::domain::error::DomainError::InvalidContentType(
                 other.to_string(),
             )),

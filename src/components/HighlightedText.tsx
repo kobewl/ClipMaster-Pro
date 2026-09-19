@@ -78,10 +78,8 @@ export const HighlightedText = memo(function HighlightedText({
     <>
       {segments.map((segment, index) =>
         segment.hit ? (
-          <mark
-            key={index}
-            className="rounded-[3px] bg-amber-200/80 text-inherit dark:bg-amber-400/30 dark:text-amber-50"
-          >
+          // .hl 走语义令牌 --cm-highlight（浅色暖黄 / 深色低亮度），见 index.css
+          <mark key={index} className="hl">
             {segment.text}
           </mark>
         ) : (

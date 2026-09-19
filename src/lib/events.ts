@@ -41,3 +41,18 @@ export function onAppError(
 ): Promise<UnlistenFn> {
   return listen<AppErrorPayload>("app://error", (e) => handler(e.payload));
 }
+
+/**
+ * 托盘菜单（或其它后端入口）改了采集开关。
+ * 设置面板与状态栏据此同步显示 —— settings 表是唯一真相源，这里只是镜像。
+ */
+export function onCaptureChanged(
+  handler: (captureEnabled: boolean) => void,
+): Promise<UnlistenFn> {
+  return listen<boolean>("settings://capture-changed", (e) => handler(e.payload));
+}
+
+/** 托盘「打开设置」：后端已把窗口拉起并聚焦，前端只负责打开面板。 */
+export function onOpenSettings(handler: () => void): Promise<UnlistenFn> {
+  return listen("ui://open-settings", () => handler());
+}

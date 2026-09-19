@@ -5,6 +5,7 @@ import type {
   ClipboardItem,
   ListQuery,
   ListResult,
+  UpdateStatus,
 } from "@/types/clipboard";
 
 export const commands = {
@@ -77,6 +78,12 @@ export const commands = {
   },
   setAutostartEnabled(enabled: boolean): Promise<void> {
     return invoke("set_autostart_enabled", { enabled });
+  },
+
+  // 更新
+  /** 检查应用更新。更新源未配置时后端返回 `update_source_not_configured` 错误码。 */
+  checkForUpdates(): Promise<UpdateStatus> {
+    return invoke("check_for_updates");
   },
 };
 

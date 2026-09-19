@@ -8,7 +8,9 @@ use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
 use crate::application::settings_service::SettingsService;
+use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
+use crate::domain::settings::AppSettings;
 use crate::infrastructure::sqlite::group_repository::SqliteGroupRepository;
 use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
 use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
@@ -35,11 +37,36 @@ impl AppRuntime {
         self.settings_store.as_ref()
     }
 
+    /// 采集开关的**唯一写入路径**。设置面板保存、状态栏点击、托盘菜单
+    /// 三条入口都汇到这里：settings 表是唯一真相源，pipeline 的原子标记、
+    /// 前端状态栏、托盘菜单文案都是它的镜像（由 [`sync_capture_side_effects`]
+    /// 统一刷新，任何一条路单独改镜像都会造成显示分叉）。
+    pub async fn set_capture_enabled(
+        &self,
+        app: &AppHandle,
+        enabled: bool,
+    ) -> Result<AppSettings, AppError> {
+        let updated = self.settings.set_capture_enabled(enabled).await?;
+        sync_capture_side_effects(app, self, updated.capture_enabled);
+        Ok(updated)
+    }
+
     pub fn shutdown(&self) {
         if let Ok(mut pipeline) = self.capture_pipeline.lock() {
             pipeline.stop();
         }
     }
+}
+
+/// 采集开关落库后的全部联动：pipeline 内存投影、前端事件、托盘菜单文案。
+pub fn sync_capture_side_effects(app: &AppHandle, runtime: &AppRuntime, capture_enabled: bool) {
+    if let Ok(pipeline) = runtime.capture_pipeline.lock() {
+        pipeline.set_enabled(capture_enabled);
+    }
+    if let Err(err) = app.emit("settings://capture-changed", capture_enabled) {
+        tracing::warn!(error = %err, "发送 settings://capture-changed 事件失败");
+    }
+    crate::lifecycle::tray::update_capture_menu_item(app, capture_enabled);
 }
 
 pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {

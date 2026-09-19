@@ -1,30 +1,30 @@
+// `?no-inline` 强制 Vite 把 SVG 落盘为独立文件而不是内联成 data: URI ——
+// CSP 的 img-src 白名单没有 data:，内联版在 release 包里会被整个拦掉（白方块）。
+import logoUrl from "@/assets/clipmaster-logo.svg?no-inline";
+
 interface BrandMarkProps {
   className?: string;
   title?: string;
 }
 
-/** ClipMaster Pro 的可缩放品牌标记：剪贴板轮廓 + 向前流动的双轨。 */
-export function BrandMark({ className = "h-8 w-8", title }: BrandMarkProps) {
+/**
+ * ClipMaster Pro 定稿 Logo（docs/design/README.md 第七节）。
+ *
+ * 用 `<img>` 引入整份 SVG 而不是内联 path：Logo 的「好看」来自材质
+ * （柔光渐变、纸张投影、1.25px 边缘高光，全是 SVG filter），
+ * 内联到 React 里改不动也保不住；交给渲染器按原样画。
+ *
+ * ≥22px 用完整版（依赖 filter）；≤24px 的场景（托盘、菜单栏）
+ * 应改用剪影版 `clipmaster-logo-small.svg` —— 目前界面里只有头部这一处。
+ */
+export function BrandMark({ className = "brand-mark", title }: BrandMarkProps) {
   return (
-    <svg
+    <img
+      src={logoUrl}
       className={className}
-      viewBox="0 0 48 48"
-      fill="none"
-      role={title ? "img" : undefined}
-      aria-hidden={title ? undefined : true}
-    >
-      {title && <title>{title}</title>}
-      <rect width="48" height="48" rx="14" fill="#5B5FEF" />
-      <path
-        d="M17 14.75A3.75 3.75 0 0 1 20.75 11h6.5A3.75 3.75 0 0 1 31 14.75V17h1.25A3.75 3.75 0 0 1 36 20.75v12.5A3.75 3.75 0 0 1 32.25 37h-16.5A3.75 3.75 0 0 1 12 33.25v-12.5A3.75 3.75 0 0 1 15.75 17H17v-2.25Z"
-        fill="white"
-        fillOpacity=".98"
-      />
-      <rect x="19" y="13" width="10" height="6" rx="3" fill="#C9CBFF" />
-      <path
-        d="M17.5 25.25h10.1l-2.15-2.15 2.05-2.05 5.65 5.65-5.65 5.65-2.05-2.05 2.15-2.15H17.5v-2.9Z"
-        fill="#20C7A6"
-      />
-    </svg>
+      alt={title ?? "ClipMaster Pro"}
+      title={title}
+      draggable={false}
+    />
   );
 }

@@ -98,31 +98,31 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
                           if (event.key === "Enter") handleUpdate(group.id);
                           if (event.key === "Escape") setEditId(null);
                         }}
-                        className="min-w-0 flex-1 rounded border border-black/10 bg-transparent px-1.5 py-0.5 text-xs outline-none focus:border-blue-500/40 dark:border-white/10"
+                        className="min-w-0 flex-1 rounded border border-[var(--cm-line)] bg-transparent px-1.5 py-0.5 text-xs outline-none focus:border-[var(--cm-accent-ring)] dark:border-white/10"
                         autoFocus
                       />
                       <button
                         type="button"
                         onClick={() => handleUpdate(group.id)}
                         disabled={busy || !editName.trim()}
-                        className="text-[10px] text-blue-500 hover:text-blue-600 disabled:opacity-40"
+                        className="text-[10px] text-[var(--cm-accent-text)] hover:text-blue-600 disabled:opacity-40"
                       >
                         保存
                       </button>
                       <button
                         type="button"
                         onClick={() => setEditId(null)}
-                        className="text-[10px] text-neutral-400 hover:text-neutral-600"
+                        className="text-[10px] text-[var(--cm-fg-faint)] hover:text-[var(--cm-fg-muted)]"
                       >
                         取消
                       </button>
                     </>
                   ) : (
                     <>
-                      <span className="min-w-0 flex-1 truncate text-xs text-neutral-700 dark:text-neutral-200">
+                      <span className="min-w-0 flex-1 truncate text-xs text-[var(--cm-fg)]">
                         {group.name}
                       </span>
-                      <span className="text-[10px] tabular-nums text-neutral-400">
+                      <span className="text-[10px] tabular-nums text-[var(--cm-fg-faint)]">
                         {group.item_count}
                       </span>
                       <button
@@ -133,7 +133,7 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
                           setEditName(group.name);
                           setEditColor(group.color);
                         }}
-                        className="text-[10px] text-neutral-400 transition-colors hover:text-neutral-600"
+                        className="text-[10px] text-[var(--cm-fg-faint)] transition-colors hover:text-[var(--cm-fg-muted)]"
                       >
                         编辑
                       </button>
@@ -141,7 +141,7 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
                         type="button"
                         onClick={() => setConfirmDeleteId(confirming ? null : group.id)}
                         className={`text-[10px] transition-colors ${
-                          confirming ? "text-red-600" : "text-red-400 hover:text-red-600"
+                          confirming ? "text-red-600" : "text-[var(--cm-danger)] hover:text-red-600"
                         }`}
                       >
                         删除
@@ -156,15 +156,15 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
                 )}
 
                 {confirming && (
-                  <div className="cm-fade-in mt-1.5 rounded-md bg-red-50 p-1.5 dark:bg-red-900/20">
-                    <p className="text-[10px] leading-relaxed text-red-600 dark:text-red-400">
+                  <div className="cm-fade-in mt-1.5 rounded-md p-1.5 ">
+                    <p className="text-[10px] leading-relaxed text-red-600 dark:text-[var(--cm-danger)]">
                       删除后 {group.item_count} 条记录会变成「未分组」，记录本身不会被删除。
                     </p>
                     <div className="mt-1 flex justify-end gap-1.5">
                       <button
                         type="button"
                         onClick={() => setConfirmDeleteId(null)}
-                        className="rounded px-1.5 py-0.5 text-[10px] text-neutral-500 hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
+                        className="rounded px-1.5 py-0.5 text-[10px] text-[var(--cm-fg-muted)] hover:bg-black/[0.05] dark:hover:bg-white/[0.08]"
                       >
                         取消
                       </button>
@@ -172,7 +172,7 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
                         type="button"
                         onClick={() => handleDelete(group.id)}
                         disabled={busy}
-                        className="rounded bg-red-500 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-red-600 disabled:opacity-40"
+                        className="rounded bg-[var(--cm-danger)] px-1.5 py-0.5 text-[10px] font-medium text-white hover:brightness-110 disabled:opacity-40"
                       >
                         确认删除
                       </button>
@@ -183,14 +183,14 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
             );
           })}
           {groups.length === 0 && (
-            <p className="py-3 text-center text-xs text-neutral-400">
+            <p className="py-3 text-center text-xs text-[var(--cm-fg-faint)]">
               还没有分组，在下面新建一个
             </p>
           )}
         </div>
 
         {/* 新建 */}
-        <div className="mt-3 rounded-lg border border-dashed border-black/10 p-2 dark:border-white/10">
+        <div className="mt-3 rounded-lg border border-dashed border-[var(--cm-line)] p-2 dark:border-white/10">
           <div className="flex items-center gap-2">
             <span
               className="h-3 w-3 shrink-0 rounded-full"
@@ -204,13 +204,13 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
                 if (event.key === "Enter") handleCreate();
               }}
               placeholder="新分组名称，例如：工作"
-              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-neutral-400"
+              className="min-w-0 flex-1 bg-transparent text-xs outline-none placeholder:text-[var(--cm-fg-faint)]"
             />
             <button
               type="button"
               onClick={handleCreate}
               disabled={busy || !newName.trim()}
-              className="rounded-md bg-blue-500 px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-blue-600 disabled:opacity-40"
+              className="rounded-md bg-[var(--cm-accent)] px-2.5 py-1 text-[10px] font-medium text-white transition-colors hover:bg-[var(--cm-accent-text)] disabled:opacity-40"
             >
               添加
             </button>
@@ -218,7 +218,7 @@ export function GroupDialog({ groups, onClose, onChanged }: GroupDialogProps) {
           <ColorSwatches value={newColor} onChange={setNewColor} />
         </div>
 
-        {error && <p className="mt-2 text-xs text-red-500">⚠ {error}</p>}
+        {error && <p className="mt-2 text-xs text-[var(--cm-danger)]">⚠ {error}</p>}
 
         <div className="modal-footer">
           <button
@@ -251,7 +251,7 @@ function ColorSwatches({
           aria-pressed={color === value}
           onClick={() => onChange(color)}
           className={`h-4 w-4 rounded-full transition-transform hover:scale-110 ${
-            color === value ? "ring-2 ring-blue-500 ring-offset-1 dark:ring-offset-neutral-800" : ""
+            color === value ? "ring-2 ring-[var(--cm-accent)] ring-offset-1" : ""
           }`}
           style={{ backgroundColor: color }}
         />

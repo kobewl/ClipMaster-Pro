@@ -125,4 +125,9 @@ pub trait ClipboardSource: Send {
 pub trait ClipboardWriter: Send + Sync {
     fn write_text(&self, content: &str) -> Result<(), ClipboardSourceError>;
     fn write_image(&self, image_path: &str) -> Result<(), ClipboardSourceError>;
+    /// 写入富文本。实现方应**同时**写入对应的纯文本兜底，
+    /// 保证只认纯文本的目标应用也能粘贴出内容。
+    fn write_html(&self, html: &str) -> Result<(), ClipboardSourceError>;
+    /// 写入一组文件引用（Finder 语义）。`paths` 为绝对路径列表。
+    fn write_files(&self, paths: &[String]) -> Result<(), ClipboardSourceError>;
 }

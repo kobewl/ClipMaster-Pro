@@ -39,13 +39,13 @@ export function ConfirmDialog({
         <span className="confirm-card__icon"><Icon name="trash" /></span>
         <h2
           id="confirm-dialog-title"
-          className="text-sm font-semibold text-neutral-800 dark:text-neutral-100"
+          className="text-sm font-semibold text-[var(--cm-fg)]"
         >
           {title}
         </h2>
         <p
           id="confirm-dialog-description"
-          className="mt-2 text-xs leading-relaxed text-neutral-500 dark:text-neutral-400"
+          className="mt-2 text-xs leading-relaxed text-[var(--cm-fg-muted)]"
         >
           {description}
         </p>

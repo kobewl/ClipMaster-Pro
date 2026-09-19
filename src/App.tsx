@@ -10,6 +10,7 @@ import { PreviewDialog } from "@/components/PreviewDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
+import { useTrayEvents } from "@/hooks/useTrayEvents";
 import { commands } from "@/lib/commands";
 import { mergeSelectedItems } from "@/lib/mergeItems";
 import { getSourceIconPath } from "@/lib/sourceIcons";
@@ -57,6 +58,14 @@ export default function App() {
   useEffect(() => {
     commands.getSettings().then(setSettings).catch(() => {});
   }, []);
+
+  // 托盘菜单 → 界面联动：采集开关变化（含托盘自己切的）同步到状态栏与
+  // 设置面板；「打开设置」时窗口已被后端拉起并聚焦，这里只负责开面板。
+  useTrayEvents({
+    onCaptureChanged: (capture_enabled) =>
+      setSettings((prev) => (prev ? { ...prev, capture_enabled } : prev)),
+    onOpenSettings: () => setSettingsOpen(true),
+  });
 
   // 选中的分组被删掉时，自动退回「全部」，否则会停在一个永远为空的列表上。
   useEffect(() => {
@@ -163,17 +172,17 @@ export default function App() {
   }, [items]);
 
   /**
-   * 合并选中的内容：跳过图片，按列表顺序拼接。
+   * 合并选中的内容：只拼文本条目，图片 / HTML / 文件按规则跳过。
    *
-   * `skipped` 不直接用 —— 界面上的提示是「选中里有图片就会被跳过」，
-   * 而不是「跳过了 N 张」，所以只需要知道有没有。
+   * `skipped` 不直接用 —— 界面上的提示是「选了非文本内容就会被跳过」，
+   * 而不是「跳过了 N 条」，所以只需要知道有没有。
    */
   const merged = useMemo(() => {
     if (!multiSelect || selectedIds.size === 0) {
-      return { text: "", hasImages: false };
+      return { text: "", hasNonText: false };
     }
     const result = mergeSelectedItems(items, selectedIds);
-    return { text: result.text, hasImages: result.skipped > 0 };
+    return { text: result.text, hasNonText: result.skipped > 0 };
   }, [items, selectedIds, multiSelect]);
 
   const canMerge = merged.text.length > 0;
@@ -318,14 +327,14 @@ export default function App() {
         />
 
       {errorMessage && (
-        <div className="flex items-center gap-1.5 bg-red-50 px-3 py-1 text-[11px] text-red-600 dark:bg-red-900/20 dark:text-red-400">
+        <div className="flex items-center gap-1.5 bg-[color-mix(in_srgb,var(--cm-danger)_9%,transparent)] px-3 py-1 text-[11px] text-[var(--cm-danger)]">
           <span>⚠</span>
           <span className="min-w-0 flex-1 truncate">{errorMessage}</span>
           <button
             type="button"
             onClick={clearError}
             aria-label="关闭提示"
-            className="shrink-0 rounded px-1 leading-none transition-colors hover:bg-red-500/10"
+            className="shrink-0 rounded px-1 leading-none transition-colors hover:bg-[color-mix(in_srgb,var(--cm-danger)_12%,transparent)]"
           >
             ✕
           </button>
@@ -362,7 +371,7 @@ export default function App() {
           multiSelect={multiSelect}
           selectedCount={selectedIds.size}
           selectedChars={merged.text.length}
-          hasImagesSelected={merged.hasImages}
+          hasNonTextSelected={merged.hasNonText}
           canMerge={canMerge}
           onEnterMultiSelect={() => enterMultiSelect()}
           onCancelMultiSelect={exitMultiSelect}
@@ -375,7 +384,7 @@ export default function App() {
         <div
           role="status"
           aria-live="polite"
-          className={`cm-fade-in pointer-events-none fixed bottom-10 left-1/2 max-w-[min(560px,calc(100%-32px))] -translate-x-1/2 rounded-2xl bg-neutral-800/90 px-4 py-2 text-center text-xs font-medium leading-relaxed text-white shadow-lg backdrop-blur-sm transition-all duration-200 dark:bg-neutral-200/90 dark:text-neutral-900 ${
+          className={`cm-fade-in pointer-events-none fixed bottom-10 left-1/2 max-w-[min(560px,calc(100%-32px))] -translate-x-1/2 rounded-2xl px-4 py-2 text-center text-xs font-medium leading-relaxed text-[var(--cm-fg)] shadow-lg backdrop-blur-sm transition-all duration-200 ${
             toastVisible ? "translate-y-0 opacity-100" : "translate-y-2 opacity-0"
           }`}
         >

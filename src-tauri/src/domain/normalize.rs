@@ -48,6 +48,30 @@ pub fn build_search_text(content: &str) -> String {
     content.to_lowercase()
 }
 
+/// 去掉 HTML 标签，留下纯文本。
+///
+/// 用于富文本条目的**搜索**与**列表预览** —— 标签本身（`<div>`、`style=`）不是
+/// 用户想搜也不想看的内容。只做单遍状态机扫描，不是完整的 HTML 解析：
+/// 对搜索/预览这个用途，正确处理 `<`、`>` 的开合就够了，注释和 script 内容
+/// 理论上会残留，但剪贴板里的 HTML 来自正文复制，这种脏数据可以接受。
+///
+/// **安全边界**：这个函数的输出**只用于** search_text 和纯文本预览，
+/// 永远不用于把 HTML 渲染回页面 —— 展示侧的消毒由前端 DOMPurify 负责，
+/// 两边职责不同，不能互相替代。
+pub fn strip_html_tags(html: &str) -> String {
+    let mut out = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => in_tag = false,
+            ch if !in_tag => out.push(ch),
+            _ => {}
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,5 +93,23 @@ mod tests {
     #[test]
     fn search_text_is_case_insensitive_ready() {
         assert_eq!(build_search_text("HeLLo"), "hello");
+    }
+
+    #[test]
+    fn strip_html_removes_tags_keeps_text() {
+        let html = "<meta charset='utf-8'><p style=\"color:red\">剪贴板<b>管理</b></p>";
+        assert_eq!(strip_html_tags(html), "剪贴板管理");
+    }
+
+    #[test]
+    fn strip_html_survives_unclosed_tag() {
+        // 现实里会有被截断的 HTML；不能因为一个没闭合的 < 就把整段丢掉。
+        assert_eq!(strip_html_tags("正文一<b"), "正文一");
+        assert_eq!(strip_html_tags("正文二<div>正文三"), "正文二正文三");
+    }
+
+    #[test]
+    fn strip_html_plain_text_is_unchanged() {
+        assert_eq!(strip_html_tags("没有任何标签"), "没有任何标签");
     }
 }

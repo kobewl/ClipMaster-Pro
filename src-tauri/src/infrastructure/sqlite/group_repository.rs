@@ -139,7 +139,7 @@ impl GroupRepository for SqliteGroupRepository {
                  LEFT JOIN clipboard_items ci ON ci.group_id = g.id
                  WHERE g.id = ?1
                  GROUP BY g.id",
-                params![&name], // re-use the id from the closure
+                params![&id],
                 Self::row_to_group,
             )
             .map_err(|_| {

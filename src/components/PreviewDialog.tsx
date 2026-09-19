@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
+import DOMPurify from "dompurify";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { ClipboardItem } from "@/types/clipboard";
 import { extractDomain, getAppIcon } from "@/lib/sourceIcons";
 import { Icon } from "./Icon";
@@ -25,6 +27,31 @@ function formatFullTime(iso: string): string {
   });
 }
 
+/** 文件条目的 content_text 约定：绝对路径列表，用 \n 分隔（与后端一致）。 */
+function splitFiles(filesText: string): string[] {
+  return filesText.split("\n").map((path) => path.trim()).filter(Boolean);
+}
+
+function fileNameOf(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index >= 0 ? path.slice(index + 1) : path;
+}
+
+function parentDirOf(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : "";
+}
+
+/**
+ * 取 HTML 的纯文本正文字数。走一次 DOM 解析（先消毒再量），
+ * 不用正则数标签 —— 精确字符数对「共 N 字」这个口径是底线。
+ */
+function htmlPlainLength(html: string): number {
+  const template = document.createElement("template");
+  template.innerHTML = DOMPurify.sanitize(html);
+  return (template.content.textContent ?? "").replace(/\s+/g, "").length;
+}
+
 /**
  * 「查看全部内容」弹窗。
  *
@@ -43,15 +70,48 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
   const meta = useMemo(() => {
     if (!item) return null;
     const isImage = item.content_type === "image";
-    // 字数只对文本有意义；图片报「图片」两个字就够了。
-    const size = isImage ? "图片" : `共 ${item.content_text.length} 字`;
+    const isHtml = item.content_type === "html";
+    const isFiles = item.content_type === "files";
+    // 字数只对文本有意义；图片报「图片」，文件报个数，HTML 报去标签后的正文字数。
+    const size = isImage
+      ? "图片"
+      : isFiles
+        ? `${splitFiles(item.content_text).length} 个文件`
+        : isHtml
+          ? `共 ${htmlPlainLength(item.content_text)} 字`
+          : `共 ${item.content_text.length} 字`;
     return {
       isImage,
+      isHtml,
+      isFiles,
       source: extractDomain(item.source_url) ?? item.source_app ?? "未知来源",
       time: formatFullTime(item.last_copied_at),
       size,
     };
   }, [item]);
+
+  /**
+   * 富文本**只在展示这一刻**消毒（DOMPurify 默认白名单，脚本/事件属性全剥掉）。
+   * 数据库里的 content_text 永远是原文 —— 回写剪贴板时粘出去的仍是带格式的内容，
+   * 消毒只对「渲染进界面」这一步负责，安全边界清晰。
+   */
+  const sanitizedHtml = useMemo(
+    () => (meta?.isHtml ? DOMPurify.sanitize(item?.content_text ?? "") : null),
+    [meta?.isHtml, item],
+  );
+
+  const filePaths = useMemo(
+    () => (meta?.isFiles && item ? splitFiles(item.content_text) : []),
+    [meta?.isFiles, item],
+  );
+
+  async function handleReveal(path: string) {
+    try {
+      await revealItemInDir(path);
+    } catch {
+      // 打不开 Finder 不致命：路径本身在界面上可见，用户能自己去找。
+    }
+  }
 
   if (!item || !meta) return null;
 
@@ -99,6 +159,36 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
           <div className="preview-image-wrap">
             <ImageZoom src={convertFileSrc(item.content_text)} alt="剪贴板图片" />
           </div>
+        ) : meta.isFiles ? (
+          <div ref={bodyRef} className="preview-body scrollbar-thin">
+            <ul className="file-list">
+              {filePaths.map((path) => (
+                <li key={path} className="file-list__row">
+                  <span className="file-list__icon" aria-hidden>📄</span>
+                  <div className="file-list__text">
+                    <span className="file-list__name">{fileNameOf(path)}</span>
+                    <span className="file-list__dir">{parentDirOf(path)}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void handleReveal(path)}
+                    className="button button--secondary button--compact"
+                    title="在 Finder 中显示该文件"
+                  >
+                    显示
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : meta.isHtml ? (
+          <div ref={bodyRef} className="preview-body scrollbar-thin">
+            <div
+              className="preview-body__html"
+              // sanitizedHtml 已过 DOMPurify 白名单；渲染原文在这里永远不出现。
+              dangerouslySetInnerHTML={{ __html: sanitizedHtml ?? "" }}
+            />
+          </div>
         ) : (
           <div ref={bodyRef} className="preview-body scrollbar-thin">
             <p className="preview-body__text">{item.content_text}</p>
@@ -107,7 +197,14 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
 
         <footer className="preview-foot">
           <span className="preview-foot__hint">
-            {meta.isImage ? "点图片可放大 · ⌘ 滚轮缩放" : "可以直接拖选文字"} · <kbd>Esc</kbd> 关闭
+            {meta.isImage
+              ? "点图片可放大 · ⌘ 滚轮缩放"
+              : meta.isHtml
+                ? "富文本预览（消毒后渲染）· 可拖选"
+                : meta.isFiles
+                  ? "点「显示」在 Finder 中定位文件"
+                  : "可以直接拖选文字"}{" "}
+            · <kbd>Esc</kbd> 关闭
           </span>
           <div className="preview-foot__actions">
             <button

@@ -12,11 +12,11 @@ interface StatusBarProps {
   multiSelect: boolean;
   /** 已勾选条数。 */
   selectedCount: number;
-  /** 勾选内容合并后的字符数（跳过图片）。 */
+  /** 勾选内容合并后的字符数（跳过非文本条目）。 */
   selectedChars: number;
-  /** 勾选的条目里有图片（合并时会跳过，要说一声）。 */
-  hasImagesSelected: boolean;
-  /** 全是图片 → 合并出来是空文本，复制/粘贴都不可用。 */
+  /** 勾选的条目里有非文本内容（图片 / HTML / 文件，合并时会跳过，要说一声）。 */
+  hasNonTextSelected: boolean;
+  /** 全是非文本 → 合并出来是空文本，复制/粘贴都不可用。 */
   canMerge: boolean;
   onEnterMultiSelect: () => void;
   onCancelMultiSelect: () => void;
@@ -43,7 +43,7 @@ export function StatusBar({
   multiSelect,
   selectedCount,
   selectedChars,
-  hasImagesSelected,
+  hasNonTextSelected,
   canMerge,
   onEnterMultiSelect,
   onCancelMultiSelect,
@@ -62,10 +62,10 @@ export function StatusBar({
               <span className="tabular-nums">共 {selectedChars} 字</span>
             </>
           )}
-          {hasImagesSelected && (
+          {hasNonTextSelected && (
             <>
               <span className="batch-sep">·</span>
-              <span className="batch-note">图片会被跳过</span>
+              <span className="batch-note">非文本内容会被跳过</span>
             </>
           )}
         </div>
@@ -77,7 +77,7 @@ export function StatusBar({
             type="button"
             onClick={onCopyMerged}
             disabled={!canMerge}
-            title={canMerge ? "合并后复制到剪贴板" : "选中的都是图片，没法合并成文本"}
+            title={canMerge ? "合并后复制到剪贴板" : "选中的都是非文本内容，没法合并成文本"}
             className="button button--secondary button--compact"
           >
             复制
@@ -86,7 +86,7 @@ export function StatusBar({
             type="button"
             onClick={onPasteMerged}
             disabled={!canMerge}
-            title={canMerge ? "合并后直接粘贴到刚才的应用" : "选中的都是图片，没法合并成文本"}
+            title={canMerge ? "合并后直接粘贴到刚才的应用" : "选中的都是非文本内容，没法合并成文本"}
             className="button button--primary button--compact"
           >
             粘贴
@@ -104,12 +104,11 @@ export function StatusBar({
         title={captureEnabled ? "点击暂停采集" : "点击恢复采集"}
         className="capture-status"
       >
-        <span
-          className={`inline-block h-1.5 w-1.5 rounded-full transition-colors ${
-            captureEnabled ? "bg-emerald-500" : "bg-neutral-300 dark:bg-neutral-600"
-          }`}
-        />
-        <span>{captureEnabled ? "正在采集" : "已暂停"}</span>
+        {/* 采集状态：绿点带光晕 + 绿字；暂停变灰。暂停是正常状态，不用红色（规范 5.5）。 */}
+        <span className={`status-dot ${captureEnabled ? "status-dot--live" : "status-dot--paused"}`} />
+        <span className={`status-label ${captureEnabled ? "status-label--live" : ""}`}>
+          {captureEnabled ? "正在采集" : "已暂停"}
+        </span>
         <span className="status-separator" />
         共 {total} 条
         {loaded < total && ` · 已显示 ${loaded}`}

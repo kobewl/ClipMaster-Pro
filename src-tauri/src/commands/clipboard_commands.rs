@@ -272,13 +272,14 @@ pub async fn get_settings(
 
 #[tauri::command]
 pub async fn update_settings(
+    app: AppHandle,
     runtime: State<'_, AppRuntime>,
     settings: AppSettingsDto,
 ) -> Result<AppSettingsDto, CommandError> {
     let updated = runtime.settings.update(settings.into()).await.map_err(CommandError::from)?;
-    if let Ok(pipeline) = runtime.capture_pipeline.lock() {
-        pipeline.set_enabled(updated.capture_enabled);
-    }
+    // 保存的设置里也可能带着新的采集开关 —— 与其它入口走同一条联动，
+    // 否则只在这里改开关时，前端状态栏和托盘菜单都不会刷新。
+    crate::lifecycle::runtime::sync_capture_side_effects(&app, &runtime, updated.capture_enabled);
     Ok(AppSettingsDto::from(updated))
 }
 
@@ -298,12 +299,15 @@ pub async fn update_shortcut(
 
 #[tauri::command]
 pub async fn set_capture_enabled(
+    app: AppHandle,
     runtime: State<'_, AppRuntime>,
     enabled: bool,
 ) -> Result<AppSettingsDto, CommandError> {
-    let updated = runtime.settings.set_capture_enabled(enabled).await.map_err(CommandError::from)?;
-    if let Ok(pipeline) = runtime.capture_pipeline.lock() {
-        pipeline.set_enabled(updated.capture_enabled);
-    }
+    // 唯一写入路径在 AppRuntime::set_capture_enabled：设置面板、状态栏、托盘
+    // 三个入口共用，pipeline 投影 / 前端事件 / 托盘文案在这里统一联动。
+    let updated = runtime
+        .set_capture_enabled(&app, enabled)
+        .await
+        .map_err(CommandError::from)?;
     Ok(AppSettingsDto::from(updated))
 }

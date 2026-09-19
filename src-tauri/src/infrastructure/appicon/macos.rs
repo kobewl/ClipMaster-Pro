@@ -1,7 +1,9 @@
-//! AppKit 相关的三件事：渲染应用真实图标、模拟 ⌘V、把焦点还给上一个应用。
+//! AppKit 相关的四件事：渲染应用真实图标、模拟 ⌘V、把焦点还给上一个应用、
+//! 取前台应用的显示名。
 //!
 //! 图标渲染由调用方通过 `AppHandle::run_on_main_thread` 调度到主线程执行，
-//! 避免 AppKit 在后台线程上出问题。
+//! 避免 AppKit 在后台线程上出问题；前台应用名走的是官方标注线程安全的
+//! `NSRunningApplication` 属性读取，可以在剪贴板 watcher 线程直接调用。
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -230,6 +232,26 @@ pub fn record_frontmost_app() {
 
 fn frontmost_application() -> Option<Retained<NSRunningApplication>> {
     NSWorkspace::sharedWorkspace().frontmostApplication()
+}
+
+/// 前台应用的显示名（AppKit 的 localizedName，如 "IntelliJ IDEA"、"Safari"）。
+///
+/// 剪贴板 watcher 线程直接调用：`NSRunningApplication` 的属性被苹果官方
+/// 头文件明确标注为线程安全（"properties are returned atomically"，
+/// 见 NSRunningApplication.h 第 56 行），不需要子进程，也不依赖
+/// 「自动化」权限 —— 旧 osascript 路径每次复制要付 40ms+ 的子进程底价，
+/// 且 System Events 授权被拒后来源永远是空。
+///
+/// 注意：System Events 报的是**进程名**（`idea`），这里给的是**显示名**
+/// （`IntelliJ IDEA`）。图标匹配两条都认（见 `find_running_app_path` 同时比对
+/// localizedName 与可执行文件名），前端 emoji 兜底表也按显示名匹配，
+/// 显示名反而与 `.app` 目录名一致，是更稳的标识。
+///
+/// 失败返回 None，调用方按「无来源」记录，采集不受影响。
+pub fn frontmost_app_display_name() -> Option<String> {
+    let app = frontmost_application()?;
+    let name = app.localizedName()?.to_string();
+    if name.is_empty() { None } else { Some(name) }
 }
 
 fn frontmost_bundle_id() -> Option<String> {

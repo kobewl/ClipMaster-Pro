@@ -35,6 +35,12 @@ impl HistoryService {
             ContentType::Image => {
                 self.capture_image(event.content_text, event.source_app, event.source_url).await
             }
+            ContentType::Html => {
+                self.capture_html(event.content_text, event.source_app, event.source_url).await
+            }
+            ContentType::Files => {
+                self.capture_files(event.content_text, event.source_app, event.source_url).await
+            }
         }
     }
 
@@ -85,6 +91,70 @@ impl HistoryService {
         let item = self.repository.insert_or_touch(NewClipboardItem {
             content_type: ContentType::Image,
             content_text: image_path,
+            fingerprint,
+            source_app,
+            source_url,
+        }).await?;
+
+        self.run_cleanup_after_capture().await?;
+        Ok(item)
+    }
+
+    /// 收一条富文本（HTML）。`content_text` 存**原始 HTML**；
+    /// 搜索与列表预览用去标签后的纯文本（见 repository 的 search_text 构建）。
+    async fn capture_html(
+        &self,
+        html: String,
+        source_app: Option<String>,
+        source_url: Option<String>,
+    ) -> Result<ClipboardItem, AppError> {
+        if html.trim().is_empty() {
+            return Err(AppError::Domain(DomainError::EmptyContent));
+        }
+        let byte_len = html.len();
+        if byte_len > MAX_CONTENT_BYTES {
+            tracing::warn!(size_bytes = byte_len, "HTML 内容超过大小上限，跳过");
+            return Err(AppError::Domain(DomainError::ContentTooLarge {
+                actual: byte_len,
+                limit: MAX_CONTENT_BYTES,
+            }));
+        }
+
+        let fingerprint = compute_fingerprint("html", &html);
+        let item = self.repository.insert_or_touch(NewClipboardItem {
+            content_type: ContentType::Html,
+            content_text: html,
+            fingerprint,
+            source_app,
+            source_url,
+        }).await?;
+
+        self.run_cleanup_after_capture().await?;
+        Ok(item)
+    }
+
+    /// 收一组文件引用。`content_text` 约定为绝对路径列表，用 `\n` 分隔。
+    async fn capture_files(
+        &self,
+        files_text: String,
+        source_app: Option<String>,
+        source_url: Option<String>,
+    ) -> Result<ClipboardItem, AppError> {
+        let paths: Vec<String> = files_text
+            .lines()
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect();
+        if paths.is_empty() {
+            return Err(AppError::Domain(DomainError::EmptyContent));
+        }
+
+        let joined = paths.join("\n");
+        let fingerprint = compute_fingerprint("files", &joined);
+        let item = self.repository.insert_or_touch(NewClipboardItem {
+            content_type: ContentType::Files,
+            content_text: joined,
             fingerprint,
             source_app,
             source_url,
@@ -159,6 +229,16 @@ impl HistoryService {
         match item.content_type {
             ContentType::Text => self.writer.write_text(&item.content_text).map_err(AppError::Clipboard)?,
             ContentType::Image => self.writer.write_image(&item.content_text).map_err(AppError::Clipboard)?,
+            ContentType::Html => self.writer.write_html(&item.content_text).map_err(AppError::Clipboard)?,
+            ContentType::Files => {
+                let paths: Vec<String> = item
+                    .content_text
+                    .lines()
+                    .filter(|path| !path.trim().is_empty())
+                    .map(str::to_string)
+                    .collect();
+                self.writer.write_files(&paths).map_err(AppError::Clipboard)?;
+            }
         }
         self.repository.insert_or_touch(NewClipboardItem {
             content_type: item.content_type,

@@ -171,8 +171,8 @@ export function ShortcutInput({
         className={`w-full rounded-md border px-3 py-1.5 text-left text-sm transition-colors
           ${
             recording
-              ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-900/30 dark:text-blue-300"
-              : "border-black/10 bg-transparent text-neutral-800 hover:border-black/20 dark:border-white/10 dark:text-neutral-200 dark:hover:border-white/20"
+              ? "border-[var(--cm-accent)] text-[var(--cm-accent-text)]"
+              : "border-[var(--cm-line)] bg-transparent text-neutral-800 hover:border-[var(--cm-line-strong)] dark:border-white/10 "
           }
           ${disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}
         `}
@@ -180,11 +180,11 @@ export function ShortcutInput({
         {displayText}
       </button>
       {recording && (
-        <p className="mt-1 text-[10px] text-neutral-400">
+        <p className="mt-1 text-[10px] text-[var(--cm-fg-faint)]">
           按 Esc 取消 · 按 Delete 清除快捷键
         </p>
       )}
-      {error && <p className="mt-1 text-xs text-red-500">{error}</p>}
+      {error && <p className="mt-1 text-xs text-[var(--cm-danger)]">{error}</p>}
     </div>
   );
 }

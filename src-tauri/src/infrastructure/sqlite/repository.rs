@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::error::RepositoryError;
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
-use crate::domain::normalize::build_search_text;
+use crate::domain::normalize::{build_search_text, strip_html_tags};
 use crate::domain::ports::{
     CleanupResult, ClipboardRepository, DeleteResult, ListResult, SearchQuery,
 };
@@ -108,6 +108,34 @@ fn collect_image_paths_with_sql(
     Ok(rows.filter_map(|r| r.ok()).collect())
 }
 
+/// 按行淘汰：逐行精确删 FTS 索引项 + 删主表行，返回需要清理的图片文件路径。
+///
+/// 这是 enforce_max_count / enforce_retention_days 共用的唯一淘汰机制：
+/// 每个被删行用删除**前**读出的 search_text 精确删除它的索引项
+/// （与 delete / insert_or_touch 路径同一机制，索引与主表列始终同步更新），
+/// 单行 O(log N)。
+///
+/// **不要**在这里用 `fts_rebuild` —— rebuild 是 O(N) 的全索引重建，
+/// 在「历史已满、每次复制淘汰一条」的稳态下会退化成每次复制全量重建
+/// （实测 2000 条 3.2ms/次、10000 条 16ms/次，随规模线性放大）。
+/// 返回 `(删除的行数, 需要清理的图片文件路径)`。
+fn evict_rows(
+    tx: &rusqlite::Transaction<'_>,
+    victims: Vec<(i64, String, String, String)>,
+) -> Result<(u64, Vec<String>), RepositoryError> {
+    let deleted_count = victims.len() as u64;
+    let mut image_paths = Vec::new();
+    for (rowid, search_text, content_type, content_text) in &victims {
+        sync_fts_delete(tx, *rowid, search_text)?;
+        if content_type.as_str() == "image" {
+            image_paths.push(content_text.clone());
+        }
+        tx.execute("DELETE FROM clipboard_items WHERE rowid = ?1", params![rowid])
+            .map_err(|e| RepositoryError::Database(e.to_string()))?;
+    }
+    Ok((deleted_count, image_paths))
+}
+
 #[async_trait]
 impl ClipboardRepository for SqliteClipboardRepository {
     async fn insert_or_touch(
@@ -118,7 +146,12 @@ impl ClipboardRepository for SqliteClipboardRepository {
         tokio::task::spawn_blocking(move || {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let now = Utc::now().to_rfc3339();
-            let search_text = build_search_text(&item.content_text);
+            // HTML 的搜索文本取去标签后的纯文本 —— 标签名不是用户想搜的内容；
+            // 其余类型（文本 / 文件路径）直接用原文。
+            let search_text = match item.content_type {
+                ContentType::Html => build_search_text(&strip_html_tags(&item.content_text)),
+                _ => build_search_text(&item.content_text),
+            };
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
             let existing: Option<(String, String)> = tx
@@ -399,38 +432,34 @@ impl ClipboardRepository for SqliteClipboardRepository {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
-            let image_paths: Vec<String> = {
-                let mut stmt = tx.prepare(
-                    "SELECT content_text FROM clipboard_items
-                     WHERE content_type = 'image' AND group_id IS NULL
-                       AND id IN (
-                         SELECT id FROM clipboard_items WHERE group_id IS NULL
+            // 一趟收齐「待淘汰行」的全部所需列：按行删 FTS 要 rowid + search_text，
+            // 图片文件清理要 content_text。
+            // 此前这里是两条独立子查询（SELECT 图片路径 + DELETE）+ fts_rebuild，
+            // 不仅每次复制都全量重建索引，两个子查询在 last_copied_at 打平时
+            // 理论上还可能选中不同的行集 —— 单查询从根本上消除了这个分歧。
+            let victims: Vec<(i64, String, String, String)> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT rowid, search_text, content_type, content_text
+                         FROM clipboard_items
+                         WHERE group_id IS NULL
                          ORDER BY last_copied_at ASC
                          LIMIT MAX(0,
                            (SELECT COUNT(*) FROM clipboard_items WHERE group_id IS NULL) - ?1
-                         )
-                       )",
-                ).map_err(Self::map_db_err)?;
-                let rows = stmt.query_map(params![max_count], |row| row.get(0)).map_err(Self::map_db_err)?;
-                rows.filter_map(|r| r.ok()).collect()
+                         )",
+                    )
+                    .map_err(Self::map_db_err)?;
+                let rows = stmt
+                    .query_map(params![max_count], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })
+                    .map_err(Self::map_db_err)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Self::map_db_err)?
             };
 
-            let affected = tx.execute(
-                "DELETE FROM clipboard_items
-                 WHERE group_id IS NULL
-                   AND id IN (
-                     SELECT id FROM clipboard_items WHERE group_id IS NULL
-                     ORDER BY last_copied_at ASC
-                     LIMIT MAX(0,
-                       (SELECT COUNT(*) FROM clipboard_items WHERE group_id IS NULL) - ?1
-                     )
-                   )",
-                params![max_count],
-            ).map_err(Self::map_db_err)?;
-
-            if affected > 0 { fts_rebuild(&tx)?; }
+            let (deleted_count, image_paths) = evict_rows(&tx, victims)?;
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(CleanupResult { deleted_count: affected as u64, image_paths })
+            Ok(CleanupResult { deleted_count, image_paths })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
@@ -446,23 +475,26 @@ impl ClipboardRepository for SqliteClipboardRepository {
             let cutoff = (Utc::now() - chrono::Duration::days(retention_days)).to_rfc3339();
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
-            let image_paths: Vec<String> = {
-                let mut stmt = tx.prepare(
-                    "SELECT content_text FROM clipboard_items
-                     WHERE content_type = 'image' AND group_id IS NULL AND last_copied_at < ?1",
-                ).map_err(Self::map_db_err)?;
-                let rows = stmt.query_map(params![cutoff], |row| row.get(0)).map_err(Self::map_db_err)?;
-                rows.filter_map(|r| r.ok()).collect()
+            // 与 enforce_max_count 同一套淘汰机制：一趟收齐、按行删索引、按行删主表。
+            let victims: Vec<(i64, String, String, String)> = {
+                let mut stmt = tx
+                    .prepare(
+                        "SELECT rowid, search_text, content_type, content_text
+                         FROM clipboard_items
+                         WHERE group_id IS NULL AND last_copied_at < ?1",
+                    )
+                    .map_err(Self::map_db_err)?;
+                let rows = stmt
+                    .query_map(params![cutoff], |row| {
+                        Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                    })
+                    .map_err(Self::map_db_err)?;
+                rows.collect::<Result<Vec<_>, _>>().map_err(Self::map_db_err)?
             };
 
-            let affected = tx.execute(
-                "DELETE FROM clipboard_items WHERE group_id IS NULL AND last_copied_at < ?1",
-                params![cutoff],
-            ).map_err(Self::map_db_err)?;
-
-            if affected > 0 { fts_rebuild(&tx)?; }
+            let (deleted_count, image_paths) = evict_rows(&tx, victims)?;
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(CleanupResult { deleted_count: affected as u64, image_paths })
+            Ok(CleanupResult { deleted_count, image_paths })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?

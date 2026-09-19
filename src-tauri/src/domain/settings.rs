@@ -90,22 +90,19 @@ mod tests {
 
     #[test]
     fn empty_shortcut_is_valid() {
-        let mut s = AppSettings::default();
-        s.shortcut = String::new();
+        let s = AppSettings { shortcut: String::new(), ..Default::default() };
         assert!(s.validate().is_ok(), "空字符串表示不绑定快捷键");
     }
 
     #[test]
     fn single_key_without_modifier_is_rejected() {
-        let mut s = AppSettings::default();
-        s.shortcut = "V".to_string();
+        let s = AppSettings { shortcut: "V".to_string(), ..Default::default() };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn valid_shortcut_passes() {
-        let mut s = AppSettings::default();
-        s.shortcut = "Alt+Shift+C".to_string();
+        let s = AppSettings { shortcut: "Alt+Shift+C".to_string(), ..Default::default() };
         assert!(s.validate().is_ok());
     }
 }

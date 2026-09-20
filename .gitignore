@@ -21,3 +21,8 @@ src-tauri/gen/schemas/
 
 # TypeScript 增量构建产物（每次编译都会变，不需要版本控制）
 tsconfig.tsbuildinfo
+
+# Ardot 导入/验收的中间产物：本地版 capture_screenshot 会往这里落盘渲染图，
+# 属于「跑一次就变」的临时文件，不进仓库。
+docs/design/ardot/_shots/
+docs/design/ardot/__pycache__/

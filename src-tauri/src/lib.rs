@@ -29,6 +29,22 @@ pub fn run() {
         .init();
 
     tauri::Builder::default()
+        // 单实例守卫必须排在所有插件最前面：它要接管第二实例的启动流程，
+        // 晚于其他插件注册就可能来不及拦截。
+        //
+        // 场景：开机时 LaunchAgent 自启（带 --autostart）与 macOS 的「重启后恢复
+        // 窗口」（TAL，不带参数）会各拉起一个进程。两个进程各有一个菜单栏图标、
+        // 各自监听剪贴板，而且全局快捷键只有先到的那个能注册成功 —— 用户看到
+        // 两个图标，按快捷键却只有一个窗口响应。这里让后到的实例把已有实例
+        // 的窗口唤到前台，然后自己退出。
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            // 第二实例的唯一作用就是「唤起」：把主窗口显示出来并聚焦，
+            // 然后由插件终结它自己。
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         // 应用内自动安装更新（download_and_install）将来才接；现在「检查更新」
         // 走 GitHub API（system_commands.rs），不经过这个插件。注册保留 +
@@ -44,6 +60,16 @@ pub fn run() {
         ))
         .setup(|app| {
             let handle = app.handle();
+
+            // 本应用**没有 Dock 图标**，只留菜单栏入口 —— 见文件末尾
+            // `RunEvent::Ready` 里的 `set_activation_policy` 与 `Info.plist`
+            // 的 `LSUIElement`（两处都要，原因写在那边）。
+            //
+            // 为什么这么做：本应用的入口是全局快捷键（⌘`）和菜单栏图标，Dock
+            // 图标是冗余的展示面。窗口在 agent 模式下仍能正常显示并获得焦点。
+            //
+            // 退出方式随之改变：Dock 右键「退出」没有了，走菜单栏托盘的
+            // 「退出 ClipMaster Pro」，或窗口聚焦时 ⌘Q。
 
             // 开机自启拉起来的不弹窗口：用户多半还在等系统启动完成，
             // 这个应用只是常驻后台等全局快捷键，弹窗会打断他。
@@ -121,11 +147,31 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
+            // macOS：隐藏 Dock 图标（应用只作为菜单栏 agent 存在）。
+            //
+            // 为什么必须在这里、而不是 `setup` 里设：tao 在
+            // `applicationDidFinishLaunching` 时会按它自己的默认值把应用设回
+            // Regular（覆盖 Info.plist 里的 `LSUIElement`），而 `RunEvent::Ready`
+            // 是那之后投递的第一个事件 —— 这是唯一时序确定的设置点。
+            // 实测在 `setup` 里设会失效（会被随后的默认值盖掉）。
+            #[cfg(target_os = "macos")]
+            if let tauri::RunEvent::Ready = event {
+                if let Err(err) =
+                    app_handle.set_activation_policy(tauri::ActivationPolicy::Accessory)
+                {
+                    // 失败只是 Dock 里多一个图标，不影响其它功能，记一条日志即可。
+                    tracing::warn!(error = %err, "隐藏 Dock 图标失败");
+                }
+            }
+
             // macOS：点 Dock 图标重新唤起主窗口。
             //
             // 关窗隐藏（见 on_window_event）之后，进程还活着但没有可见窗口，
             // 系统的默认反应只是把应用带到前台——窗口还是藏着的，看起来像「点了没反应」。
             // 这里把 Dock 点击统一当作「唤起」：不管窗口藏没藏，show + 聚焦。
+            //
+            // 注意：隐藏 Dock 图标后这个事件不再会被触发（没有 Dock 图标可点），
+            // 保留是为了「改回带 Dock 的常规应用」时行为仍然正确。
             #[cfg(target_os = "macos")]
             if let tauri::RunEvent::Reopen { .. } = event {
                 if let Some(window) = app_handle.get_webview_window("main") {

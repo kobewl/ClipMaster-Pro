@@ -38,6 +38,11 @@ hex = "0.4.3"
 unicode-normalization = "0.1.25"
 async-trait = "0.1.92"
 tauri-plugin-autostart = "2.5.1"
+# 单实例守卫：只允许一个进程存活，第二个实例把已有实例唤到前台后自己退出。
+# 必需的场景：开机时 LaunchAgent 自启与 macOS 的「重启后恢复窗口」（TAL）
+# 会各拉起一个实例，于是出现两个菜单栏图标、两个进程抢全局快捷键。
+# 硬性要求：必须在所有插件里**第一个**注册（它靠接管第二实例的启动来生效）。
+tauri-plugin-single-instance = "2"
 # 应用内自动安装更新用的（tauri.conf.json 里的空占位是它的硬性要求）。
 # 「检查更新」本身走 GitHub API（见 system_commands.rs），不依赖这个插件；
 # 将来接「自动下载安装」时才需要它 —— 那时再生成 minisign 密钥并配置

@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  ClipMaster Pro 的 Info.plist 补充项（构建时与 Tauri 生成的默认 plist 合并）。
+
+  LSUIElement = true：把应用声明为「agent 应用」（菜单栏应用）——
+  不在 Dock 显示图标，也不占用 ⌘Tab 切换列表，应用菜单栏同样不显示。
+
+  为什么这么做：本应用的入口是全局快捷键（⌘`）和菜单栏托盘图标，
+  Dock 图标是冗余的展示面；而且开机自启（LaunchAgent）与 macOS 的
+  「重启后恢复窗口」会各拉起一个进程，Dock 里就出现两个图标。
+
+  窗口行为不受影响：agent 模式下窗口照常显示、照常获得键盘焦点
+  （tao 启动时调用 activateIgnoringOtherApps）。
+
+  想改回带 Dock 图标的常规应用：删掉下面的 LSUIElement 键即可。
+-->
+<plist version="1.0">
+<dict>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>

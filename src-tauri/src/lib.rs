@@ -35,11 +35,21 @@ pub fn run() {
         // 场景：开机时 LaunchAgent 自启（带 --autostart）与 macOS 的「重启后恢复
         // 窗口」（TAL，不带参数）会各拉起一个进程。两个进程各有一个菜单栏图标、
         // 各自监听剪贴板，而且全局快捷键只有先到的那个能注册成功 —— 用户看到
-        // 两个图标，按快捷键却只有一个窗口响应。这里让后到的实例把已有实例
-        // 的窗口唤到前台，然后自己退出。
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            // 第二实例的唯一作用就是「唤起」：把主窗口显示出来并聚焦，
-            // 然后由插件终结它自己。
+        // 两个图标，按快捷键却只有一个窗口响应。这里让后到的实例把已有窗口
+        // 唤到前台，然后由插件终结它自己。
+        //
+        // 注意「谁先到」不确定：系统恢复通常比登录项早，但也有反过来的情况。
+        // 所以这里靠**第二个实例自己的参数**决定要不要弹窗，而不是假设顺序。
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            // 开机自启拉起的那个实例是「来报到的」，不是「用户点开的」：
+            // 不该抢焦点。否则用户开机后什么都没做，窗口却自己弹到最前面 ——
+            // 与「安静驻留后台」的设计相反。
+            if launched_by_autostart(&args) {
+                return;
+            }
+
+            // 用户在应用已经跑着的时候又点了一次图标 / 敲了一次命令：
+            // 这是明确的「我要看它」信号，把已有窗口唤到前台。
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.show();
                 let _ = window.set_focus();
@@ -162,6 +172,10 @@ pub fn run() {
                     // 失败只是 Dock 里多一个图标，不影响其它功能，记一条日志即可。
                     tracing::warn!(error = %err, "隐藏 Dock 图标失败");
                 }
+
+                // 从源头掐掉系统会话恢复（TAL）这条启动路径：本应用已经靠登录项
+                // 自启，两条路径都生效就是「两个实例」的来源。详见该函数的注释。
+                crate::lifecycle::autostart::disable_relaunch_on_login();
             }
 
             // macOS：点 Dock 图标重新唤起主窗口。

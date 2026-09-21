@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -92,6 +92,18 @@ const MIGRATIONS: &[(i64, &str)] = &[
     UPDATE clipboard_items
     SET group_id = '00000000-0000-0000-0000-000000000001'
     WHERE is_favorite = 1;
+    "#,
+    ),
+    // 列表默认先展示已分组条目、再按最后复制时间倒排。用与 ORDER BY 完全一致的
+    // 表达式索引，避免历史数量增长后每次刷新都临时排序整张表；分组视图则使用
+    // group_id + 时间的复合索引直接取得第一页。
+    (
+        5,
+        r#"
+    CREATE INDEX IF NOT EXISTS idx_clipboard_items_list_order
+        ON clipboard_items((group_id IS NULL), last_copied_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_clipboard_items_group_time
+        ON clipboard_items(group_id, last_copied_at DESC);
     "#,
     ),
 ];

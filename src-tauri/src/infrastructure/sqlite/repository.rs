@@ -305,7 +305,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
             let offset_idx = pidx;
             let list_sql = format!(
                 "SELECT clipboard_items.* FROM {from_clause} {where_sql}
-                 ORDER BY CASE WHEN clipboard_items.group_id IS NOT NULL THEN 0 ELSE 1 END,
+                 ORDER BY (clipboard_items.group_id IS NULL) ASC,
                           clipboard_items.last_copied_at DESC
                  LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
             );

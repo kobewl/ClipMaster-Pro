@@ -13,6 +13,8 @@ import { isCommandError } from "@/types/clipboard";
 const PAGE_SIZE = 100;
 /** 与后端 list_clipboard_items 的 MAX_PAGE_SIZE 保持一致，单次查询不能超过它。 */
 const MAX_PAGE_SIZE = 500;
+/** 连续采集/更新时合并短时间内的事件，避免把 SQLite 查询队列塞满。 */
+const EVENT_REFRESH_DELAY_MS = 120;
 
 export type LoadState = "idle" | "loading" | "error";
 
@@ -61,6 +63,7 @@ export function useClipboardHistory(options: Options) {
   const generationRef = useRef(0);
   const loadingMoreRef = useRef(false);
   const loadedCountRef = useRef(0);
+  const refreshTimerRef = useRef<number | null>(null);
 
   // 渲染期同步查询条件与已加载数量：effect 与事件回调都晚于本次渲染，写进来的必定是最新值。
   const queryRef = useRef({ groupId, search, contentType, timeRange });
@@ -116,6 +119,14 @@ export function useClipboardHistory(options: Options) {
 
   const reload = useCallback(() => fetchFirstPage(false), [fetchFirstPage]);
 
+  const scheduleReload = useCallback(() => {
+    if (refreshTimerRef.current !== null) return;
+    refreshTimerRef.current = window.setTimeout(() => {
+      refreshTimerRef.current = null;
+      fetchFirstPage(false);
+    }, EVENT_REFRESH_DELAY_MS);
+  }, [fetchFirstPage]);
+
   // 分组 / 关键词 / 筛选条件变化 → 回到第一页。
   useEffect(() => {
     fetchFirstPage(true);
@@ -152,13 +163,13 @@ export function useClipboardHistory(options: Options) {
     let disposed = false;
     const unsubscribers = [
       onClipboardCaptured(() => {
-        if (!disposed) fetchFirstPage(false);
+        if (!disposed) scheduleReload();
       }),
       onClipboardUpdated(() => {
-        if (!disposed) fetchFirstPage(false);
+        if (!disposed) scheduleReload();
       }),
       onClipboardCleared(() => {
-        if (!disposed) fetchFirstPage(false);
+        if (!disposed) scheduleReload();
       }),
       onClipboardDeleted((id) => {
         if (disposed) return;
@@ -169,9 +180,13 @@ export function useClipboardHistory(options: Options) {
     ];
     return () => {
       disposed = true;
+      if (refreshTimerRef.current !== null) {
+        window.clearTimeout(refreshTimerRef.current);
+        refreshTimerRef.current = null;
+      }
       unsubscribers.forEach((pending) => pending.then((fn) => fn()).catch(() => {}));
     };
-  }, [fetchFirstPage]);
+  }, [scheduleReload]);
 
   const clearError = useCallback(() => setErrorMessage(null), []);
 

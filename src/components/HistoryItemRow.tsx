@@ -8,6 +8,8 @@ import { Icon } from "./Icon";
 interface Props {
   item: ClipboardItem;
   active: boolean;
+  /** 由列表统一刷新，避免每一行创建各自的分钟定时器。 */
+  now: number;
   groups: ClipGroup[];
   keyword: string;
   /** 来源应用的真实图标路径（null 时退回 emoji / 图片图标）。 */
@@ -50,6 +52,7 @@ function formatTime(iso: string, now: number): string {
 export const HistoryItemRow = memo(function HistoryItemRow({
   item,
   active,
+  now,
   groups,
   keyword,
   iconSrc,
@@ -65,20 +68,15 @@ export const HistoryItemRow = memo(function HistoryItemRow({
   const menuRef = useRef<HTMLDivElement>(null);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuUp, setMenuUp] = useState(false);
-  const [now, setNow] = useState(() => Date.now());
   const [imageBroken, setImageBroken] = useState(false);
   // 记「加载失败的那张图标」而不是一个布尔值：iconSrc 变了就自动重试。
   const [brokenIconSrc, setBrokenIconSrc] = useState<string | null>(null);
 
-  // 相对时间（"3分钟前"）需要自己走时，否则列表放着不动文案就会过期。
-  useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, []);
-
   useEffect(() => {
     if (active && !multiSelect) {
-      rowRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+      // 键盘连续上下移动时，smooth 会累积多段滚动动画而显得拖沓；
+      // nearest 已足够保持当前行可见，且不会阻塞下一次输入。
+      rowRef.current?.scrollIntoView({ block: "nearest", behavior: "auto" });
     }
   }, [active, multiSelect]);
 

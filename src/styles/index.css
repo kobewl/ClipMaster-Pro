@@ -261,6 +261,10 @@ button {
 }
 .history-card {
   position: relative;
+  /* 长历史滚动时让浏览器跳过视口外卡片的布局与绘制。
+     contain-intrinsic-size 保留稳定的滚动条高度，避免内容按需渲染时跳动。 */
+  content-visibility: auto;
+  contain-intrinsic-size: auto 86px;
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   gap: 10px;

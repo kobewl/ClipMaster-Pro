@@ -54,6 +54,9 @@ export function HistoryList({
   onLoadMore,
 }: Props) {
   const [activeIndex, setActiveIndex] = useState(0);
+  // 不要让每一个 HistoryItemRow 都维护自己的 setInterval。历史较多时，数百个
+  // 相同的一分钟定时器会无意义地唤醒页面；列表共用一个时钟即可。
+  const [now, setNow] = useState(() => Date.now());
   const listRef = useRef<HTMLUListElement>(null);
   const sentinelRef = useRef<HTMLLIElement>(null);
   // 图标是异步解析出来的：拿到新图标时用它强制重渲染一次，
@@ -69,6 +72,23 @@ export function HistoryList({
   useEffect(() => {
     setActiveIndex((prev) => Math.min(prev, Math.max(0, items.length - 1)));
   }, [items.length]);
+
+  useEffect(() => {
+    // 对齐到下一分钟边界，避免窗口长时间打开时相对时间漂移。
+    let interval: number | null = null;
+    const schedule = () => {
+      const delay = 60_000 - (Date.now() % 60_000);
+      return window.setTimeout(() => {
+        setNow(Date.now());
+        interval = window.setInterval(() => setNow(Date.now()), 60_000);
+      }, delay);
+    };
+    const timeout = schedule();
+    return () => {
+      window.clearTimeout(timeout);
+      if (interval !== null) window.clearInterval(interval);
+    };
+  }, []);
 
   // 按应用名去重后批量解析来源图标（Rust 侧有磁盘缓存，这里只请求没查过的）。
   useEffect(() => {
@@ -247,6 +267,7 @@ export function HistoryList({
           <HistoryItemRow
             item={item}
             active={index === activeIndex}
+            now={now}
             groups={groups}
             keyword={keyword}
             iconSrc={getSourceIconPath(item.source_app)}

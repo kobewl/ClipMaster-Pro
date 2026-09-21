@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ClipMaster Pro",
-  "version": "1.0.6",
+  "version": "1.0.7",
   "identifier": "pro.clipmaster.desktop",
   "build": {
     "frontendDist": "../dist",

@@ -1,6 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
+  AgentAction,
+  AgentConfigInfo,
+  AgentResult,
   ClipGroup,
   ClipboardItem,
   ListQuery,
@@ -88,6 +91,34 @@ export const commands = {
   /** 应用内一键更新：下载、验签、安装后自动重启。进度见 update-progress 事件。 */
   downloadAndInstallUpdate(): Promise<void> {
     return invoke("download_and_install_update");
+  },
+
+  // Agent：后端按 item ID 读取内容并执行本地安全检查，前端不直接请求模型。
+  runAgentAction(itemId: string, action: AgentAction): Promise<AgentResult> {
+    return invoke("run_agent_action", { request: { item_id: itemId, action } });
+  },
+  /** 读取模型配置快照（掩码，不含密钥本体）。 */
+  getAgentConfig(): Promise<AgentConfigInfo> {
+    return invoke("get_agent_config");
+  },
+  /** 保存 API Key 到系统钥匙串。返回值是更新后的快照。 */
+  saveAgentKey(apiKey: string): Promise<AgentConfigInfo> {
+    return invoke("save_agent_key", { request: { api_key: apiKey } });
+  },
+  clearAgentKey(): Promise<AgentConfigInfo> {
+    return invoke("clear_agent_key");
+  },
+  /** 保存自定义服务地址与模型名（任何 OpenAI 兼容端点）。 */
+  saveAgentEndpoint(baseUrl: string, model: string): Promise<AgentConfigInfo> {
+    return invoke("save_agent_endpoint", { request: { base_url: baseUrl, model } });
+  },
+  /** 恢复内置默认地址与模型。 */
+  resetAgentEndpoint(): Promise<AgentConfigInfo> {
+    return invoke("reset_agent_endpoint");
+  },
+  /** 用 GET /models 验证 Key 与网络，不产生推理费用。 */
+  testAgentConnection(): Promise<void> {
+    return invoke("test_agent_connection");
   },
 };
 

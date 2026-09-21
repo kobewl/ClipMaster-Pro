@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::application::capture_pipeline::CapturePipeline;
+use crate::application::agent_service::AgentService;
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
 use crate::application::settings_service::SettingsService;
@@ -24,8 +25,15 @@ use crate::infrastructure::clipboard::unsupported::{
     UnsupportedClipboardSource, UnsupportedClipboardWriter,
 };
 
+// 模型密钥的系统安全存储：macOS 钥匙串 / 其它平台明确不可用。
+#[cfg(target_os = "macos")]
+use crate::infrastructure::secret::macos::KeychainSecretStore as PlatformSecretStore;
+#[cfg(not(target_os = "macos"))]
+use crate::infrastructure::secret::unsupported::UnsupportedSecretStore as PlatformSecretStore;
+
 pub struct AppRuntime {
     pub history: Arc<HistoryService>,
+    pub agent: Arc<AgentService>,
     pub settings: Arc<SettingsService>,
     pub groups: Arc<GroupService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
@@ -83,8 +91,9 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         Arc::new(SqliteClipboardRepository::new(conn.clone()));
     let group_repository: Arc<dyn crate::domain::ports::GroupRepository> =
         Arc::new(SqliteGroupRepository::new(conn.clone()));
-    let settings_store: Arc<dyn SettingsStore> =
-        Arc::new(SqliteSettingsStore::new(conn.clone()));
+    // 同一个对象当两种端口用：设置项和模型服务配置都存在 app_settings 表里。
+    let settings_impl = Arc::new(SqliteSettingsStore::new(conn.clone()));
+    let settings_store: Arc<dyn SettingsStore> = settings_impl.clone();
 
     let image_dir = app_data_dir.join("images");
     std::fs::create_dir_all(&image_dir)
@@ -116,6 +125,8 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         writer,
         settings_store.clone(),
     ));
+    let secrets: Arc<dyn crate::domain::ports::SecretStore> = Arc::new(PlatformSecretStore::new());
+    let agent = Arc::new(AgentService::new(history.clone(), secrets, settings_impl));
     let settings = Arc::new(SettingsService::new(settings_store.clone()));
     let groups = Arc::new(GroupService::new(group_repository));
 
@@ -143,6 +154,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
 
     Ok(AppRuntime {
         history,
+        agent,
         settings,
         groups,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),

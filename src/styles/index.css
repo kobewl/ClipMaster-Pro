@@ -605,6 +605,30 @@ button {
 .preview-foot__actions { display: flex; gap: 8px; }
 
 /* ---------------------------------------------------------------------------
+   ClipMaster Agent：结果始终是可复制、可丢弃的草稿，不覆盖原始记录
+--------------------------------------------------------------------------- */
+.agent-panel { margin-top: 12px; border: 1px solid color-mix(in srgb, var(--cm-accent) 24%, var(--cm-line)); border-radius: var(--cm-radius-lg); background: color-mix(in srgb, var(--cm-accent-soft) 38%, var(--cm-surface)); padding: 10px; }
+.agent-panel__head { display: flex; align-items: start; justify-content: space-between; gap: 10px; }
+.agent-panel__head > div { display: flex; min-width: 0; flex-direction: column; gap: 2px; }
+.agent-panel__head strong { color: var(--cm-fg); font-size: 12px; }
+.agent-panel__head span, .agent-panel__model { color: var(--cm-fg-faint); font-size: 10.5px; }
+.agent-panel__model { flex: none; border: 1px solid var(--cm-line); border-radius: 999px; background: var(--cm-surface); padding: 2px 6px; }
+.agent-panel__actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; }
+.agent-action { border: 1px solid var(--cm-line); border-radius: 999px; background: var(--cm-surface); color: var(--cm-fg-muted); padding: 4px 9px; font-size: 11px; cursor: pointer; transition: border-color 110ms var(--cm-ease), color 110ms var(--cm-ease), background 110ms var(--cm-ease); }
+.agent-action:hover:not(:disabled) { border-color: var(--cm-accent-ring); background: var(--cm-accent-soft); color: var(--cm-accent-text); }
+.agent-action:disabled { cursor: wait; opacity: .6; }
+.agent-panel__notice, .agent-panel__error { margin: 9px 0 0; font-size: 11px; line-height: 16px; }
+.agent-panel__notice { color: var(--cm-fg-faint); }
+.agent-panel__error { color: var(--cm-danger); }
+/* 未配置 Key 时紧跟在错误文案后面的「去设置」链接 */
+.agent-panel__link { margin-left: 6px; border: 0; background: none; padding: 0; color: var(--cm-accent-text); font-size: 11px; text-decoration: underline; cursor: pointer; }
+.agent-result { margin-top: 9px; border-top: 1px solid var(--cm-line); padding-top: 9px; }
+.agent-result__meta { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+.agent-result__meta strong { color: var(--cm-fg); font-size: 11.5px; }
+.agent-result__meta span { color: var(--cm-fg-faint); font-size: 10px; }
+.agent-result pre { max-height: 180px; overflow: auto; margin: 7px 0; border: 1px solid var(--cm-line); border-radius: var(--cm-radius-sm); background: var(--cm-surface); padding: 8px; color: var(--cm-fg); font: 11.5px/1.6 var(--cm-mono); white-space: pre-wrap; word-break: break-word; }
+
+/* ---------------------------------------------------------------------------
    图片缩放（规范 8.5）
 --------------------------------------------------------------------------- */
 

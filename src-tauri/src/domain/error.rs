@@ -39,6 +39,19 @@ pub enum ClipboardSourceError {
     WriteFailed(String),
 }
 
+/// 系统安全存储（macOS 钥匙串）的失败。
+///
+/// 和 `RepositoryError` 分开：这里的失败原因与数据库无关（钥匙串被锁定、
+/// 用户拒绝了授权弹窗、条目权限在重新签名后失效），前端要给的引导也完全不同。
+#[derive(Debug, Error)]
+pub enum SecretError {
+    #[error("系统安全存储不可用: {0}")]
+    Unavailable(String),
+
+    #[error("系统安全存储访问失败: {0}")]
+    Access(String),
+}
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error(transparent)]
@@ -49,6 +62,9 @@ pub enum AppError {
 
     #[error(transparent)]
     Clipboard(#[from] ClipboardSourceError),
+
+    #[error(transparent)]
+    Secret(#[from] SecretError),
 
     #[error("设置无效: {0}")]
     InvalidSettings(String),
@@ -66,6 +82,8 @@ impl AppError {
             AppError::Repository(RepositoryError::Migration(_)) => "migration_failed",
             AppError::Clipboard(ClipboardSourceError::ReadFailed(_)) => "clipboard_read_failed",
             AppError::Clipboard(ClipboardSourceError::WriteFailed(_)) => "clipboard_write_failed",
+            AppError::Secret(SecretError::Unavailable(_)) => "secret_unavailable",
+            AppError::Secret(SecretError::Access(_)) => "secret_access_failed",
             AppError::InvalidSettings(_) => "invalid_settings",
         }
     }
@@ -75,6 +93,7 @@ impl AppError {
             self,
             AppError::Repository(RepositoryError::Database(_))
                 | AppError::Clipboard(_)
+                | AppError::Secret(_)
         )
     }
 }

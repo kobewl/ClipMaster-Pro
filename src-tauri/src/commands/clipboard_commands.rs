@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::dto::{
     AppSettingsDto, ClipGroupDto, ClipboardItemDto, CreateGroupDto, ListQueryDto, ListResultDto,
-    UpdateGroupDto,
+    UpdateGroupDto, RunAgentActionDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::model::ContentType;
@@ -16,6 +16,17 @@ fn emit_or_warn<T: serde::Serialize + Clone>(app: &AppHandle, event: &str, paylo
 }
 
 const MAX_PAGE_SIZE: u32 = 500;
+
+/// Agent 的唯一前端入口：内容必须由已保存的条目 ID 取得，不能由 UI 直接上传。
+#[tauri::command]
+pub async fn run_agent_action(
+    runtime: State<'_, AppRuntime>,
+    request: RunAgentActionDto,
+) -> Result<crate::application::agent_service::AgentResult, CommandError> {
+    runtime.agent.run(&request.item_id, request.action).await.map_err(|err| {
+        CommandError::new(err.code(), err.to_string(), err.retryable())
+    })
+}
 
 /// 把前端的预设时间档换算成筛选起点（RFC3339 / UTC，与 created_at 列的存储
 /// 格式一致 —— 字符串比较即时间比较）。None = 不限时间。

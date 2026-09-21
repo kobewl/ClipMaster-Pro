@@ -438,6 +438,7 @@ export default function App() {
           handlePaste(id);
         }}
         onClose={() => setPreviewId(null)}
+        onOpenSettings={() => setSettingsOpen(true)}
       />
     </main>
   );

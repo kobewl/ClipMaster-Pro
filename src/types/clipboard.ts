@@ -61,6 +61,38 @@ export interface UpdateStatus {
   release_url: string | null;
 }
 
+export type AgentAction =
+  | "summarize"
+  | "translate_zh"
+  | "explain"
+  | "extract_tasks"
+  | "format_json";
+
+export interface AgentResult {
+  request_id: string;
+  action: string;
+  title: string;
+  content: string;
+  provider: string;
+  model: string;
+  source_item_ids: string[];
+}
+
+/** Key 的来源：系统钥匙串（用户填的）或开发期环境变量。 */
+export type AgentKeySource = "keychain" | "env";
+
+/** 设置面板用的模型配置快照。**没有密钥本体**，只有掩码提示。 */
+export interface AgentConfigInfo {
+  configured: boolean;
+  /** 形如 "••••••••abcd"，没有配置时为 null。 */
+  key_hint: string | null;
+  key_source: AgentKeySource;
+  base_url: string;
+  model: string;
+  /** 地址是用户自己设的（false = 正在用内置默认值）。 */
+  base_url_is_custom: boolean;
+}
+
 export function isCommandError(value: unknown): value is CommandError {
   return (
     typeof value === "object" &&

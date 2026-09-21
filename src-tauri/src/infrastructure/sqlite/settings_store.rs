@@ -10,13 +10,17 @@ use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::error::RepositoryError;
-use crate::domain::ports::SettingsStore;
+use crate::domain::ports::{AgentConfigStore, AgentProviderConfig, SettingsStore};
 use crate::domain::settings::AppSettings;
 
 const KEY_MAX_HISTORY: &str = "max_history";
 const KEY_RETENTION_DAYS: &str = "retention_days";
 const KEY_CAPTURE_ENABLED: &str = "capture_enabled";
 const KEY_SHORTCUT: &str = "shortcut";
+// 模型服务的地址与模型名。**密钥不在这里** —— 它走系统钥匙串
+// （见 domain/ports.rs 里两个 trait 的注释）。
+const KEY_AI_BASE_URL: &str = "ai_base_url";
+const KEY_AI_MODEL: &str = "ai_model";
 
 pub struct SqliteSettingsStore {
     conn: Arc<Mutex<Connection>>,
@@ -84,6 +88,49 @@ impl SettingsStore for SqliteSettingsStore {
             )?;
             set_value(&tx, KEY_SHORTCUT, &settings.shortcut)?;
 
+            tx.commit()
+                .map_err(|e| RepositoryError::Database(e.to_string()))?;
+            Ok(())
+        })
+        .await
+        .map_err(|e| RepositoryError::Database(e.to_string()))?
+    }
+}
+
+/// 两个键都在才算配置过；只有一半视为没配，避免拼出地址与模型对不上的组合。
+#[async_trait]
+impl AgentConfigStore for SqliteSettingsStore {
+    async fn load_agent_config(&self) -> Result<Option<AgentProviderConfig>, RepositoryError> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let base_url = get_value(&conn, KEY_AI_BASE_URL)?;
+            let model = get_value(&conn, KEY_AI_MODEL)?;
+            match (base_url, model) {
+                (Some(base_url), Some(model))
+                    if !base_url.trim().is_empty() && !model.trim().is_empty() =>
+                {
+                    Ok(Some(AgentProviderConfig { base_url, model }))
+                }
+                _ => Ok(None),
+            }
+        })
+        .await
+        .map_err(|e| RepositoryError::Database(e.to_string()))?
+    }
+
+    async fn save_agent_config(
+        &self,
+        config: AgentProviderConfig,
+    ) -> Result<(), RepositoryError> {
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let tx = conn
+                .transaction()
+                .map_err(|e| RepositoryError::Database(e.to_string()))?;
+            set_value(&tx, KEY_AI_BASE_URL, &config.base_url)?;
+            set_value(&tx, KEY_AI_MODEL, &config.model)?;
             tx.commit()
                 .map_err(|e| RepositoryError::Database(e.to_string()))?;
             Ok(())

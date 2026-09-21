@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { ClipboardItem } from "@/types/clipboard";
+import type { AgentAction, AgentResult, ClipboardItem } from "@/types/clipboard";
+import { isCommandError } from "@/types/clipboard";
+import { commands } from "@/lib/commands";
 import { extractDomain, getAppIcon } from "@/lib/sourceIcons";
 import { Icon } from "./Icon";
 import { ImageZoom } from "./ImageZoom";
@@ -14,6 +16,8 @@ interface Props {
   onCopy: (id: string) => void;
   onPaste: (id: string) => void;
   onClose: () => void;
+  /** AI 未配置时，从结果区直接跳到设置面板里的 AI 助手。 */
+  onOpenSettings: () => void;
 }
 
 function formatFullTime(iso: string): string {
@@ -59,12 +63,23 @@ function htmlPlainLength(html: string): number {
  * 完整的 `content_text` 其实一直是传到前端的，只是界面里没地方显示它。
  * 这个弹窗就是那个地方 —— 顺带也解决了「图片只能看缩略图」的问题。
  */
-export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props) {
+export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenSettings }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
+  const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
+  const [agentError, setAgentError] = useState<string | null>(null);
+  /** 错误码单独记着：`ai_not_configured` 要在旁边给一个"去设置"的入口。 */
+  const [agentErrorCode, setAgentErrorCode] = useState<string | null>(null);
+  const [runningAction, setRunningAction] = useState<AgentAction | null>(null);
+  const [copiedResult, setCopiedResult] = useState(false);
 
   // 长文打开时从头开始看；不做滚动位置记忆，每次都是新的阅读。
   useEffect(() => {
     if (item) bodyRef.current?.scrollTo({ top: 0 });
+    setAgentResult(null);
+    setAgentError(null);
+    setAgentErrorCode(null);
+    setRunningAction(null);
+    setCopiedResult(false);
   }, [item]);
 
   const meta = useMemo(() => {
@@ -113,7 +128,46 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
     }
   }
 
+  async function handleAgentAction(action: AgentAction) {
+    if (!item || runningAction) return;
+    setRunningAction(action);
+    setAgentError(null);
+    setAgentErrorCode(null);
+    setCopiedResult(false);
+    try {
+      setAgentResult(await commands.runAgentAction(item.id, action));
+    } catch (error) {
+      if (isCommandError(error)) {
+        setAgentError(error.message);
+        setAgentErrorCode(error.code);
+      } else {
+        setAgentError("AI 操作失败，请稍后重试。");
+      }
+    } finally {
+      setRunningAction(null);
+    }
+  }
+
+  async function handleCopyAgentResult() {
+    if (!agentResult) return;
+    try {
+      await commands.copyTextToClipboard(agentResult.content);
+      setCopiedResult(true);
+    } catch {
+      setAgentError("复制 AI 结果失败。");
+    }
+  }
+
   if (!item || !meta) return null;
+
+  const supportsAgent = !meta.isImage && !meta.isFiles;
+  const agentActions: Array<{ action: AgentAction; label: string }> = [
+    { action: "summarize", label: "总结" },
+    { action: "translate_zh", label: "翻译" },
+    { action: "explain", label: "解释" },
+    { action: "extract_tasks", label: "提取待办" },
+    { action: "format_json", label: "格式化 JSON" },
+  ];
 
   return (
     <div
@@ -194,6 +248,62 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props
             <p className="preview-body__text">{item.content_text}</p>
           </div>
         )}
+
+        <section className="agent-panel" aria-label="ClipMaster Agent">
+          <div className="agent-panel__head">
+            <div>
+              <strong>✨ ClipMaster Agent</strong>
+              <span>结果是草稿，原始剪贴板内容不会被修改</span>
+            </div>
+            <span className="agent-panel__model">DeepSeek</span>
+          </div>
+          {supportsAgent ? (
+            <div className="agent-panel__actions">
+              {agentActions.map(({ action, label }) => (
+                <button
+                  type="button"
+                  key={action}
+                  className="agent-action"
+                  disabled={runningAction !== null}
+                  onClick={() => void handleAgentAction(action)}
+                >
+                  {runningAction === action ? "处理中…" : label}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <p className="agent-panel__notice">图片和文件理解将在后续版本以明确授权的方式提供。</p>
+          )}
+          {agentError && (
+            <p className="agent-panel__error" role="alert">
+              {agentError}
+              {agentErrorCode === "ai_not_configured" && (
+                <button
+                  type="button"
+                  className="agent-panel__link"
+                  onClick={() => {
+                    onClose();
+                    onOpenSettings();
+                  }}
+                >
+                  去设置
+                </button>
+              )}
+            </p>
+          )}
+          {agentResult && (
+            <div className="agent-result">
+              <div className="agent-result__meta">
+                <strong>{agentResult.title}</strong>
+                <span>{agentResult.provider} · {agentResult.model}</span>
+              </div>
+              <pre>{agentResult.content}</pre>
+              <button type="button" onClick={() => void handleCopyAgentResult()} className="button button--secondary button--compact">
+                {copiedResult ? "已复制 ✓" : "复制结果"}
+              </button>
+            </div>
+          )}
+        </section>
 
         <footer className="preview-foot">
           <span className="preview-foot__hint">

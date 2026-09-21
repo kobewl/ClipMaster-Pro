@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::model::{build_preview, ClipGroup, ClipboardItem};
 use crate::domain::normalize::strip_html_tags;
 use crate::domain::settings::AppSettings;
+use crate::application::agent_service::AgentAction;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -160,4 +161,28 @@ impl From<AppSettingsDto> for AppSettings {
             shortcut: s.shortcut,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+//  Agent DTO
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RunAgentActionDto {
+    pub item_id: String,
+    pub action: AgentAction,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SaveAgentKeyDto {
+    pub api_key: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SaveAgentEndpointDto {
+    pub base_url: String,
+    pub model: String,
 }

@@ -1,9 +1,10 @@
 //! Domain 定义的端口（接口）。Infrastructure 负责实现。
 
-use crate::domain::error::{ClipboardSourceError, RepositoryError};
+use crate::domain::error::{ClipboardSourceError, RepositoryError, SecretError};
 use crate::domain::model::{ClipGroup, ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::settings::AppSettings;
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 
 // ---------------------------------------------------------------------------
 //  查询 / 结果结构
@@ -105,6 +106,43 @@ pub trait GroupRepository: Send + Sync {
 pub trait SettingsStore: Send + Sync {
     async fn load(&self) -> Result<AppSettings, RepositoryError>;
     async fn save(&self, settings: AppSettings) -> Result<(), RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
+//  AgentConfigStore（模型服务地址等非敏感配置）
+// ---------------------------------------------------------------------------
+
+/// 模型服务的连接信息，不含密钥（密钥走 SecretStore）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentProviderConfig {
+    /// OpenAI 兼容服务的根地址，不带结尾斜杠。
+    pub base_url: String,
+    pub model: String,
+}
+
+#[async_trait]
+pub trait AgentConfigStore: Send + Sync {
+    /// `Ok(None)` = 用户没配过，调用方回退到默认值。
+    async fn load_agent_config(&self) -> Result<Option<AgentProviderConfig>, RepositoryError>;
+
+    async fn save_agent_config(&self, config: AgentProviderConfig)
+        -> Result<(), RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
+//  SecretStore（模型密钥等敏感配置）
+// ---------------------------------------------------------------------------
+
+/// 系统安全存储的端口，macOS 上由钥匙串实现。
+///
+/// 独立于 `SettingsStore`：设置表是明文 SQLite，API Key 存进去等于泄露。
+#[async_trait]
+pub trait SecretStore: Send + Sync {
+    /// `Ok(None)` = 该项不存在，属正常状态。
+    async fn get(&self, account: &str) -> Result<Option<String>, SecretError>;
+    async fn set(&self, account: &str, value: &str) -> Result<(), SecretError>;
+    /// 幂等：条目不存在也返回成功。
+    async fn delete(&self, account: &str) -> Result<(), SecretError>;
 }
 
 // ---------------------------------------------------------------------------

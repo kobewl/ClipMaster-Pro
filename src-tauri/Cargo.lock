@@ -539,6 +539,7 @@ dependencies = [
  "objc2-foundation",
  "reqwest",
  "rusqlite",
+ "security-framework",
  "semver",
  "serde",
  "serde_json",
@@ -555,6 +556,7 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "unicode-normalization",
+ "url",
  "uuid",
 ]
 

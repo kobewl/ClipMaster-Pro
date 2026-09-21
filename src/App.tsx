@@ -7,6 +7,7 @@ import { StatusBar } from "@/components/StatusBar";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PreviewDialog } from "@/components/PreviewDialog";
+import { AgentBatchDialog } from "@/components/AgentBatchDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -32,6 +33,8 @@ export default function App() {
   const [previewId, setPreviewId] = useState<string | null>(null);
   /** 多选模式。 */
   const [multiSelect, setMultiSelect] = useState(false);
+  /** 多条目 AI 工作台是否打开。 */
+  const [agentBatchOpen, setAgentBatchOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const toastTimerRef = useRef<number | null>(null);
@@ -228,6 +231,8 @@ export default function App() {
       if (event.key !== "Escape") return;
       if (previewId !== null) {
         setPreviewId(null);
+      } else if (agentBatchOpen) {
+        setAgentBatchOpen(false);
       } else if (multiSelect) {
         exitMultiSelect();
       } else if (settingsOpen) {
@@ -240,7 +245,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect]);
+  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen]);
 
   // 列表刷新（删除、换分组）后把已不存在的 id 从选择集里摘掉，
   // 否则底部会显示「已选 3 条」而列表里只有 2 条被勾上。
@@ -386,6 +391,7 @@ export default function App() {
           onCancelMultiSelect={exitMultiSelect}
           onCopyMerged={handleCopyMerged}
           onPasteMerged={handlePasteMerged}
+          onRunAgentBatch={() => setAgentBatchOpen(true)}
         />
       </section>
 
@@ -419,6 +425,16 @@ export default function App() {
         confirmLabel="清空"
         onConfirm={handleClear}
         onCancel={() => setConfirmClearOpen(false)}
+      />
+
+      <AgentBatchDialog
+        open={agentBatchOpen}
+        items={items.filter((item) => selectedIds.has(item.id))}
+        onClose={() => setAgentBatchOpen(false)}
+        onOpenSettings={() => {
+          setAgentBatchOpen(false);
+          setSettingsOpen(true);
+        }}
       />
 
       <PreviewDialog

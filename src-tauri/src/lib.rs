@@ -14,7 +14,7 @@ use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, copy_text_to_clipboard, create_group, delete_clipboard_item,
     delete_group, get_settings, get_source_icons, list_clipboard_items, list_groups,
     paste_clipboard_item, paste_text, set_capture_enabled, set_item_group, update_group,
-    update_settings, update_shortcut, run_agent_action,
+    update_settings, update_shortcut, run_agent_action, run_agent_action_batch,
 };
 use crate::commands::system_commands::{
     check_for_updates, download_and_install_update, get_autostart_enabled, set_autostart_enabled,
@@ -158,6 +158,7 @@ pub fn run() {
             check_for_updates,
             download_and_install_update,
             run_agent_action,
+            run_agent_action_batch,
             get_agent_config,
             save_agent_key,
             clear_agent_key,

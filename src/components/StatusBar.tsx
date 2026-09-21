@@ -22,6 +22,8 @@ interface StatusBarProps {
   onCancelMultiSelect: () => void;
   onCopyMerged: () => void;
   onPasteMerged: () => void;
+  /** 打开多条目 AI 工作台（把选中的这一批交给模型归纳）。 */
+  onRunAgentBatch: () => void;
 }
 
 import { Icon } from "./Icon";
@@ -49,6 +51,7 @@ export function StatusBar({
   onCancelMultiSelect,
   onCopyMerged,
   onPasteMerged,
+  onRunAgentBatch,
 }: StatusBarProps) {
   if (multiSelect) {
     return (
@@ -72,6 +75,19 @@ export function StatusBar({
         <div className="batch-actions">
           <button type="button" onClick={onCancelMultiSelect} className="batch-ghost">
             取消
+          </button>
+          <button
+            type="button"
+            onClick={onRunAgentBatch}
+            disabled={selectedCount === 0}
+            title={
+              selectedCount === 0
+                ? "先勾选要处理的记录"
+                : "把选中的这一批交给 AI 做跨记录归纳"
+            }
+            className="button button--secondary button--compact"
+          >
+            ✨ AI 归纳
           </button>
           <button
             type="button"

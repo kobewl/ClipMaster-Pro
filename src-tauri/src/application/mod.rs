@@ -1,3 +1,4 @@
+pub mod agent_prompt;
 pub mod agent_service;
 pub mod capture_pipeline;
 pub mod group_service;

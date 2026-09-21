@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::dto::{
     AppSettingsDto, ClipGroupDto, ClipboardItemDto, CreateGroupDto, ListQueryDto, ListResultDto,
-    UpdateGroupDto, RunAgentActionDto,
+    RunAgentActionBatchDto, RunAgentActionDto, UpdateGroupDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::model::ContentType;
@@ -26,6 +26,19 @@ pub async fn run_agent_action(
     runtime.agent.run(&request.item_id, request.action).await.map_err(|err| {
         CommandError::new(err.code(), err.to_string(), err.retryable())
     })
+}
+
+/// 多条内容一起跑一个动作（跨记录归纳）。
+#[tauri::command]
+pub async fn run_agent_action_batch(
+    runtime: State<'_, AppRuntime>,
+    request: RunAgentActionBatchDto,
+) -> Result<crate::application::agent_service::AgentResult, CommandError> {
+    runtime
+        .agent
+        .run_many(&request.item_ids, request.action)
+        .await
+        .map_err(|err| CommandError::new(err.code(), err.to_string(), err.retryable()))
 }
 
 /// 把前端的预设时间档换算成筛选起点（RFC3339 / UTC，与 created_at 列的存储

@@ -2,10 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import DOMPurify from "dompurify";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { AgentAction, AgentResult, AgentRun, ClipboardItem } from "@/types/clipboard";
-import { formatRunDuration, isCommandError } from "@/types/clipboard";
+import type { AgentAction, AgentResult, ClipboardItem } from "@/types/clipboard";
+import { isCommandError } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
 import { extractDomain, getAppIcon } from "@/lib/sourceIcons";
+import { AgentResultCard } from "./AgentResultCard";
 import { Icon } from "./Icon";
 import { ImageZoom } from "./ImageZoom";
 
@@ -71,9 +72,6 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
   const [agentErrorCode, setAgentErrorCode] = useState<string | null>(null);
   const [runningAction, setRunningAction] = useState<AgentAction | null>(null);
   const [copiedResult, setCopiedResult] = useState(false);
-  /** 展开「查看来源」时读回的真实审计记录（null = 还没读或已被删）。 */
-  const [runDetail, setRunDetail] = useState<AgentRun | null>(null);
-  const [runDetailLoading, setRunDetailLoading] = useState(false);
   /**
    * 当前配的服务名。面板标题原来硬编码 "DeepSeek"，用户把地址改成中转站
    * 或本地 Ollama 之后就成了假信息 —— 内容发去了哪里必须如实显示。
@@ -97,8 +95,6 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     setAgentErrorCode(null);
     setRunningAction(null);
     setCopiedResult(false);
-    setRunDetail(null);
-    setRunDetailLoading(false);
   }, [item]);
 
   const meta = useMemo(() => {
@@ -153,7 +149,6 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     setAgentError(null);
     setAgentErrorCode(null);
     setCopiedResult(false);
-    setRunDetail(null);
     try {
       setAgentResult(await commands.runAgentAction(item.id, action));
     } catch (error) {
@@ -178,26 +173,6 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     }
   }
 
-  /**
-   * 展开「查看来源」。用的是 request_id 去查审计表 —— 这个号就是审计行的主键，
-   * 所以界面上看到的每一条都能查到它当时的真实记录（用了哪条输入、走的哪个服务、
-   * 花了多久），而不是界面自己拼的近似值。
-   */
-  async function handleToggleRunDetail() {
-    if (runDetail !== null) {
-      setRunDetail(null);
-      return;
-    }
-    if (!agentResult || runDetailLoading) return;
-    setRunDetailLoading(true);
-    try {
-      setRunDetail(await commands.getAgentRun(agentResult.request_id));
-    } catch {
-      setRunDetail(null);
-    } finally {
-      setRunDetailLoading(false);
-    }
-  }
 
   if (!item || !meta) return null;
 
@@ -333,55 +308,11 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
             </p>
           )}
           {agentResult && (
-            <div className="agent-result">
-              <div className="agent-result__meta">
-                <strong>{agentResult.title}</strong>
-                <span>{agentResult.provider} · {agentResult.model}</span>
-              </div>
-              <pre>{agentResult.content}</pre>
-              <div className="agent-result__foot">
-                <button
-                  type="button"
-                  onClick={() => void handleCopyAgentResult()}
-                  className="button button--secondary button--compact"
-                >
-                  {copiedResult ? "已复制 ✓" : "复制结果"}
-                </button>
-                <button
-                  type="button"
-                  className="agent-panel__link"
-                  aria-expanded={runDetail !== null}
-                  onClick={() => void handleToggleRunDetail()}
-                >
-                  {runDetailLoading
-                    ? "读取中…"
-                    : runDetail !== null
-                      ? "收起来源"
-                      : "查看来源"}
-                </button>
-              </div>
-              {runDetail !== null && (
-                <dl className="agent-result__detail">
-                  <dt>输入</dt>
-                  <dd>
-                    {runDetail.input_item_ids.length} 条记录 · {runDetail.input_chars} 字
-                  </dd>
-                  <dt>服务</dt>
-                  <dd>
-                    {runDetail.provider ?? "未发出请求"} · {runDetail.model ?? "—"}
-                  </dd>
-                  <dt>耗时</dt>
-                  <dd>
-                    {formatRunDuration(runDetail.duration_ms)}
-                    {runDetail.output_chars !== null && (
-                      <> · 输出 {runDetail.output_chars} 字</>
-                    )}
-                  </dd>
-                  <dt>请求号</dt>
-                  <dd className="agent-result__id">{runDetail.id}</dd>
-                </dl>
-              )}
-            </div>
+            <AgentResultCard
+              result={agentResult}
+              copied={copiedResult}
+              onCopy={() => void handleCopyAgentResult()}
+            />
           )}
         </section>
 

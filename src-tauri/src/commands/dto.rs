@@ -174,6 +174,18 @@ pub struct RunAgentActionDto {
     pub action: AgentAction,
 }
 
+/// 多条内容一起跑一个动作（跨记录归纳）。
+///
+/// 与单条分成两个命令而不是一个「item_ids 数组」：
+/// 单条那条 API 是 Phase 0 已经发出去的契约，改签名意味着前端、测试、
+/// 文档三处都要跟着动，而它本身没有任何问题。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct RunAgentActionBatchDto {
+    pub item_ids: Vec<String>,
+    pub action: AgentAction,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub struct SaveAgentKeyDto {

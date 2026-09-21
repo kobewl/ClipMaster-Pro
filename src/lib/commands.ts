@@ -98,6 +98,10 @@ export const commands = {
   runAgentAction(itemId: string, action: AgentAction): Promise<AgentResult> {
     return invoke("run_agent_action", { request: { item_id: itemId, action } });
   },
+  /** 多条内容一次归纳。内容同样只能由已保存的条目 ID 提供。 */
+  runAgentActionBatch(itemIds: string[], action: AgentAction): Promise<AgentResult> {
+    return invoke("run_agent_action_batch", { request: { item_ids: itemIds, action } });
+  },
   /** 读取模型配置快照（掩码，不含密钥本体）。 */
   getAgentConfig(): Promise<AgentConfigInfo> {
     return invoke("get_agent_config");

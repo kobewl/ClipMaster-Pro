@@ -68,6 +68,20 @@ export type AgentAction =
   | "extract_tasks"
   | "format_json";
 
+/** 一条输入在这次调用里的实际处理情况。编号与结果正文里的 [n] 引用对应。 */
+export interface AgentInputReport {
+  index: number;
+  item_id: string;
+  source: string;
+  /** 原文长度（截断前）。 */
+  full_chars: number;
+  /** 实际发给模型的长度。 */
+  used_chars: number;
+  truncated: boolean;
+  /** 内容里有疑似 prompt injection 的句式，已被标记为纯数据。 */
+  suspicious: boolean;
+}
+
 export interface AgentResult {
   request_id: string;
   action: string;
@@ -76,6 +90,18 @@ export interface AgentResult {
   provider: string;
   model: string;
   source_item_ids: string[];
+  /** 每条输入的处理情况。 */
+  inputs: AgentInputReport[];
+  /** 因为超出条数上限而整条没送进模型的记录（最旧的先丢）。 */
+  dropped_item_ids: string[];
+}
+
+/** 一次最多处理多少条记录（与后端 MAX_AGENT_INPUT_ITEMS 保持一致）。 */
+export const MAX_AGENT_INPUT_ITEMS = 20;
+
+/** 这个动作能不能对一组内容运行。格式化 JSON 只对单条有意义。 */
+export function supportsBatch(action: AgentAction): boolean {
+  return action !== "format_json";
 }
 
 /** Key 的来源：系统钥匙串（用户填的）或开发期环境变量。 */

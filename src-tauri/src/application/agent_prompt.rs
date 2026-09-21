@@ -179,12 +179,15 @@ struct Allocation {
 /// 把总预算分给各条内容。**水位填充**：均分 → 装得下的拿走自己的份、
 /// 把富余还给池子 → 剩下的重新均分，直到没有人能被完全装下。
 ///
+/// `needs` 是**转义之后**的长度，也就是真正会发出去的量。用原文长度会让预算
+/// 悄悄超支：内容里每出现一次 `</clip>` 就会多出 1 个字符的转义开销，
+/// 一条满是标签的内容能把这个差额攒到不可忽略。
+///
 /// 排序规则是**最近优先**：用户选中的一组内容里，越近的越可能正在处理，
 /// 所以预算不够时先牺牲旧的那条。丢弃也只丢最旧的 —— 把最新的丢掉、
 /// 留下半年前的旧内容，是最说不通的一种取舍。
-fn allocate(inputs: &[AgentInput]) -> Vec<Allocation> {
+fn allocate(inputs: &[AgentInput], needs: &[usize]) -> Vec<Allocation> {
     let n = inputs.len();
-    let needs: Vec<usize> = inputs.iter().map(|item| item.text.chars().count()).collect();
 
     // 按最近优先给出处理顺序；结果数组仍按传入顺序对齐，方便上层组装。
     let mut priority: Vec<usize> = (0..n).collect();
@@ -261,7 +264,11 @@ fn take_chars(text: &str, quota: usize, truncated: bool) -> String {
 
 /// 组装 system + user 消息，并给出每条内容的实际处理情况。
 pub fn prepare_prompt(task: PromptTask<'_>, inputs: &[AgentInput]) -> PreparedPrompt {
-    let allocations = allocate(inputs);
+    // 先转义再分配预算：转义是真正会发给模型的形态，预算必须按它来算。
+    // 反过来的话，内容里每有一个 `</clip>` 就会让实际发送量比预算多 1 个字符。
+    let escaped: Vec<String> = inputs.iter().map(|item| escape_clip_tags(&item.text)).collect();
+    let needs: Vec<usize> = escaped.iter().map(|text| text.chars().count()).collect();
+    let allocations = allocate(inputs, &needs);
 
     // 组装前先按"最近优先"排好，让 prompt 里的顺序与列表里的视觉顺序一致
     // （列表也是最近在前），用户核对 [1] [2] 时不用来回找。
@@ -278,12 +285,10 @@ pub fn prepare_prompt(task: PromptTask<'_>, inputs: &[AgentInput]) -> PreparedPr
         let input = &inputs[source_index];
         let full_chars = input.text.chars().count();
         let quota = allocations[source_index].quota;
-        let truncated = full_chars > quota;
+        let truncated = needs[source_index] > quota;
 
-        // 先转义标签，再截断：反过来的话截断可能正好切断一个转义序列，
-        // 留下半个 `<\` 拼上后面的 `clip`，又变成了可识别的标签。
-        let safe = escape_clip_tags(&input.text);
-        let body = take_chars(&safe, quota, truncated);
+        // 转义已经在上面统一做过，这里直接截断。
+        let body = take_chars(&escaped[source_index], quota, truncated);
         let suspicious = looks_like_injection(&input.text);
 
         let number = index + 1;
@@ -623,6 +628,82 @@ mod tests {
             "单条应当能用满总预算，不被 4000 的单条上限卡住"
         );
         assert!(!prompt.used[0].truncated);
+    }
+
+    /// Phase 0 的 12000 边界在单条路径上必须**原样保持**：
+    /// 正好 12000 字通过且不被截断，这是老用户手上长文能不能继续处理的界线。
+    #[test]
+    fn single_item_boundary_is_exactly_the_phase_0_limit() {
+        let exact = vec![input("exact", &"字".repeat(TOTAL_BUDGET_CHARS), 0)];
+        let prompt = prepare_prompt(task(), &exact);
+        assert_eq!(prompt.used.len(), 1);
+        assert!(
+            !prompt.used[0].truncated,
+            "正好 {} 字必须原样通过，不能开始截断",
+            TOTAL_BUDGET_CHARS
+        );
+        assert_eq!(prompt.used[0].used_chars, TOTAL_BUDGET_CHARS);
+        assert_eq!(
+            prompt.used[0].full_chars, TOTAL_BUDGET_CHARS,
+            "一条也没被切"
+        );
+    }
+
+    /// 内容里带 clip 标签时，预算必须按**转义后**的长度算。
+    ///
+    /// 这个用例的形状是精心构造的：原文正好 12000 字（卡在预算线上），
+    /// 但全是 7 字符的 `</clip>`，转义后每个多 1 个字符 → 14000 字。
+    /// 按原文长度算的话它"装得下"、不截断，于是实际发出去 14000 字 ——
+    /// 比预算多出 2000。
+    #[test]
+    fn escape_overhead_counts_against_the_budget() {
+        let unit = "</clip>"; // 7 字符，转义后 8 字符
+        let text = unit.repeat(TOTAL_BUDGET_CHARS / unit.chars().count());
+        let raw_len = text.chars().count();
+        assert!(
+            raw_len <= TOTAL_BUDGET_CHARS,
+            "构造前提：原文长度必须在预算之内（否则本来就会截断，测不到这个 bug）"
+        );
+        let escaped_len = text.replace("</clip>", "<\\/clip>").chars().count();
+        assert!(
+            escaped_len > TOTAL_BUDGET_CHARS,
+            "构造前提：转义后必须超出预算（实际 {escaped_len}）"
+        );
+
+        let prompt = prepare_prompt(task(), &[input("tags", &text, 0)]);
+
+        let total: usize = prompt.used.iter().map(|u| u.used_chars).sum();
+        assert!(
+            total <= TOTAL_BUDGET_CHARS,
+            "转义开销必须计入预算：实际发出 {total} 字，超过预算 {TOTAL_BUDGET_CHARS}"
+        );
+        assert!(
+            prompt.used[0].truncated,
+            "转义后超出预算就该截断，而不是先放行再超支"
+        );
+        // 截断之后仍然要是合法内容，不能把转义序列切坏
+        assert_eq!(
+            prompt.user.matches("</clip>").count(),
+            1,
+            "内容里的标签全被转义，只剩我们自己拼的那一对闭合标签"
+        );
+    }
+
+    /// 转义开销把内容顶过预算时，应当按转义后的长度正常截断，
+    /// 而不是先放行再超支。
+    #[test]
+    fn escaping_that_pushes_over_budget_truncates_instead_of_overflowing() {
+        // 11999 个普通字 + 一个 `</clip>`：转义后正好超出预算 1 个字符
+        let mut text = "字".repeat(TOTAL_BUDGET_CHARS - 1);
+        text.push_str("</clip>");
+        let inputs = vec![input("edge", &text, 0)];
+        let prompt = prepare_prompt(task(), &inputs);
+
+        let total: usize = prompt.used.iter().map(|u| u.used_chars).sum();
+        assert!(
+            total <= TOTAL_BUDGET_CHARS,
+            "总用量 {total} 超过预算 {TOTAL_BUDGET_CHARS}"
+        );
     }
 
     #[test]

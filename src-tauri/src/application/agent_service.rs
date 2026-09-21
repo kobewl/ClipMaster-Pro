@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::agent_prompt::{prepare_prompt, AgentInput, PromptTask};
+use crate::application::agent_prompt::{prepare_prompt, AgentInput, PromptTask, TOTAL_BUDGET_CHARS};
 use crate::application::history_service::HistoryService;
 use crate::domain::model::ContentType;
 use crate::domain::normalize::strip_html_tags;
@@ -174,7 +174,7 @@ pub enum AgentError {
     TooManyItems { count: usize },
     #[error("这个动作只能对单条内容运行，请只选中一条再试。")]
     BatchUnsupportedAction,
-    #[error("内容过长，请先裁剪后再运行 AI Action。")]
+    #[error("内容过长（最多 {} 个字符），请先裁剪后再运行 AI Action。", TOTAL_BUDGET_CHARS)]
     InputTooLong,
     #[error("DeepSeek 拒绝了这次请求（API Key 可能无效或已被撤销），请到「设置 → AI 助手」检查。")]
     Unauthorized,

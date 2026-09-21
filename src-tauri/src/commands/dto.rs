@@ -186,3 +186,26 @@ pub struct SaveAgentEndpointDto {
     pub base_url: String,
     pub model: String,
 }
+
+/// 一条 AI 使用记录。**没有 prompt 正文和模型响应正文** —— 那些内容就在
+/// 剪贴板历史里，审计再存一份等于把隐私面翻倍。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentRunDto {
+    pub id: String,
+    pub created_at: String,
+    /// 机器可读的动作名，用于按动作聚合（评测与统计）。
+    pub action: String,
+    /// 界面直接显示的动作名。
+    pub action_label: String,
+    /// 请求发往的服务；None = 在本地就被拦下，没发出去。
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub input_item_ids: Vec<String>,
+    pub input_chars: u64,
+    /// `"ok"` 或 `"error"`。
+    pub status: String,
+    pub error_code: Option<String>,
+    pub duration_ms: u64,
+    pub output_chars: Option<u64>,
+}

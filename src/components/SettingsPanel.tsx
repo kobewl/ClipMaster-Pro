@@ -75,6 +75,9 @@ export function SettingsPanel({
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentEndpointSaving, setAgentEndpointSaving] = useState(false);
   const [agentTesting, setAgentTesting] = useState(false);
+  const [agentRunsClearing, setAgentRunsClearing] = useState(false);
+  /** 上一次清除删掉的条数（用于给出「真的删了」的反馈）。 */
+  const [agentRunsCleared, setAgentRunsCleared] = useState<number | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [agentEndpointError, setAgentEndpointError] = useState<string | null>(null);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
@@ -122,6 +125,7 @@ export function SettingsPanel({
     setAgentEndpointError(null);
     setAgentNotice(null);
     setAgentEndpointOpen(false);
+    setAgentRunsCleared(null);
     commands
       .getAgentConfig()
       .then((info) => {
@@ -324,6 +328,29 @@ export function SettingsPanel({
       setAgentError(isCommandError(err) ? err.message : "测试连接失败");
     } finally {
       setAgentTesting(false);
+    }
+  }
+
+  /**
+   * 清除 AI 使用记录。
+   *
+   * 审计表里只有元数据（哪条记录、哪个服务、花了多久），但「我用 AI 处理过哪些
+   * 内容」本身也是隐私，用户该能一键抹掉。剪贴板历史不受影响。
+   */
+  async function handleAgentRunsClear() {
+    setAgentError(null);
+    setAgentNotice(null);
+    setAgentRunsClearing(true);
+    try {
+      const removed = await commands.clearAgentRuns();
+      setAgentRunsCleared(removed);
+      setAgentNotice(
+        removed > 0 ? `已清除 ${removed} 条使用记录 ✓` : "没有使用记录需要清除。",
+      );
+    } catch (err: unknown) {
+      setAgentError(isCommandError(err) ? err.message : "清除使用记录失败");
+    } finally {
+      setAgentRunsClearing(false);
     }
   }
 
@@ -600,6 +627,24 @@ export function SettingsPanel({
           <p className="mt-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
             Key 只存进 macOS 钥匙串，不写进本应用的数据库、日志或崩溃报告；AI 动作发送的是你选中的那一条内容本身。
           </p>
+
+          {/* 使用记录：只存元数据，但"我用 AI 处理过哪些内容"也是隐私，可一键抹掉。 */}
+          <div className="mt-2 flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={handleAgentRunsClear}
+              disabled={agentRunsClearing}
+              className="button button--secondary button--compact"
+            >
+              {agentRunsClearing ? "清除中…" : "清除 AI 使用记录"}
+            </button>
+            <span className="text-[10px] text-[var(--cm-fg-faint)]">
+              {agentRunsCleared !== null && agentRunsCleared > 0
+                ? `上次清除了 ${agentRunsCleared} 条`
+                : "只记录用了哪条、哪个模型、耗时；不存内容本身"}
+            </span>
+          </div>
+
           {agentNotice && (
             <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--cm-success)]">{agentNotice}</p>
           )}

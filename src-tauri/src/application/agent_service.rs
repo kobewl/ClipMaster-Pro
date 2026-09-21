@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 use crate::application::history_service::HistoryService;
 use crate::domain::model::ContentType;
 use crate::domain::normalize::strip_html_tags;
-use crate::domain::ports::{AgentConfigStore, AgentProviderConfig, SecretStore};
+use crate::domain::ports::{
+    AgentConfigStore, AgentProviderConfig, AgentRunRecord, AgentRunStore, SecretStore,
+};
 
 const MAX_AGENT_INPUT_CHARS: usize = 12_000;
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
@@ -35,13 +37,37 @@ pub enum AgentAction {
 }
 
 impl AgentAction {
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             Self::Summarize => "总结",
             Self::TranslateZh => "翻译为中文",
             Self::Explain => "解释",
             Self::ExtractTasks => "提取待办",
             Self::FormatJson => "格式化 JSON",
+        }
+    }
+
+    /// 机器可读的动作名，审计表里存这个。界面文案会改，改完历史数据的口径就对不上了。
+    pub fn key(&self) -> &'static str {
+        match self {
+            Self::Summarize => "summarize",
+            Self::TranslateZh => "translate_zh",
+            Self::Explain => "explain",
+            Self::ExtractTasks => "extract_tasks",
+            Self::FormatJson => "format_json",
+        }
+    }
+
+    /// 从审计表里的 key 还原动作。认不出来返回 None —— 宁可显示原始字符串，
+    /// 也不要糊一个错的动作名上去。
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "summarize" => Some(Self::Summarize),
+            "translate_zh" => Some(Self::TranslateZh),
+            "explain" => Some(Self::Explain),
+            "extract_tasks" => Some(Self::ExtractTasks),
+            "format_json" => Some(Self::FormatJson),
+            _ => None,
         }
     }
 
@@ -100,6 +126,8 @@ pub enum AgentError {
     SecretStoreUnavailable(String),
     #[error("无法保存模型服务配置：{0}")]
     ConfigStoreUnavailable(String),
+    #[error("无法读写 AI 使用记录：{0}")]
+    RunStoreUnavailable(String),
 }
 
 impl AgentError {
@@ -120,6 +148,7 @@ impl AgentError {
             Self::InvalidModel(_) => "ai_invalid_model",
             Self::SecretStoreUnavailable(_) => "secret_unavailable",
             Self::ConfigStoreUnavailable(_) => "ai_config_save_failed",
+            Self::RunStoreUnavailable(_) => "ai_run_store_unavailable",
         }
     }
 
@@ -141,6 +170,17 @@ pub struct AgentConfig {
     pub api_key_from_env: bool,
 }
 
+/// `run` 执行过程中逐步补齐的审计上下文：走到哪一步，才知道哪些字段有真值。
+#[derive(Default)]
+struct RunAudit {
+    /// 本次调用的 ID。**和结果卡片上的 request_id 是同一个值** —— 用户在界面上
+    /// 看到的那个号，就是审计表里的那一行，可追溯才是真的可追溯。
+    request_id: Option<String>,
+    /// 本次要发往的服务。本地就被拦下时保持 `None` —— 什么都没发出去。
+    target: Option<(String, String)>,
+    input_chars: u64,
+}
+
 /// 给前端的配置快照，**不含密钥本体**。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,12 +192,17 @@ pub struct AgentConfigInfo {
     pub model: String,
     /// 地址是用户设的（false = 内置默认值）。
     pub base_url_is_custom: bool,
+    /// 界面上显示的服务名（默认地址显示 "DeepSeek"，自定义显示真实主机名）。
+    /// 由后端算而不是前端拼：结果卡片上的来源标注走的也是这个函数，
+    /// 两处必须一致 —— 否则标题写着 DeepSeek、结果卡片写着中转站。
+    pub provider_label: String,
 }
 
 pub struct AgentService {
     history: Arc<HistoryService>,
     secrets: Arc<dyn SecretStore>,
     config_store: Arc<dyn AgentConfigStore>,
+    runs: Arc<dyn AgentRunStore>,
     client: reqwest::Client,
 }
 
@@ -166,11 +211,13 @@ impl AgentService {
         history: Arc<HistoryService>,
         secrets: Arc<dyn SecretStore>,
         config_store: Arc<dyn AgentConfigStore>,
+        runs: Arc<dyn AgentRunStore>,
     ) -> Self {
         Self {
             history,
             secrets,
             config_store,
+            runs,
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(45))
                 .build()
@@ -236,6 +283,7 @@ impl AgentService {
             // 按值判断而不是"库里有没有记录"：用户点过「恢复默认」之后
             // 库里确实存着一条，但那条就是默认值，不该显示成"自定义"。
             base_url_is_custom: config.base_url != DEFAULT_BASE_URL,
+            provider_label: provider_label(&config.base_url),
             base_url: config.base_url,
             model: config.model,
         })
@@ -319,6 +367,24 @@ impl AgentService {
     }
 
     pub async fn run(&self, item_id: &str, action: AgentAction) -> Result<AgentResult, AgentError> {
+        let started = std::time::Instant::now();
+        let mut audit = RunAudit {
+            // 先定号：结果卡片要显示它，审计也要用它当主键。
+            request_id: Some(uuid::Uuid::new_v4().to_string()),
+            ..Default::default()
+        };
+        let result = self.run_inner(item_id, &action, &mut audit).await;
+        self.audit(item_id, &action, &result, audit, started.elapsed())
+            .await;
+        result
+    }
+
+    async fn run_inner(
+        &self,
+        item_id: &str,
+        action: &AgentAction,
+        audit: &mut RunAudit,
+    ) -> Result<AgentResult, AgentError> {
         let item = self
             .history
             .get(item_id)
@@ -335,8 +401,12 @@ impl AgentService {
         if contains_sensitive_content(&text) {
             return Err(AgentError::SensitiveContent);
         }
+        audit.input_chars = text.chars().count() as u64;
 
         let config = self.config().await?;
+        // 配置解出来就记下目标服务：即使后面因为没配 Key 或网络失败没读成，
+        // 审计里也能看出"这次本来要发往哪里"。
+        audit.target = Some((provider_label(&config.base_url), config.model.clone()));
         let api_key = config.api_key.ok_or(AgentError::NotConfigured)?;
 
         let response = self
@@ -375,7 +445,10 @@ impl AgentService {
             .ok_or(AgentError::InvalidResponse)?;
 
         Ok(AgentResult {
-            request_id: uuid::Uuid::new_v4().to_string(),
+            request_id: audit
+                .request_id
+                .clone()
+                .expect("run 入口已经把 request_id 放进 audit"),
             action: action.label().to_string(),
             title: format!("AI {}", action.label()),
             content,
@@ -383,6 +456,76 @@ impl AgentService {
             model: config.model,
             source_item_ids: vec![item_id.to_string()],
         })
+    }
+
+    /// 写一条调用审计。
+    ///
+    /// 审计是旁路：写失败只记日志，不能把用户这次操作本身带崩。
+    /// 被本地门禁拦下的调用同样留痕 —— "哪些内容触发过安全规则"本身就是
+    /// 用户需要的答案，只在成功时记录等于把最有用的那一半丢掉。
+    async fn audit(
+        &self,
+        item_id: &str,
+        action: &AgentAction,
+        result: &Result<AgentResult, AgentError>,
+        audit: RunAudit,
+        elapsed: std::time::Duration,
+    ) {
+        let (status, error_code, output_chars) = match result {
+            Ok(res) => ("ok", None, Some(res.content.chars().count() as u64)),
+            Err(err) => ("error", Some(err.code().to_string()), None),
+        };
+        let (provider, model) = match audit.target {
+            Some((provider, model)) => (Some(provider), Some(model)),
+            None => (None, None),
+        };
+        let record = AgentRunRecord {
+            // 与结果卡片上的 request_id 同号：用户拿着界面上那个号就能查到这一行。
+            id: audit
+                .request_id
+                .clone()
+                .expect("run 入口已经把 request_id 放进 audit"),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            action: action.key().to_string(),
+            provider,
+            model,
+            // 条目在读它的时候还在（ItemUnavailable 的情况本来就没条目可挂，
+            // store 会把这条没有主语的记录丢掉）。
+            input_item_ids: vec![item_id.to_string()],
+            input_chars: audit.input_chars,
+            status: status.to_string(),
+            error_code,
+            duration_ms: elapsed.as_millis() as u64,
+            output_chars,
+        };
+        if let Err(err) = self.runs.record(record).await {
+            tracing::warn!(error = %err, "写入 AI 调用审计失败");
+        }
+    }
+
+    /// 最近的 AI 调用审计，新的在前。
+    pub async fn recent_runs(&self, limit: u32) -> Result<Vec<AgentRunRecord>, AgentError> {
+        self.runs
+            .list_recent(limit)
+            .await
+            .map_err(|err| AgentError::RunStoreUnavailable(err.to_string()))
+    }
+
+    /// 按 ID 取一条审计（结果卡片的「查看来源」）。找不到返回 `None` ——
+    /// 记录可能已经随原始条目被删掉了，那是正常状态，不是错误。
+    pub async fn find_run(&self, id: &str) -> Result<Option<AgentRunRecord>, AgentError> {
+        self.runs
+            .find(id)
+            .await
+            .map_err(|err| AgentError::RunStoreUnavailable(err.to_string()))
+    }
+
+    /// 清空审计记录（设置里的「清除 AI 使用记录」）。
+    pub async fn clear_runs(&self) -> Result<u64, AgentError> {
+        self.runs
+            .clear()
+            .await
+            .map_err(|err| AgentError::RunStoreUnavailable(err.to_string()))
     }
 }
 

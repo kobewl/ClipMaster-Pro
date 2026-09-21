@@ -4,6 +4,7 @@ import type {
   AgentAction,
   AgentConfigInfo,
   AgentResult,
+  AgentRun,
   ClipGroup,
   ClipboardItem,
   ListQuery,
@@ -119,6 +120,18 @@ export const commands = {
   /** 用 GET /models 验证 Key 与网络，不产生推理费用。 */
   testAgentConnection(): Promise<void> {
     return invoke("test_agent_connection");
+  },
+  /** 最近的 AI 使用记录，新的在前。 */
+  listAgentRuns(): Promise<AgentRun[]> {
+    return invoke("list_agent_runs");
+  },
+  /** 取一条使用记录；记录已随原始条目被删时返回 null。 */
+  getAgentRun(id: string): Promise<AgentRun | null> {
+    return invoke("get_agent_run", { id });
+  },
+  /** 清空使用记录，返回删掉的条数。 */
+  clearAgentRuns(): Promise<number> {
+    return invoke("clear_agent_runs");
   },
 };
 

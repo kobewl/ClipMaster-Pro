@@ -12,6 +12,7 @@ use crate::application::settings_service::SettingsService;
 use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
+use crate::infrastructure::sqlite::agent_run_store::SqliteAgentRunStore;
 use crate::infrastructure::sqlite::group_repository::SqliteGroupRepository;
 use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
 use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
@@ -126,7 +127,14 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         settings_store.clone(),
     ));
     let secrets: Arc<dyn crate::domain::ports::SecretStore> = Arc::new(PlatformSecretStore::new());
-    let agent = Arc::new(AgentService::new(history.clone(), secrets, settings_impl));
+    let run_store: Arc<dyn crate::domain::ports::AgentRunStore> =
+        Arc::new(SqliteAgentRunStore::new(conn.clone()));
+    let agent = Arc::new(AgentService::new(
+        history.clone(),
+        secrets,
+        settings_impl,
+        run_store,
+    ));
     let settings = Arc::new(SettingsService::new(settings_store.clone()));
     let groups = Arc::new(GroupService::new(group_repository));
 

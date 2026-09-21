@@ -627,6 +627,12 @@ button {
 .agent-result__meta strong { color: var(--cm-fg); font-size: 11.5px; }
 .agent-result__meta span { color: var(--cm-fg-faint); font-size: 10px; }
 .agent-result pre { max-height: 180px; overflow: auto; margin: 7px 0; border: 1px solid var(--cm-line); border-radius: var(--cm-radius-sm); background: var(--cm-surface); padding: 8px; color: var(--cm-fg); font: 11.5px/1.6 var(--cm-mono); white-space: pre-wrap; word-break: break-word; }
+.agent-result__foot { display: flex; align-items: center; gap: 8px; }
+/* 「查看来源」读的是审计表里的真实记录，而不是界面自己拼的近似值 */
+.agent-result__detail { display: grid; grid-template-columns: auto 1fr; gap: 3px 10px; margin: 8px 0 0; border-top: 1px dashed var(--cm-line); padding-top: 8px; }
+.agent-result__detail dt { color: var(--cm-fg-faint); font-size: 10px; }
+.agent-result__detail dd { margin: 0; color: var(--cm-fg-muted); font-size: 10px; word-break: break-all; }
+.agent-result__id { font-family: var(--cm-mono); font-size: 9.5px; color: var(--cm-fg-faint); }
 
 /* ---------------------------------------------------------------------------
    图片缩放（规范 8.5）

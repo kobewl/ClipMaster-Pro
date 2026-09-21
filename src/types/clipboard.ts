@@ -91,6 +91,35 @@ export interface AgentConfigInfo {
   model: string;
   /** 地址是用户自己设的（false = 正在用内置默认值）。 */
   base_url_is_custom: boolean;
+  /** 界面上显示的服务名（默认地址是 "DeepSeek"，自定义地址是真实主机名）。 */
+  provider_label: string;
+}
+
+/**
+ * 一条 AI 使用记录。**没有 prompt 和响应正文** —— 那些内容就在剪贴板历史里，
+ * 审计再存一份等于把隐私面翻倍。
+ */
+export interface AgentRun {
+  id: string;
+  created_at: string;
+  /** 机器可读的动作名（汇总统计用）。 */
+  action: string;
+  /** 界面直接显示的动作名。 */
+  action_label: string;
+  /** 发往的服务；null = 在本地就被拦下，什么都没发出去。 */
+  provider: string | null;
+  model: string | null;
+  input_item_ids: string[];
+  input_chars: number;
+  status: "ok" | "error";
+  error_code: string | null;
+  duration_ms: number;
+  output_chars: number | null;
+}
+
+/** 调用耗时：秒级以下给毫秒，之上给一位小数的秒。 */
+export function formatRunDuration(ms: number): string {
+  return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
 export function isCommandError(value: unknown): value is CommandError {

@@ -130,6 +130,46 @@ pub trait AgentConfigStore: Send + Sync {
 }
 
 // ---------------------------------------------------------------------------
+//  AgentRunStore（AI 调用审计）
+// ---------------------------------------------------------------------------
+
+/// 一次 AI 调用的审计记录。
+///
+/// **刻意不存的东西**：prompt 正文、模型响应正文、API Key。前两者本来就在
+/// 剪贴板历史里，审计再存一份等于把隐私面翻倍；密钥从不落库。
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentRunRecord {
+    pub id: String,
+    pub created_at: String,
+    /// 机器可读的动作名（`summarize` / `translate_zh` / …），不是界面文案 ——
+    /// 界面文案会改，改完历史数据的口径就对不上了。
+    pub action: String,
+    /// 请求实际发往的服务。`None` = 在本地就被拦下，根本没到达任何服务。
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    /// 本次调用读了哪些剪贴板条目。至少一条，否则这条记录没有主语。
+    pub input_item_ids: Vec<String>,
+    pub input_chars: u64,
+    /// `"ok"` 或 `"error"`。
+    pub status: String,
+    pub error_code: Option<String>,
+    pub duration_ms: u64,
+    pub output_chars: Option<u64>,
+}
+
+#[async_trait]
+pub trait AgentRunStore: Send + Sync {
+    /// 落一条审计。实现方应保证：没有主语的记录不留在表里。
+    async fn record(&self, run: AgentRunRecord) -> Result<(), RepositoryError>;
+    /// 最近 N 条，新的在前。
+    async fn list_recent(&self, limit: u32) -> Result<Vec<AgentRunRecord>, RepositoryError>;
+    /// 按 ID 取一条（结果卡片的「查看来源」用）。
+    async fn find(&self, id: &str) -> Result<Option<AgentRunRecord>, RepositoryError>;
+    /// 清空全部审计，返回删掉的条数。
+    async fn clear(&self) -> Result<u64, RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
 //  SecretStore（模型密钥等敏感配置）
 // ---------------------------------------------------------------------------
 

@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -104,6 +104,52 @@ const MIGRATIONS: &[(i64, &str)] = &[
         ON clipboard_items((group_id IS NULL), last_copied_at DESC);
     CREATE INDEX IF NOT EXISTS idx_clipboard_items_group_time
         ON clipboard_items(group_id, last_copied_at DESC);
+    "#,
+    ),
+    // -----------------------------------------------------------------------
+    // Migration 6: AI 调用审计（Phase 1 第 1 步）
+    //
+    // 只存元数据：prompt 正文和模型响应正文都在剪贴板历史里，审计再存一份
+    // 等于把隐私面翻倍。密钥本来就只在内存里流转，不落表。
+    // -----------------------------------------------------------------------
+    (
+        6,
+        r#"
+    CREATE TABLE IF NOT EXISTS agent_runs (
+        id           TEXT PRIMARY KEY,
+        created_at   TEXT NOT NULL,
+        action       TEXT NOT NULL,
+        provider     TEXT,
+        model        TEXT,
+        input_chars  INTEGER NOT NULL DEFAULT 0,
+        status       TEXT NOT NULL,
+        error_code   TEXT,
+        duration_ms  INTEGER NOT NULL DEFAULT 0,
+        output_chars INTEGER
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_runs_created_at
+        ON agent_runs(created_at DESC);
+
+    -- 一次调用用了哪些条目。单独建表而不是在 agent_runs 里塞 JSON 数组，
+    -- 就是为了让 FOREIGN KEY 真正生效：条目被删时关联行自动消失。
+    CREATE TABLE IF NOT EXISTS agent_run_items (
+        run_id  TEXT NOT NULL REFERENCES agent_runs(id) ON DELETE CASCADE,
+        item_id TEXT NOT NULL REFERENCES clipboard_items(id) ON DELETE CASCADE,
+        PRIMARY KEY (run_id, item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_run_items_item
+        ON agent_run_items(item_id);
+
+    -- 主语全没了，这条审计记录就无从追溯，一并删掉。做成触发器而不是在各处
+    -- 手写清理：删除条目的路径有四条（用户删除 / 清空 / 按条数淘汰 / 按天过期），
+    -- 触发器让「审计不悬空」成为数据库不变量，将来新增删除路径也不会漏。
+    CREATE TRIGGER IF NOT EXISTS trg_agent_runs_drop_orphans
+    AFTER DELETE ON agent_run_items
+    BEGIN
+        DELETE FROM agent_runs
+        WHERE id = OLD.run_id
+          AND NOT EXISTS (SELECT 1 FROM agent_run_items WHERE run_id = OLD.run_id);
+    END;
     "#,
     ),
 ];

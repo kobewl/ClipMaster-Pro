@@ -11,6 +11,12 @@ import {
   validateAgentKey,
 } from "@/lib/agentKey";
 import { onUpdateInstalling, onUpdateProgress } from "@/lib/events";
+import {
+  applyTheme,
+  isThemePreference,
+  THEME_OPTIONS,
+  type ThemePreference,
+} from "@/lib/theme";
 import { ShortcutInput } from "./ShortcutInput";
 import { Icon } from "./Icon";
 
@@ -55,6 +61,8 @@ export function SettingsPanel({
   const [retentionDays, setRetentionDays] = useState("30");
   const [captureEnabled, setCaptureEnabled] = useState(true);
   const [shortcut, setShortcut] = useState("");
+  const [theme, setTheme] = useState<ThemePreference>("system");
+  const [themeSaving, setThemeSaving] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [shortcutError, setShortcutError] = useState<string | null>(null);
@@ -102,6 +110,7 @@ export function SettingsPanel({
     setRetentionDays(String(settings.retention_days));
     setCaptureEnabled(settings.capture_enabled);
     setShortcut(settings.shortcut);
+    setTheme(isThemePreference(settings.theme) ? settings.theme : "system");
   }, [settings]);
 
   // 每次打开面板都清掉上一次的错误提示，并重新读一次自启状态
@@ -171,6 +180,7 @@ export function SettingsPanel({
         ),
         capture_enabled: captureEnabled,
         shortcut,
+        theme,
       });
       onClose();
     } catch (err: unknown) {
@@ -198,6 +208,33 @@ export function SettingsPanel({
       setShortcut(settingsRef.current?.shortcut ?? "");
     } finally {
       setShortcutSaving(false);
+    }
+  }
+
+  /** 主题立即生效并落库，不必等点「保存」。 */
+  async function handleThemeChange(next: ThemePreference) {
+    const current = settingsRef.current;
+    if (!current || next === theme) return;
+    const previous = theme;
+    setTheme(next);
+    applyTheme(next);
+    setThemeSaving(true);
+    setError(null);
+    try {
+      await onSave({
+        max_history: current.max_history,
+        retention_days: current.retention_days,
+        capture_enabled: current.capture_enabled,
+        shortcut: current.shortcut,
+        theme: next,
+      });
+      onSettingsChange({ ...current, theme: next });
+    } catch (err: unknown) {
+      setTheme(previous);
+      applyTheme(previous);
+      setError(isCommandError(err) ? err.message : "主题设置失败");
+    } finally {
+      setThemeSaving(false);
     }
   }
 
@@ -587,7 +624,7 @@ export function SettingsPanel({
                   value={agentModel}
                   spellCheck={false}
                   autoComplete="off"
-                  placeholder="deepseek-chat"
+                  placeholder="deepseek-flash"
                   disabled={agentEndpointSaving}
                   onChange={(event) => setAgentModel(event.target.value)}
                   className="mt-1 w-full rounded-lg border border-[var(--cm-line)] bg-transparent px-2.5 py-1.5 font-mono text-[11px] text-neutral-800 outline-none focus:border-[var(--cm-accent-ring)] focus:ring-1 focus:ring-[var(--cm-accent-ring)] disabled:opacity-60 dark:text-neutral-100"
@@ -651,6 +688,32 @@ export function SettingsPanel({
           {agentError && (
             <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--cm-danger)]">⚠ {agentError}</p>
           )}
+        </fieldset>
+
+        <fieldset className="settings-section mt-3">
+          <legend className="px-1.5 text-[11px] font-medium text-[var(--cm-fg-faint)]">外观</legend>
+          <p className="mb-2 text-xs text-[var(--cm-fg-muted)]">主题</p>
+          <div className="flex flex-wrap gap-1">
+            {THEME_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                disabled={themeSaving}
+                aria-pressed={theme === option.value}
+                onClick={() => handleThemeChange(option.value)}
+                className={
+                  theme === option.value
+                    ? "button button--primary button--compact"
+                    : "button button--secondary button--compact"
+                }
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          <p className="mt-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
+            「跟随系统」会随 macOS 浅色/深色自动切换；改完立即生效。
+          </p>
         </fieldset>
 
         <fieldset className="settings-section mt-3">

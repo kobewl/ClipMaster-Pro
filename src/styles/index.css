@@ -1,12 +1,15 @@
 @import "tailwindcss";
 
+/* class 策略：由 src/lib/theme.ts 在 <html> 上切换 .dark */
+@custom-variant dark (&:where(.dark, .dark *));
+
 /* ---------------------------------------------------------------------------
    ClipMaster Pro · 设计令牌（唯一来源：docs/design/README.md 第二节）
    组件层只允许使用这里的语义令牌，不允许出现硬编码色值。
 --------------------------------------------------------------------------- */
 
 :root {
-  color-scheme: light dark;
+  color-scheme: light;
 
   /* 语义色 · 浅色 */
   --cm-bg: #f2f3f7;            /* 窗口最底层 */
@@ -45,31 +48,30 @@
   --cm-ease: cubic-bezier(0.32, 0.72, 0, 1);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* 深色面带一点蓝，不是纯黑；所有对比度整体调低一档，暗环境里不发光 */
-    --cm-bg: #08090d;
-    --cm-surface: #121419;
-    --cm-surface2: #191c23;
-    --cm-surface3: #1e2229;
-    --cm-line: rgba(255, 255, 255, 0.085);
-    --cm-line-strong: rgba(255, 255, 255, 0.17);
-    --cm-hover: rgba(255, 255, 255, 0.055);
-    --cm-fg: #eceef4;
-    --cm-fg-muted: #9ea3b6;
-    --cm-fg-faint: #6c7186;
-    --cm-accent: #7b7ef5;
-    --cm-accent-text: #a5a7fa;
-    --cm-accent-soft: rgba(107, 110, 245, 0.16);
-    --cm-accent-ring: rgba(123, 126, 245, 0.38);
-    --cm-success: #34d3a6;
-    --cm-danger: #f87171;
-    --cm-highlight: rgba(250, 204, 21, 0.26);
-    --cm-on-accent: #ffffff;
-    --cm-sh1: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --cm-sh2: 0 4px 12px rgba(0, 0, 0, 0.35);
-    --cm-sh3: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
-  }
+html.dark {
+  color-scheme: dark;
+  /* 深色面带一点蓝，不是纯黑；所有对比度整体调低一档，暗环境里不发光 */
+  --cm-bg: #08090d;
+  --cm-surface: #121419;
+  --cm-surface2: #191c23;
+  --cm-surface3: #1e2229;
+  --cm-line: rgba(255, 255, 255, 0.085);
+  --cm-line-strong: rgba(255, 255, 255, 0.17);
+  --cm-hover: rgba(255, 255, 255, 0.055);
+  --cm-fg: #eceef4;
+  --cm-fg-muted: #9ea3b6;
+  --cm-fg-faint: #6c7186;
+  --cm-accent: #7b7ef5;
+  --cm-accent-text: #a5a7fa;
+  --cm-accent-soft: rgba(107, 110, 245, 0.16);
+  --cm-accent-ring: rgba(123, 126, 245, 0.38);
+  --cm-success: #34d3a6;
+  --cm-danger: #f87171;
+  --cm-highlight: rgba(250, 204, 21, 0.26);
+  --cm-on-accent: #ffffff;
+  --cm-sh1: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --cm-sh2: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --cm-sh3: 0 16px 40px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 
 /* 字体栈：macOS 落到 SF Pro Text + 苹方，中英混排字重与基线最协调 */

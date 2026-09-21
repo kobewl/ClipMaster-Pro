@@ -19,6 +19,11 @@ src-tauri/gen/schemas/
 .DS_Store
 **/.DS_Store
 
+# 本地代码签名备份（含私钥，绝不能进仓库）
+*.p12
+*.password
+.clipmaster-signing/
+
 # TypeScript 增量构建产物（每次编译都会变，不需要版本控制）
 tsconfig.tsbuildinfo
 

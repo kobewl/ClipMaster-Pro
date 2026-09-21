@@ -42,6 +42,8 @@ export interface AppSettings {
   retention_days: number;
   capture_enabled: boolean;
   shortcut: string;
+  /** `system` | `light` | `dark` */
+  theme: string;
 }
 
 export interface CommandError {

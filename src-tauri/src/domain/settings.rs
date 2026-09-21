@@ -8,6 +8,11 @@ use serde::{Deserialize, Serialize};
 /// 而 Cmd+Shift+V 在大多数应用中没有默认绑定，冲突概率较低。
 pub const DEFAULT_SHORTCUT: &str = "CmdOrCtrl+Shift+V";
 
+/// 外观主题：浅色 / 深色 / 跟随系统。
+pub const THEME_SYSTEM: &str = "system";
+pub const THEME_LIGHT: &str = "light";
+pub const THEME_DARK: &str = "dark";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub max_history: u32,
@@ -16,6 +21,8 @@ pub struct AppSettings {
     /// 全局快捷键（FR-SET-003），格式为 Tauri accelerator 字符串，
     /// 例如 "CmdOrCtrl+Shift+V"。空字符串表示不注册快捷键。
     pub shortcut: String,
+    /// `system` | `light` | `dark`。默认跟随系统。
+    pub theme: String,
 }
 
 impl Default for AppSettings {
@@ -25,6 +32,7 @@ impl Default for AppSettings {
             retention_days: 30,
             capture_enabled: true,
             shortcut: DEFAULT_SHORTCUT.to_string(),
+            theme: THEME_SYSTEM.to_string(),
         }
     }
 }
@@ -44,7 +52,17 @@ impl AppSettings {
         if !self.shortcut.is_empty() {
             validate_shortcut_format(&self.shortcut)?;
         }
+        validate_theme(&self.theme)?;
         Ok(())
+    }
+}
+
+fn validate_theme(theme: &str) -> Result<(), String> {
+    match theme {
+        THEME_SYSTEM | THEME_LIGHT | THEME_DARK => Ok(()),
+        _ => Err(format!(
+            "不支持的主题 \"{theme}\"，可用: system, light, dark"
+        )),
     }
 }
 
@@ -86,6 +104,7 @@ mod tests {
     fn default_shortcut_is_valid() {
         let settings = AppSettings::default();
         assert!(settings.validate().is_ok());
+        assert_eq!(settings.theme, THEME_SYSTEM);
     }
 
     #[test]
@@ -104,5 +123,15 @@ mod tests {
     fn valid_shortcut_passes() {
         let s = AppSettings { shortcut: "Alt+Shift+C".to_string(), ..Default::default() };
         assert!(s.validate().is_ok());
+    }
+
+    #[test]
+    fn theme_must_be_one_of_three() {
+        for theme in [THEME_SYSTEM, THEME_LIGHT, THEME_DARK] {
+            let s = AppSettings { theme: theme.to_string(), ..Default::default() };
+            assert!(s.validate().is_ok(), "theme={theme}");
+        }
+        let bad = AppSettings { theme: "auto".to_string(), ..Default::default() };
+        assert!(bad.validate().is_err());
     }
 }

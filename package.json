@@ -9,6 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "build:macos:release": "bash scripts/build-macos-release.sh",
+    "macos:create-signing-cert": "bash scripts/create-stable-signing-cert.sh",
+    "macos:sign-app": "bash scripts/sign-macos-app.sh",
+    "macos:export-signing-cert": "bash scripts/export-signing-cert-for-ci.sh",
     "test": "vitest run",
     "test:watch": "vitest"
   },

@@ -17,6 +17,7 @@ const KEY_MAX_HISTORY: &str = "max_history";
 const KEY_RETENTION_DAYS: &str = "retention_days";
 const KEY_CAPTURE_ENABLED: &str = "capture_enabled";
 const KEY_SHORTCUT: &str = "shortcut";
+const KEY_THEME: &str = "theme";
 // 模型服务的地址与模型名。**密钥不在这里** —— 它走系统钥匙串
 // （见 domain/ports.rs 里两个 trait 的注释）。
 const KEY_AI_BASE_URL: &str = "ai_base_url";
@@ -51,12 +52,16 @@ impl SettingsStore for SqliteSettingsStore {
                 .unwrap_or(defaults.capture_enabled);
             let shortcut = get_value(&conn, KEY_SHORTCUT)?
                 .unwrap_or(defaults.shortcut.clone());
+            let theme = get_value(&conn, KEY_THEME)?
+                .filter(|v| matches!(v.as_str(), "system" | "light" | "dark"))
+                .unwrap_or(defaults.theme.clone());
 
             Ok(AppSettings {
                 max_history,
                 retention_days,
                 capture_enabled,
                 shortcut,
+                theme,
             })
         })
         .await
@@ -87,6 +92,7 @@ impl SettingsStore for SqliteSettingsStore {
                 },
             )?;
             set_value(&tx, KEY_SHORTCUT, &settings.shortcut)?;
+            set_value(&tx, KEY_THEME, &settings.theme)?;
 
             tx.commit()
                 .map_err(|e| RepositoryError::Database(e.to_string()))?;

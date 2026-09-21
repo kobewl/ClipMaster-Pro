@@ -37,7 +37,7 @@ export function validateAgentBaseUrl(raw: string): string | null {
 
 /** 常用服务商，设置面板里做成一键填入。 */
 export const AGENT_PRESETS = [
-  { label: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-chat" },
+  { label: "DeepSeek", baseUrl: "https://api.deepseek.com", model: "deepseek-flash" },
   { label: "OpenAI", baseUrl: "https://api.openai.com/v1", model: "gpt-4o-mini" },
   { label: "本地 Ollama", baseUrl: "http://127.0.0.1:11434/v1", model: "llama3.1" },
 ] as const;

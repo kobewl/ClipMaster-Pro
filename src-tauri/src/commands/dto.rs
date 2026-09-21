@@ -139,6 +139,7 @@ pub struct AppSettingsDto {
     pub retention_days: i64,
     pub capture_enabled: bool,
     pub shortcut: String,
+    pub theme: String,
 }
 
 impl From<AppSettings> for AppSettingsDto {
@@ -148,6 +149,7 @@ impl From<AppSettings> for AppSettingsDto {
             retention_days: s.retention_days,
             capture_enabled: s.capture_enabled,
             shortcut: s.shortcut,
+            theme: s.theme,
         }
     }
 }
@@ -159,6 +161,7 @@ impl From<AppSettingsDto> for AppSettings {
             retention_days: s.retention_days,
             capture_enabled: s.capture_enabled,
             shortcut: s.shortcut,
+            theme: s.theme,
         }
     }
 }

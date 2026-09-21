@@ -17,6 +17,7 @@ import { mergeSelectedItems } from "@/lib/mergeItems";
 import { getSourceIconPath } from "@/lib/sourceIcons";
 import type { AppSettings } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
+import { applyTheme, isThemePreference } from "@/lib/theme";
 
 export default function App() {
   const [searchInput, setSearchInput] = useState("");
@@ -64,7 +65,15 @@ export default function App() {
   });
 
   useEffect(() => {
-    commands.getSettings().then(setSettings).catch(() => {});
+    commands
+      .getSettings()
+      .then((next) => {
+        setSettings(next);
+        applyTheme(isThemePreference(next.theme) ? next.theme : "system");
+      })
+      .catch(() => {
+        applyTheme("system");
+      });
   }, []);
 
   // 托盘菜单 → 界面联动：采集开关变化（含托盘自己切的）同步到状态栏与
@@ -414,6 +423,7 @@ export default function App() {
         onSave={async (next) => {
           const saved = await commands.updateSettings(next);
           setSettings(saved);
+          applyTheme(isThemePreference(saved.theme) ? saved.theme : "system");
         }}
         onSettingsChange={setSettings}
       />

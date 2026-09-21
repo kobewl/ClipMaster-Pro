@@ -16,7 +16,9 @@ use crate::domain::ports::{
 };
 
 pub const DEFAULT_BASE_URL: &str = "https://api.deepseek.com";
-pub const DEFAULT_MODEL: &str = "deepseek-chat";
+/// DeepSeek 官方当前默认模型 ID（DeepSeek-V4.1-Flash）。
+/// 见 https://api-docs.deepseek.com/quick_start/pricing —— 旧名 `deepseek-chat` 已退役。
+pub const DEFAULT_MODEL: &str = "deepseek-flash";
 
 /// 一次 AI 调用最多处理多少条记录。
 ///
@@ -346,7 +348,7 @@ impl AgentService {
             }
         };
         if let Some(saved) = saved {
-            return saved;
+            return migrate_legacy_deepseek_model(saved);
         }
         AgentProviderConfig {
             base_url: env_base_url().unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
@@ -803,6 +805,23 @@ pub fn host_of(base_url: &str) -> String {
         .ok()
         .and_then(|parsed| parsed.host_str().map(|host| host.to_string()))
         .unwrap_or_default()
+}
+
+/// 把仍写在库里的旧 DeepSeek 模型名映射到官方现行 ID。
+/// 只动默认 DeepSeek 端点；用户自定义的第三方模型名原样保留。
+fn migrate_legacy_deepseek_model(config: AgentProviderConfig) -> AgentProviderConfig {
+    let base = config.base_url.trim_end_matches('/');
+    if base != DEFAULT_BASE_URL {
+        return config;
+    }
+    let model = match config.model.as_str() {
+        "deepseek-chat" | "deepseek-reasoner" => DEFAULT_MODEL.to_string(),
+        other => other.to_string(),
+    };
+    AgentProviderConfig {
+        base_url: config.base_url,
+        model,
+    }
 }
 
 /// 结果卡片上显示"内容发到了哪"。自定义地址一律报真实主机名，不能糊弄成 "AI"。

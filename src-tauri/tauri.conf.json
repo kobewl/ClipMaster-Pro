@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "ClipMaster Pro",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "identifier": "pro.clipmaster.desktop",
   "build": {
     "frontendDist": "../dist",
@@ -40,6 +40,7 @@
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "targets": "all",
     "icon": [
       "icons/32x32.png",

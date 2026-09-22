@@ -83,6 +83,18 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
     }
   }
 
+  /**
+   * 取消进行中的请求。取消后后端让那次请求以 `ai_cancelled` 结束，
+   * 「已取消本次请求。」会走正常错误路径显示出来。
+   */
+  async function handleCancel() {
+    try {
+      await commands.cancelAgentAction();
+    } catch {
+      // 取消失败不致命：请求会自然结束，错误路径会正常显示
+    }
+  }
+
   return (
     <div
       className="modal-backdrop cm-fade-in"
@@ -121,10 +133,17 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
                 type="button"
                 key={action}
                 className="agent-action"
-                disabled={running !== null || overLimit || !supportsBatch(action)}
-                onClick={() => void handleRun(action)}
+                // 进行中的那个按钮同时是「取消」入口，所以它不能在请求期间被禁用；
+                // 其余按钮的禁用规则不变（跑着、超限、不支持批量）。
+                disabled={
+                  running !== action &&
+                  (running !== null || overLimit || !supportsBatch(action))
+                }
+                onClick={() =>
+                  running === action ? void handleCancel() : void handleRun(action)
+                }
               >
-                {running === action ? "处理中…" : label}
+                {running === action ? "取消" : label}
               </button>
             ))}
           </div>

@@ -7,8 +7,9 @@ pub mod lifecycle;
 use tauri::Manager;
 
 use crate::commands::agent_commands::{
-    clear_agent_key, clear_agent_runs, get_agent_config, get_agent_run, list_agent_runs,
-    reset_agent_endpoint, save_agent_endpoint, save_agent_key, test_agent_connection,
+    cancel_agent_action, clear_agent_key, clear_agent_runs, get_agent_config, get_agent_run,
+    list_agent_runs, reset_agent_endpoint, save_agent_endpoint, save_agent_key,
+    test_agent_connection,
 };
 use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, copy_text_to_clipboard, create_group, delete_clipboard_item,
@@ -159,6 +160,7 @@ pub fn run() {
             download_and_install_update,
             run_agent_action,
             run_agent_action_batch,
+            cancel_agent_action,
             get_agent_config,
             save_agent_key,
             clear_agent_key,

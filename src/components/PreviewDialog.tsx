@@ -173,6 +173,18 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     }
   }
 
+  /**
+   * 取消进行中的请求。后端会把那次请求以 `ai_cancelled` 结束，
+   * 所以这里不用自己造错误文案 —— 正常错误路径会把「已取消本次请求。」显示出来。
+   */
+  async function handleCancelAction() {
+    try {
+      await commands.cancelAgentAction();
+    } catch {
+      // 取消失败不致命：请求会自然结束，错误路径会正常显示
+    }
+  }
+
 
   if (!item || !meta) return null;
 
@@ -280,10 +292,16 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
                   type="button"
                   key={action}
                   className="agent-action"
-                  disabled={runningAction !== null}
-                  onClick={() => void handleAgentAction(action)}
+                  // 进行中的那个按钮要留给用户按「取消」，所以它自己不能是禁用的；
+                  // 其余按钮在请求期间照旧全部禁用，避免连点发出第二个请求。
+                  disabled={runningAction !== null && runningAction !== action}
+                  onClick={() =>
+                    runningAction === action
+                      ? void handleCancelAction()
+                      : void handleAgentAction(action)
+                  }
                 >
-                  {runningAction === action ? "处理中…" : label}
+                  {runningAction === action ? "取消" : label}
                 </button>
               ))}
             </div>

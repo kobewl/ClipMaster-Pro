@@ -98,6 +98,14 @@ pub async fn get_agent_run(
     Ok(run.map(AgentRunDto::from))
 }
 
+/// 取消进行中的 AI 请求；返回是否确有请求被取消。
+#[tauri::command]
+pub async fn cancel_agent_action(
+    runtime: State<'_, AppRuntime>,
+) -> Result<bool, CommandError> {
+    Ok(runtime.agent.cancel())
+}
+
 impl From<AgentRunRecord> for AgentRunDto {
     fn from(record: AgentRunRecord) -> Self {
         // 认不出来的动作名原样显示：将来加了新动作，旧版本的界面

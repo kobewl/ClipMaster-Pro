@@ -206,6 +206,10 @@ pub enum AgentError {
     Busy,
     #[error("上一次请求刚刚发出，请间隔一小会儿再试。")]
     Cooldown,
+    /// 用户主动取消。与其它错误不同：这不是故障，是用户的选择，
+    /// 所以界面不该引导他"重试"，也不该把它当成需要排查的问题。
+    #[error("已取消本次请求。")]
+    Cancelled,
 }
 
 impl AgentError {
@@ -231,9 +235,12 @@ impl AgentError {
             Self::RunStoreUnavailable(_) => "ai_run_store_unavailable",
             Self::Busy => "ai_busy",
             Self::Cooldown => "ai_cooldown",
+            Self::Cancelled => "ai_cancelled",
         }
     }
 
+    /// 能不能引导用户「重试」。刻意不含 `Cancelled`：那是用户自己按下的取消，
+    /// 弹一个重试按钮等于问他"要不要再花一次钱"。
     pub fn retryable(&self) -> bool {
         matches!(
             self,
@@ -310,6 +317,9 @@ pub struct AgentService {
     cooldown: std::time::Duration,
     /// 上一次**真正发出**的请求的登记时刻；被本地门禁拦下的不算。
     last_started: std::sync::Mutex<Option<std::time::Instant>>,
+    /// 进行中请求的取消通道。单飞闸门保证同一时刻最多一个请求，
+    /// 所以一个槽位就够 —— 第二个槽位没有意义，还会让"取消谁"变得含糊。
+    cancel: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
 impl AgentService {
@@ -332,6 +342,7 @@ impl AgentService {
             gate: tokio::sync::Semaphore::new(1),
             cooldown: std::time::Duration::ZERO,
             last_started: std::sync::Mutex::new(None),
+            cancel: std::sync::Mutex::new(None),
         }
     }
 
@@ -339,6 +350,20 @@ impl AgentService {
     pub fn with_cooldown(mut self, cooldown: std::time::Duration) -> Self {
         self.cooldown = cooldown;
         self
+    }
+
+    /// 取消进行中的模型请求。返回是否确有请求被取消（空闲时为 false，无害）。
+    ///
+    /// 取消通道只存一个槽位：单飞闸门保证同一时刻最多一个请求，
+    /// 第二个槽位没有意义。
+    pub fn cancel(&self) -> bool {
+        match self.cancel.lock().expect("取消锁").take() {
+            Some(tx) => {
+                let _ = tx.send(());
+                true
+            }
+            None => false,
+        }
     }
 
     /// 生效配置：用户设置 → 环境变量 → 内置默认值。
@@ -521,7 +546,19 @@ impl AgentService {
             request_id: Some(uuid::Uuid::new_v4().to_string()),
             ..Default::default()
         };
-        let result = self.run_inner(item_ids, &action, mode, &mut audit).await;
+        // 挂上取消通道再进 select：用户点取消时，run_inner 会**被真的丢掉**
+        // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        *self.cancel.lock().expect("取消锁") = Some(cancel_tx);
+        let result = tokio::select! {
+            res = self.run_inner(item_ids, &action, mode, &mut audit) => res,
+            _ = cancel_rx => Err(AgentError::Cancelled),
+        };
+        // 先清空槽位再写审计：清空晚于审计的话，一次迟到的取消会打在下一次请求上。
+        // 单飞下下一个请求此时还没拿到闸门，这里清空是安全的。
+        *self.cancel.lock().expect("取消锁") = None;
+        // 审计写在 select 之后：取消也要留痕，用户事后要能回答
+        // 「那次为什么没有结果」。
         self.audit(&action, &result, audit, started.elapsed()).await;
         result
     }

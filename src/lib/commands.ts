@@ -102,6 +102,10 @@ export const commands = {
   runAgentActionBatch(itemIds: string[], action: AgentAction): Promise<AgentResult> {
     return invoke("run_agent_action_batch", { request: { item_ids: itemIds, action } });
   },
+  /** 取消进行中的 AI 请求；返回是否确有请求被取消。 */
+  cancelAgentAction(): Promise<boolean> {
+    return invoke("cancel_agent_action");
+  },
   /** 读取模型配置快照（掩码，不含密钥本体）。 */
   getAgentConfig(): Promise<AgentConfigInfo> {
     return invoke("get_agent_config");

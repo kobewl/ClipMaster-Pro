@@ -317,6 +317,53 @@ pub const REQUEST_COOLDOWN: std::time::Duration = std::time::Duration::from_secs
 /// （取消晚于请求结束到达，见字段注释），不该长期占内存。
 const PRE_CANCELLED_CAP: usize = 8;
 
+/// 取消相关的运行状态：在途请求的取消槽位 + 预取消墓碑。
+///
+/// **两者必须在同一把锁下**，这不是图省事，而是正确性本身：取消命令与运行命令的
+/// 交错，只能落在运行侧临界区的**之前**或**之后**，两个临界区由这把锁互斥，
+/// 中间没有第三类交错可钻 ——
+/// - 临界区之前到达 → 它看到的槽位是空的 → 记下墓碑 → 临界区里的消费必然命中；
+/// - 临界区之后到达 → 槽位已装 → 号匹配 → 取走并 send → run 侧的 select 必然看到。
+///
+/// 分成两把锁（槽位一把、墓碑一把）时，「读槽位」与「记墓碑」之间会释放槽位锁，
+/// 取消恰好被抢占在那里就会丢：它读到空槽位、随后运行侧装好槽位并发出了计费请求，
+/// 而它写下的墓碑永不命中。同一把锁后这段缝不存在。
+///
+/// 死锁纪律（单锁下没有锁序问题，只有这一条）：**锁内不 await、不阻塞**。
+/// `oneshot::Sender::send` 满足这一点（放值 + 唤醒，不同步 poll 对方，见 `cancel`）。
+#[derive(Default)]
+struct AgentRunState {
+    /// 进行中请求的取消通道。单飞闸门保证同一时刻最多一个请求，所以一个槽位就够
+    /// —— 第二个槽位没有意义，还会让"取消谁"变得含糊。
+    ///
+    /// 槽位里存的是 `(request_id, sender)`：取消必须**报号**，号对不上就什么都不做。
+    /// 将来即便允许多个请求并存，按号定向取消也不会取消错对象。
+    slot: Option<(String, tokio::sync::oneshot::Sender<()>)>,
+    /// 预取消墓碑：取消先于注册到达时把号记在这里，晚到的 run 在**同一个临界区**
+    /// 里「消费墓碑 + 装入槽位」，命中就不再发出任何请求。
+    ///
+    /// 两个**已知且接受**的角落（都不修，理由如下）：
+    /// 1. 墓碑命中的 run 若先撞上闸门（busy / 冷却），会以闸门错误结束，墓碑留到
+    ///    被 FIFO 淘汰。此时弹窗早已关掉、用户看不见这个错误；号又是一次性的
+    ///    uuid、不会复用，留着也不会误伤后来的请求。
+    /// 2. 前端对「离开」一律 fire-and-forget 取消，所以取消晚于请求**正常结束**
+    ///    到达时也会记下一个永不命中的号 —— 同属预期，靠 8 格 FIFO 淘汰。
+    pre_cancelled: std::collections::VecDeque<String>,
+}
+
+/// 从墓碑队列里取走一个号：命中即移除并返回 true。
+///
+/// 做成接收 `&mut VecDeque` 的自由函数、而不是 `AgentService` 的方法，是因为它必须
+/// 在调用方**已经持有状态锁**的情况下运行（消费墓碑与装入槽位同临界区，见
+/// `run_items`）；方法版会自己再锁一次，同锁重入直接死锁。
+fn take_from(queue: &mut std::collections::VecDeque<String>, request_id: &str) -> bool {
+    if let Some(index) = queue.iter().position(|id| id == request_id) {
+        queue.remove(index);
+        return true;
+    }
+    false
+}
+
 pub struct AgentService {
     history: Arc<HistoryService>,
     secrets: Arc<dyn SecretStore>,
@@ -329,28 +376,13 @@ pub struct AgentService {
     cooldown: std::time::Duration,
     /// 上一次**真正发出**的请求的登记时刻；被本地门禁拦下的不算。
     last_started: std::sync::Mutex<Option<std::time::Instant>>,
-    /// 进行中请求的取消通道。单飞闸门保证同一时刻最多一个请求，
-    /// 所以一个槽位就够 —— 第二个槽位没有意义，还会让"取消谁"变得含糊。
+    /// 取消相关状态（槽位 + 预取消墓碑），共用一把锁 —— 理由见 `AgentRunState`。
     ///
-    /// 槽位里存的是 `(request_id, sender)`：取消必须**报号**，号对不上就
-    /// 什么都不做。将来即便允许多个请求并存，按号定向取消也不会取消错对象。
-    cancel: std::sync::Mutex<Option<(String, tokio::sync::oneshot::Sender<()>)>>,
-    /// 预取消墓碑：取消命令可能**比运行命令更早到达**。前端在所有「离开」路径上
-    /// 都是 fire-and-forget 地发取消（关窗、切条目、组件卸载），而运行命令走 invoke，
-    /// 两次 IPC 的先后不由前端决定 —— 取消先到时槽位还是空的，没了着落。没有墓碑，
-    /// 这次取消就静默丢失：晚到的运行命令照常注册、发出、计费，用户以为取消了其实没有。
-    ///
-    /// 记下这样的号，`run_items` 挂上槽位之后立刻取一次（`take_pre_cancelled`），
-    /// 命中就一个字节都不发。队列是 FIFO + 去重，容量 `PRE_CANCELLED_CAP`。
-    /// （消费排在挂槽位**之后**是这个竞态的关键，理由见 run_items 里的顺序论证。）
-    ///
-    /// 两个**已知且接受**的角落（都不修，理由如下）：
-    /// 1. 墓碑命中的 run 若先撞上闸门（busy / 冷却），会以闸门错误结束，墓碑留到
-    ///    被 FIFO 淘汰。此时弹窗早已关掉、用户看不见这个错误；号又是一次性的
-    ///    uuid、不会复用，留着也不会误伤后来的请求。
-    /// 2. 前端对「离开」一律 fire-and-forget 取消，所以取消晚于请求**正常结束**
-    ///    到达时也会记下一个永不命中的号 —— 同属预期，靠 8 格 FIFO 淘汰。
-    pre_cancelled: std::sync::Mutex<std::collections::VecDeque<String>>,
+    /// 墓碑为什么必须存在：取消命令可能**比运行命令更早到达**。前端在所有「离开」
+    /// 路径上都是 fire-and-forget 地发取消（关窗、切条目、组件卸载），而运行命令走
+    /// invoke，两次 IPC 的先后不由前端决定 —— 取消先到时槽位还是空的，没了着落。
+    /// 没有墓碑，这次取消就静默丢失：晚到的运行命令照常注册、发出、计费。
+    state: std::sync::Mutex<AgentRunState>,
 }
 
 impl AgentService {
@@ -373,8 +405,7 @@ impl AgentService {
             gate: tokio::sync::Semaphore::new(1),
             cooldown: std::time::Duration::ZERO,
             last_started: std::sync::Mutex::new(None),
-            cancel: std::sync::Mutex::new(None),
-            pre_cancelled: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            state: std::sync::Mutex::new(AgentRunState::default()),
         }
     }
 
@@ -391,52 +422,40 @@ impl AgentService {
     /// 号由前端在发起时生成并握在手里（见 `run_with_request_id` 的说明）。
     ///
     /// 返回值契约（不变）：`true` 恒等于「有一个在途请求被立即取消」。
-    /// 三种情况的落点：
+    ///
+    /// 「判定」与「记墓碑」在**同一个临界区**里完成（共用 `state` 一把锁，理由见
+    /// `AgentRunState`）：读到的槽位状态与据此做的决定之间，运行命令插不进来。
+    /// 三种落点：
     /// - 槽位里就是它 → 取走通道、发取消信号，`true`（发送失败说明接收端已随请求
     ///   结束而丢弃，此时没有在途请求，按契约给 `false`）。
     /// - 槽位被**别人**占着 → `false`，什么都不动。
     /// - 槽位空着 → `false`，但**额外**把这个号记进预取消墓碑：这多半是取消命令
-    ///   比运行命令先到（关窗竞态，见 `pre_cancelled` 字段注释），晚到的 run 会取中它
-    ///   并就地取消（消费排在挂槽位之后，见 `run_items` 的顺序论证）。返回 `false`
-    ///   是诚实的 —— 这一瞬间确实没有在途请求被取消；墓碑只是让这次取消**别丢**。
+    ///   比运行命令先到（关窗竞态，见 `state` 字段注释），晚到的 run 会在同一个
+    ///   临界区里消费掉它并就地取消（见 `run_items`）。返回 `false` 是诚实的 ——
+    ///   这一瞬间确实没有在途请求被取消；墓碑只是让这次取消**别丢**。
     pub fn cancel(&self, request_id: &str) -> bool {
-        let mut slot = self.cancel.lock().expect("取消锁");
+        let mut state = self.state.lock().expect("运行状态锁");
         // 先只看不动：号不匹配时槽位必须原封不动（否则下一个请求会没了取消通道）。
-        let matched = matches!(slot.as_ref(), Some((id, _)) if id == request_id);
+        let matched = matches!(state.slot.as_ref(), Some((id, _)) if id == request_id);
         if matched {
-            let (_, tx) = slot.take().expect("刚刚匹配过");
-            // send 失败 = 接收端已随请求结束而丢弃，此时没有「进行中的请求」，
-            // 按契约返回 false。
+            let (_, tx) = state.slot.take().expect("刚刚匹配过");
+            // send 不阻塞：它只是把值放进通道、唤醒接收方，不等待任何东西，
+            // 也不会同步地 poll 对方 —— 所以满足「锁内不 await、不阻塞」的纪律。
             return tx.send(()).is_ok();
         }
         // 槽位被别人占着：号对不上，不打断、也不记墓碑 —— 记了就会把那个无辜的号
         // 变成"下次一发起就被取消"，而它只是恰好撞上了别人在跑。
-        if slot.is_some() {
+        if state.slot.is_some() {
             return false;
         }
         // 槽位空着：这是取消先于注册到达的竞态，记墓碑留给晚到的 run。
-        drop(slot);
-        let mut queue = self.pre_cancelled.lock().expect("墓碑锁");
         // 去重：同一个号占两格会白挤掉另一个号，而那个号才是真的还要被取消的。
-        if !queue.contains(&request_id.to_string()) {
-            queue.push_back(request_id.to_string());
+        if !state.pre_cancelled.contains(&request_id.to_string()) {
+            state.pre_cancelled.push_back(request_id.to_string());
             // 超容量淘汰最老的：墓碑是尽力而为的兜底，不是可靠队列。
-            if queue.len() > PRE_CANCELLED_CAP {
-                queue.pop_front();
+            if state.pre_cancelled.len() > PRE_CANCELLED_CAP {
+                state.pre_cancelled.pop_front();
             }
-        }
-        false
-    }
-
-    /// 取一次预取消墓碑：命中就把它从队列里移除并返回 true。
-    ///
-    /// 一次性消费是必须的：号虽是一次性 uuid，但"取中即移除"让语义保持
-    /// "每个墓碑只取消一个请求"，也让 `mod tests` 里的行为测试能直接断言队列内容。
-    fn take_pre_cancelled(&self, request_id: &str) -> bool {
-        let mut queue = self.pre_cancelled.lock().expect("墓碑锁");
-        if let Some(index) = queue.iter().position(|id| id == request_id) {
-            queue.remove(index);
-            return true;
         }
         false
     }
@@ -660,53 +679,51 @@ impl AgentService {
             input_item_ids: item_ids.to_vec(),
             ..Default::default()
         };
-        // 挂槽位**先于**消费墓碑，顺序是这个竞态的关键：任意时刻到达的取消
-        // 只可能落进两条路径之一，两条都以 ai_cancelled 收场 ——
-        //   1. 取消在挂槽位**之前**到达 → 它看到的槽位是空的 → 记下墓碑 →
-        //      下面的 take 必然命中（take 排在挂槽位之后）。
-        //   2. 取消在挂槽位**之后**到达 → 号匹配 → 它取走槽位并 send →
+        // 「消费墓碑 + 装入槽位」在**同一个临界区**里完成，这是这个竞态的关键：
+        // 取消与本次运行的交错只可能落在两种位置，两种都以 ai_cancelled 收场 ——
+        //   1. 在下面这个临界区**之前**到达 → 它看到的槽位是空的 → 记下墓碑 →
+        //      本临界区里的 take_from 必然命中（槽位因此根本不装）。
+        //   2. 在临界区**之后**到达 → 槽位已装 → 号匹配 → 它取走并 send →
         //      rx 立即就绪，下面的 select 必然看到。
-        // 早前版本是「先 take 后挂」：take 未命中到挂上槽位之间那条缝里到达的取消，
-        // 会被记成永不命中的墓碑、请求照发 —— 换到现在的顺序后这类取消落在路径 1
-        // 或路径 2 上，不再有第三条。
+        // 两把锁分开时，「take 未命中」到「挂上槽位」之间会释放锁，取消恰好被抢占
+        // 在那里就会被记成永不命中的墓碑、请求照发；合成一把锁后这段缝不存在，
+        // 交错只有上面两种（见 `AgentRunState`）。
         //
-        // 残留（已知、极窄、非零；收口办法见 Task 9 报告第 8 章）：`cancel()` 在
-        // 「读槽位」与「记墓碑」之间会释放槽位锁，若取消线程恰好被抢占在此处、而本次
-        // run 在那一刻跑完了下面两步，取消仍会丢。要真正构造性清零，得让 cancel 在
-        // 持有槽位锁期间记墓碑、并让这里的「挂槽位 + 消费墓碑」同处一把槽位锁内。
-        //
-        // 挂上取消通道再进 select：用户点取消时，run_inner 会**被真的丢掉**
-        // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
-        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        *self.cancel.lock().expect("取消锁") = Some((request_id.clone(), cancel_tx));
-        // 命中墓碑说明取消命令比这次运行命令先到（关窗竞态），请求从未发出 ——
-        // 一个字节都不该发出去，省下的是真金白银。
-        //
-        // 已知且接受：这条检查在闸门之后，所以墓碑命中的请求若先撞上 busy / 冷却，
+        // 已知且接受：本临界区在闸门之后，所以墓碑命中的请求若先撞上 busy / 冷却，
         // 会以闸门错误结束、墓碑留到被 FIFO 淘汰。此时弹窗早已关掉、用户看不见；
         // 号是一次性 uuid，留着也不会误伤后来的请求。
-        if self.take_pre_cancelled(&request_id) {
-            // 清掉自己刚挂的槽位。无需比对号：单飞闸门（_permit 还在本函数作用域里）
-            // 保证这条槽位只可能是本次挂上的，而 cancel 只 take、从不 install，
-            // 不会把它替换成别人的。
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let pre_hit = {
+            let mut state = self.state.lock().expect("运行状态锁");
+            let hit = take_from(&mut state.pre_cancelled, &request_id);
+            if !hit {
+                // 只在没命中墓碑时才装槽位：命中说明这次请求已经被取消过，
+                // 装上去只会留下一条没人取的通道。
+                state.slot = Some((request_id, cancel_tx));
+            }
+            hit
+        }; // 锁在这里释放，下面可能有 await
+        if pre_hit {
+            // 命中墓碑：取消命令比这次运行命令先到（关窗竞态），请求从未发出 ——
+            // 一个字节都不该发出去，省下的是真金白银。这条路径**没有装过槽位**，
+            // 所以也没有槽位要清（`mod tests` 里钉了这条不变量）。
             //
-            // 若取消恰好抢在我们清槽之前 match 并 send 了：它已经把槽位 take 走，
-            // 这里的清空是 no-op，两边结果一致（都是 Cancelled），没有泄漏、
-            // 也不需要额外处理 —— 这正是「两条路径合流」而不是互相打架。
-            *self.cancel.lock().expect("取消锁") = None;
             // 「取消总有审计」照常成立：条目已预填进 audit，即便 run_inner 一次都
             // 没被 poll，这行审计也有主语、不会因为空条目被 store 丢掉。
             let result: Result<AgentResult, AgentError> = Err(AgentError::Cancelled);
             self.audit(&action, &result, audit, started.elapsed()).await;
             return result;
         }
+        // 槽位已挂上，可以进 select 了：用户点取消时，run_inner 会**被真的丢掉**
+        // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
         let result = tokio::select! {
             res = self.run_inner(item_ids, &action, mode, &mut audit) => res,
             _ = cancel_rx => Err(AgentError::Cancelled),
         };
         // 先清空槽位再写审计：清空晚于审计的话，一次迟到的取消会打在下一次请求上。
         // 单飞下下一个请求此时还没拿到闸门，这里清空是安全的。
-        *self.cancel.lock().expect("取消锁") = None;
+        // （槽位若已被 cancel 取走，这里的置空是 no-op。）
+        self.state.lock().expect("运行状态锁").slot = None;
         // 审计写在 select 之后：取消也要留痕，用户事后要能回答
         // 「那次为什么没有结果」。
         self.audit(&action, &result, audit, started.elapsed()).await;
@@ -1422,28 +1439,31 @@ mod tests {
             );
         }
 
-        let queue = agent.pre_cancelled.lock().expect("墓碑锁");
+        let state = agent.state.lock().expect("运行状态锁");
         assert_eq!(
-            queue.len(),
+            state.pre_cancelled.len(),
             PRE_CANCELLED_CAP,
             "每个号都会记墓碑，但队列长度必须被上限卡住"
         );
         assert!(
-            !queue.contains(&"tomb-0".to_string()),
+            !state.pre_cancelled.contains(&"tomb-0".to_string()),
             "最老的号应当被 FIFO 淘汰"
         );
-        assert!(!queue.contains(&"tomb-1".to_string()), "第二个最老的也该淘汰");
-        assert!(queue.contains(&"tomb-8".to_string()), "最新的号必须留下");
-        assert!(queue.contains(&"tomb-9".to_string()), "最新的号必须留下");
-        drop(queue);
+        assert!(
+            !state.pre_cancelled.contains(&"tomb-1".to_string()),
+            "第二个最老的也该淘汰"
+        );
+        assert!(state.pre_cancelled.contains(&"tomb-8".to_string()), "最新的号必须留下");
+        assert!(state.pre_cancelled.contains(&"tomb-9".to_string()), "最新的号必须留下");
+        drop(state);
 
         // 去重：重复入队会让一个号挤掉别的号，真正该被取消的那个反而被淘汰出队。
         for _ in 0..3 {
             agent.cancel("dup-id");
         }
-        let queue = agent.pre_cancelled.lock().expect("墓碑锁");
+        let state = agent.state.lock().expect("运行状态锁");
         assert_eq!(
-            queue.iter().filter(|id| *id == "dup-id").count(),
+            state.pre_cancelled.iter().filter(|id| *id == "dup-id").count(),
             1,
             "同一个号不许在墓碑队列里占两格"
         );
@@ -1451,26 +1471,33 @@ mod tests {
 
     /// 墓碑是**一次性**的：取中过就从队列里移除，同一个号不会被取消两次。
     #[tokio::test]
-    async fn take_pre_cancelled_consumes_the_tombstone_once() {
+    async fn take_from_consumes_the_tombstone_once() {
         let agent = agent_for_tombstone_tests();
         agent.cancel("once-id");
 
-        assert!(agent.take_pre_cancelled("once-id"), "记过的号必须能取中");
+        // 直接对生产路径写进队列的号调用真函数（`take_from` 是自由函数，
+        // 设计上就要求调用方已持锁，所以这里不会重入死锁）。
+        let mut state = agent.state.lock().expect("运行状态锁");
+        assert!(take_from(&mut state.pre_cancelled, "once-id"), "记过的号必须能取中");
         assert!(
-            !agent.take_pre_cancelled("once-id"),
+            !take_from(&mut state.pre_cancelled, "once-id"),
             "取过就没了 —— 墓碑不能让同一个号取消两次"
         );
-        assert!(!agent.take_pre_cancelled("never-seen"), "没记过的号取不中");
+        assert!(
+            !take_from(&mut state.pre_cancelled, "never-seen"),
+            "没记过的号取不中"
+        );
     }
 
-    /// 「挂槽位先于消费墓碑」的直接钉子：命中墓碑的分支必须清掉自己刚挂的槽位。
+    /// 「消费墓碑 + 装入槽位同临界区」的直接钉子：命中墓碑的那条路径**从不装槽位**。
     ///
-    /// 顺序调换的代价是命中路径**先**挂了一条槽位再取消 —— 忘了清就会留下一条指向
-    /// 已返回函数的悬空通道（下一次请求的取消可能打在它上面）。这个不变量在模块内
-    /// 才可断言（私有字段），所以在单测里钉死；同时钉住「取消总有审计」在这条路径上
-    /// 照常成立（条目已预填进 audit，空条目行不会被 store 丢掉）。
+    /// 新结构里 take 排在 install 之前（同一个临界区内），命中就直接返回 —— 命中
+    /// 路径因此根本没有槽位可留。这条不变量值得钉死：它就是「不许留下指向已返回
+    /// 函数的悬空通道」的等价形式，将来若有人把 install 挪到 take 之前且忘了清，
+    /// 这里会立刻红。同时钉住「取消总有审计」在这条路径上照常成立（条目已预填，
+    /// 空条目行不会被 store 丢掉）。
     #[tokio::test]
-    async fn tombstone_hit_clears_the_slot_it_just_installed() {
+    async fn tombstone_hit_never_installs_the_slot() {
         let agent = agent_for_tombstone_tests();
         let item = agent
             .history
@@ -1492,10 +1519,19 @@ mod tests {
         assert_eq!(err.code(), "ai_cancelled");
         assert_eq!(err.to_string(), AgentError::Cancelled.to_string());
 
-        assert!(
-            agent.cancel.lock().expect("取消锁").is_none(),
-            "命中墓碑返回前必须清掉自己刚挂的槽位，不许留下悬空通道"
-        );
+        // 用一个块把锁的作用域收干净：断言完就放锁，后面还有 await 要跑
+        // （锁内不 await 是这条链路自己的纪律，测试也要守）。
+        {
+            let state = agent.state.lock().expect("运行状态锁");
+            assert!(
+                state.slot.is_none(),
+                "命中墓碑的路径从不装槽位，返回前也不该留下任何槽位"
+            );
+            assert!(
+                !state.pre_cancelled.contains(&"req-pre".to_string()),
+                "取中即移除：墓碑是一次性的，别留在队列里"
+            );
+        }
 
         let run = agent
             .find_run("req-pre")
@@ -1507,5 +1543,70 @@ mod tests {
             !run.input_item_ids.is_empty(),
             "审计要记得这次本来要处理哪条内容，否则这行会被 store 丢掉"
         );
+    }
+
+    /// 取消与「装入槽位」之间不许有缝：**两个方向**的交错下，这次取消都不能丢。
+    ///
+    /// 这是「消费墓碑 + 装入槽位同临界区」的钉子。跑法不靠运气：测试线程先持住
+    /// 状态锁，让**取消方与运行方都卡在锁上排队**，再一起放行 —— 谁先拿到锁由调度
+    /// 决定，正是要考的那个竞态。不变量只有一条：run 必须以 `ai_cancelled` 收场。
+    /// - 取消先拿到锁 → 槽位空 → 记墓碑 → 运行侧临界区里的消费必然命中（取消先到）；
+    /// - 运行先拿到锁 → 槽位已装且**同一个临界区**已经放锁 → 取消匹配到自己的号 →
+    ///   `send` → select 必然看到（取消后到）。
+    ///
+    /// **诚实的边界（见 Task 9 报告第 9 章）**：这条用例钉的是不变量与两个方向的
+    /// 覆盖，不是「能抓住回归」的探测器 —— 把消费挪出临界区（拆成两次加锁）后，那条
+    /// 缝只有两条指令宽，卡在锁上的两个线程谁先被唤醒基本由调度器的唤醒延迟决定，
+    /// 实测 20 轮全绿（倍率放大到 1ms 时才必然红）。真正的探测器是集成测试
+    /// `cancel_never_reports_false_then_true_for_the_same_id`（自旋取消方 + 40 轮）。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+    async fn cancel_can_never_slip_between_take_and_install() {
+        let agent = Arc::new(agent_for_tombstone_tests());
+        let item = agent
+            .history
+            .capture_text("内容".into(), None, None)
+            .await
+            .expect("造一条内容");
+
+        for round in 0..20 {
+            let request_id = format!("race-{round}");
+            // 先持锁：保证取消方与运行方都先卡在状态锁上，而不是一个跑完另一个才开始。
+            let held = agent.state.lock().expect("运行状态锁");
+
+            let canceller = std::thread::spawn({
+                let agent = agent.clone();
+                let request_id = request_id.clone();
+                move || agent.cancel(&request_id)
+            });
+            let runner = std::thread::spawn({
+                let agent = agent.clone();
+                let item_id = item.id.to_string();
+                let request_id = request_id.clone();
+                move || {
+                    let runtime = tokio::runtime::Builder::new_current_thread()
+                        .enable_all()
+                        .build()
+                        .expect("测试 runtime");
+                    runtime.block_on(agent.run_with_request_id(
+                        &item_id,
+                        AgentAction::Summarize,
+                        Some(request_id),
+                    ))
+                }
+            });
+
+            // 等两个线程都真的卡到锁上，再一起放行。
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            drop(held);
+
+            let cancelled_now = canceller.join().expect("取消线程");
+            let result = runner.join().expect("运行线程");
+            assert_eq!(
+                result.err().map(|err| err.code()),
+                Some("ai_cancelled"),
+                "第 {round} 轮：这次取消丢了（cancel 返回 {cancelled_now}）—— \
+                 晚到的请求会真的发出去并计费"
+            );
+        }
     }
 }

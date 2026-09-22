@@ -308,7 +308,7 @@ pub struct AgentService {
     gate: tokio::sync::Semaphore,
     /// 启动冷却；`new` 里为 0。
     cooldown: std::time::Duration,
-    /// 上一次请求的启动时刻。
+    /// 上一次**真正发出**的请求的登记时刻；被本地门禁拦下的不算。
     last_started: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
@@ -502,18 +502,17 @@ impl AgentService {
         action: AgentAction,
         mode: InputMode,
     ) -> Result<AgentResult, AgentError> {
-        // 冷却检查、单飞检查、登记启动时刻必须在同一把锁里完成，
-        // 否则两个并发请求可以都通过检查再各自放行。
+        // 闸门在创建 RunAudit / request_id 之前：被拦下的连点不留审计。
+        // 这里只**检查**冷却，登记要等真正发出请求时（见 run_inner）——
+        // 本地门禁拦下的请求什么都没发出去，不该消耗冷却。
         let _permit = {
-            let mut seen = self.last_started.lock().expect("闸门锁中毒");
+            let seen = self.last_started.lock().expect("闸门锁中毒");
             if let Some(prev) = *seen {
                 if prev.elapsed() < self.cooldown {
                     return Err(AgentError::Cooldown);
                 }
             }
-            let permit = self.gate.try_acquire().map_err(|_| AgentError::Busy)?;
-            *seen = Some(std::time::Instant::now());
-            permit
+            self.gate.try_acquire().map_err(|_| AgentError::Busy)?
         };
 
         let started = std::time::Instant::now();
@@ -615,6 +614,12 @@ impl AgentService {
         // 审计里也能看出"这次本来要发往哪里"。
         audit.target = Some((provider_label(&config.base_url), config.model.clone()));
         let api_key = config.api_key.ok_or(AgentError::NotConfigured)?;
+
+        // 走到这里才登记启动时刻：冷却保护的是**真正发出去的计费请求**，
+        // 上面任何一步本地拦截（敏感内容、未配 Key、超长…）都没发出请求，不该消耗冷却。
+        // 登记无需与前面的检查同锁：单飞许可保证同一时刻只有一个请求在跑，
+        // 后一个请求的检查必然晚于前一个请求的登记，检查永远看得到最新值。
+        *self.last_started.lock().expect("闸门锁中毒") = Some(std::time::Instant::now());
 
         let response = self
             .client

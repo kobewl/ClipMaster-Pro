@@ -541,6 +541,7 @@ impl AgentService {
             Ok(saved) => saved,
             Err(err) => {
                 // 读配置失败不该让 AI 功能整体瘫掉。
+                // 读失败等价于「不知道配了什么」，按未作废处理（与从未配置同口径）—— 这是有意保留的。
                 tracing::warn!(error = %err, "读取模型服务配置失败，回退到默认值");
                 None
             }

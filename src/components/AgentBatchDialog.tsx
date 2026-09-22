@@ -190,7 +190,7 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
           {error && (
             <p className="agent-panel__error" role="alert">
               {error}
-              {errorCode === "ai_not_configured" && (
+              {(errorCode === "ai_not_configured" || errorCode === "ai_invalid_base_url") && (
                 <button
                   type="button"
                   className="agent-panel__link"

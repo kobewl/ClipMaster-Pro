@@ -364,7 +364,7 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
           {agentError && (
             <p className="agent-panel__error" role="alert">
               {agentError}
-              {agentErrorCode === "ai_not_configured" && (
+              {(agentErrorCode === "ai_not_configured" || agentErrorCode === "ai_invalid_base_url") && (
                 <button
                   type="button"
                   className="agent-panel__link"

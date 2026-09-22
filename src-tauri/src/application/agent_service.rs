@@ -269,6 +269,49 @@ pub struct AgentConfig {
     pub model: String,
     /// Key 来自环境变量而非钥匙串（设置面板据此提示用户）。
     pub api_key_from_env: bool,
+    /// 库里存着端点配置，但它没通过运行时校验：`base_url` / `model` 是回退值。
+    /// 请求路径据此拦下"钥匙串 Key 改投默认地址"（见 `ensure_key_not_sent_astray`）；
+    /// 设置面板不看这一位，照常显示现状 —— 用户得有重新保存的自救入口。
+    pub endpoint_rejected: bool,
+}
+
+impl AgentConfig {
+    /// 请求路径的安全闸门：**端点被校验拦下、而 Key 来自钥匙串**时拒绝发出请求。
+    ///
+    /// 防的是凭据发错接收方。Key 与地址是两次独立解析：地址作废后回落 `base_url`，
+    /// 而钥匙串里那把 Key 是用户为**自己配置的第三方端点**申请的 —— 照常发到
+    /// 默认地址等于把凭据交给了另一个接收方，用户完全看不见。库里能留下非法
+    /// 端点的场景（旧版本遗留、手工改库、被篡改的 SQLite）本身就说明这份配置
+    /// 不可信，更没有理由把它送去任何地方。
+    ///
+    /// 另两种情况维持原行为（回退默认地址照常发）：Key 来自环境变量 —— 那是开发期
+    /// 自己设的，自担风险；没有 Key —— 轮不到这条闸门，`NotConfigured` 更准确。
+    fn ensure_key_not_sent_astray(&self) -> Result<(), AgentError> {
+        if self.endpoint_rejected && !self.api_key_from_env && self.api_key.is_some() {
+            return Err(AgentError::InvalidBaseUrl(
+                "保存的服务地址未通过安全校验，已阻止本次请求，以免钥匙串里的 API Key \
+                 被发往未经校验的服务。请到「设置 → AI 助手」重新保存服务地址。"
+                    .to_string(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// `resolve_endpoint` 的结果：生效端点 + 「库里那份是否被校验拦下」。
+struct ResolvedEndpoint {
+    config: AgentProviderConfig,
+    /// 库里存着端点，但它没通过运行时校验 —— `config` 是回退值（环境变量或默认）。
+    saved_rejected: bool,
+}
+
+/// 端点回退值：环境变量优先，其次内置默认。两条路径（无配置 / 配置作废）共用，
+/// 保证"回退到哪儿"只有一处定义。
+fn fallback_endpoint() -> AgentProviderConfig {
+    AgentProviderConfig {
+        base_url: env_base_url().unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+        model: env_model().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+    }
 }
 
 /// 这次调用是单条还是多条。两者在输入门禁与 prompt 指令上都不同。
@@ -482,13 +525,16 @@ impl AgentService {
 
         Ok(AgentConfig {
             api_key,
-            base_url: endpoint.base_url,
-            model: endpoint.model,
+            base_url: endpoint.config.base_url,
+            model: endpoint.config.model,
             api_key_from_env: from_env,
+            endpoint_rejected: endpoint.saved_rejected,
         })
     }
 
-    async fn resolve_endpoint(&self) -> AgentProviderConfig {
+    /// 生效端点 + 「库里那份是否被校验拦下」。两者必须一起返回：只回配置的话，
+    /// 调用方分不清当前地址是用户设的，还是一份作废配置的残余。
+    async fn resolve_endpoint(&self) -> ResolvedEndpoint {
         let saved = match self.config_store.load_agent_config().await {
             Ok(saved) => saved,
             Err(err) => {
@@ -504,7 +550,12 @@ impl AgentService {
             // 否则会出现"存不进但读得出"（或反过来）的幽灵配置。
             match normalize_base_url(&saved.base_url) {
                 Ok(base_url) => match validate_model_name(&saved.model) {
-                    Ok(model) => return AgentProviderConfig { base_url, model },
+                    Ok(model) => {
+                        return ResolvedEndpoint {
+                            config: AgentProviderConfig { base_url, model },
+                            saved_rejected: false,
+                        }
+                    }
                     Err(reason) => {
                         tracing::warn!(%reason, "库里的模型名未通过校验，整份配置作废")
                     }
@@ -513,11 +564,17 @@ impl AgentService {
                     tracing::warn!(%reason, "库里的服务地址未通过校验，整份配置作废")
                 }
             }
-            // 作废后不返回：落到下面的环境变量/默认值分支，AI 功能照样能用。
+            // 作废后不返回：落到回退值，设置面板照样能打开显示现状、让用户重新保存。
+            // 至于请求路径会不会拿钥匙串 Key 去发这个回退值，由
+            // `AgentConfig::ensure_key_not_sent_astray` 单独把关。
+            return ResolvedEndpoint {
+                config: fallback_endpoint(),
+                saved_rejected: true,
+            };
         }
-        AgentProviderConfig {
-            base_url: env_base_url().unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
-            model: env_model().unwrap_or_else(|| DEFAULT_MODEL.to_string()),
+        ResolvedEndpoint {
+            config: fallback_endpoint(),
+            saved_rejected: false,
         }
     }
 
@@ -598,6 +655,8 @@ impl AgentService {
     /// 「测试连接」：用最小代价证明 Key 与网络都通（`GET /models`，不产生推理费用）。
     pub async fn test_connection(&self) -> Result<(), AgentError> {
         let config = self.config().await?;
+        // 与 run_inner 同一道闸门：端点作废 + 钥匙串 Key 时什么都不发。
+        config.ensure_key_not_sent_astray()?;
         let api_key = config.api_key.ok_or(AgentError::NotConfigured)?;
         // 服务名先算好：连不上和状态码报错都要用它，文案里不能写死某个厂商。
         let label = provider_label(&config.base_url);
@@ -828,6 +887,9 @@ impl AgentService {
         audit.dropped_item_ids = prepared.dropped.clone();
 
         let config = self.config().await?;
+        // 闸门在记审计目标之前：被拦下的这次确实什么都没发出去，审计里的
+        // provider / model 就该保持空（见 RunAudit::target 的约定）。
+        config.ensure_key_not_sent_astray()?;
         // 服务名先算好：审计、错误文案、结果卡片三处必须是同一个值。
         // 名字不叫 `label` 是刻意的 —— 函数末尾还有一个 `action.label()`，
         // 两个 "label" 含义完全不同，撞名只会让后来人读错。
@@ -1282,6 +1344,40 @@ mod tests {
         let masked = mask_api_key("sk-1234567890abcd");
         assert!(masked.ends_with("abcd"));
         assert!(!masked.contains("1234567890"), "掩码不能泄露中间部分");
+    }
+
+    #[test]
+    fn endpoint_rejection_only_blocks_keys_from_the_keychain() {
+        let config = |key: Option<&str>, from_env: bool, rejected: bool| AgentConfig {
+            api_key: key.map(str::to_string),
+            base_url: DEFAULT_BASE_URL.to_string(),
+            model: DEFAULT_MODEL.to_string(),
+            api_key_from_env: from_env,
+            endpoint_rejected: rejected,
+        };
+
+        // 要拦的正是这一格：密钥来自钥匙串（用户为第三方端点存的），地址却作废回退。
+        let err = config(Some("sk-keychain"), false, true)
+            .ensure_key_not_sent_astray()
+            .expect_err("钥匙串 Key 不许被发往未经校验的地址");
+        assert_eq!(err.code(), "ai_invalid_base_url");
+        assert!(
+            err.to_string().contains("设置"),
+            "错误要引导用户去设置重新保存：{err}"
+        );
+
+        // 环境变量的 Key 是开发期自担的，回退照旧
+        config(Some("sk-env"), true, true)
+            .ensure_key_not_sent_astray()
+            .expect("env Key 走回退地址是既有行为");
+        // 没配 Key 时由 NotConfigured 兜底，这条闸门不改口径
+        config(None, true, true)
+            .ensure_key_not_sent_astray()
+            .expect("无 Key 不该报端点错");
+        // 端点合法时，Key 来源无关紧要
+        config(Some("sk-keychain"), false, false)
+            .ensure_key_not_sent_astray()
+            .expect("端点没作废就正常发出");
     }
 
     #[test]

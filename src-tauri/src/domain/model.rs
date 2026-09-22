@@ -228,3 +228,89 @@ pub struct AgentSessionDetail {
     pub updated_at: DateTime<Utc>,
     pub members: Vec<AgentSessionMember>,
 }
+
+// ---------------------------------------------------------------------------
+//  Planner 建议（Phase 1 第 5 步 · Tool Policy 地基）
+// ---------------------------------------------------------------------------
+
+/// 一条建议的动作类型。
+///
+/// 四个值**就是白名单本身**：删除 / 清空 / 改设置这类动作没有对应变体，
+/// 模型写出这些词也只能被丢弃。字面量与 `planner_build::PLANNER_ACTION_KEYS`
+/// 同一套（`as_str` 与 `from_key` 互逆，测试钉住）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PlannerSuggestionKind {
+    /// 复制回系统剪贴板（恰好 1 条目标）。
+    Copy,
+    /// 粘贴到当前应用（恰好 1 条目标）。
+    Paste,
+    /// 归入一个分组（多目标；分组由用户在确认卡片里选，不由模型指定）。
+    Group,
+    /// 交给 AI 处理（多目标；子动作见 `PlannerSuggestion::ai_action`）。
+    Ai,
+}
+
+impl PlannerSuggestionKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PlannerSuggestionKind::Copy => "copy",
+            PlannerSuggestionKind::Paste => "paste",
+            PlannerSuggestionKind::Group => "group",
+            PlannerSuggestionKind::Ai => "ai",
+        }
+    }
+
+    /// 从协议里的 `action` 字面量还原类型。认不出来返回 `None`：白名单外的词
+    /// （删除 / 清空 / 改设置）必须落空，由调用方丢弃整行，而不是在这里悄悄
+    /// 糊一个别的动作。
+    pub fn from_key(key: &str) -> Option<Self> {
+        match key {
+            "copy" => Some(PlannerSuggestionKind::Copy),
+            "paste" => Some(PlannerSuggestionKind::Paste),
+            "group" => Some(PlannerSuggestionKind::Group),
+            "ai" => Some(PlannerSuggestionKind::Ai),
+            _ => None,
+        }
+    }
+}
+
+/// 一条建议的目标。
+///
+/// `position` 是会话成员**在库里的** 1-based 编号（界面上的编号就是它），
+/// 不是 prompt 里的 `[n]` —— prompt 按「最近优先」重排，两套编号混用会指错条目。
+///
+/// 字段面与 `AgentSessionMember` 几乎相同，但语义不同：后者是「会话的一个成员」
+/// （多一个 `reason`），前者是「一个动作的目标」—— 合成一个类型会让这两件事在
+/// 类型上不可区分。
+#[derive(Debug, Clone)]
+pub struct PlannerTarget {
+    pub item: ClipboardItem,
+    pub position: i64,
+}
+
+/// 一条建议。
+///
+/// `index` 是这次建议列表里的第几条（1-based，连续无空洞：被丢弃的行不占号）。
+/// `ai_action` 存 `AgentAction` 的 key 字符串（`None` = 非 ai 类）：建议的领域
+/// 模型不该把 `agent_service` 的动作枚举搬进来，校验时直接问那张真表。
+#[derive(Debug, Clone)]
+pub struct PlannerSuggestion {
+    pub index: u64,
+    pub kind: PlannerSuggestionKind,
+    pub ai_action: Option<String>,
+    pub targets: Vec<PlannerTarget>,
+    pub reason: String,
+}
+
+/// 一次建议的全部。
+///
+/// 空列表只有一种含义：模型明确说了「没有值得执行的下一步」。一行都没活下来
+/// 且模型没说 `NONE` 时，服务层返回的是错误而不是空集 —— 所以这里**不设**
+/// `explicit_none` 字段，两种「空」在服务层就已经分开了。
+#[derive(Debug, Clone)]
+pub struct PlannerSuggestionSet {
+    pub suggestions: Vec<PlannerSuggestion>,
+    /// 模型给了但不符合协议、被丢弃的行数（不静默吞掉，如实告知用户）。
+    pub dropped: u64,
+}

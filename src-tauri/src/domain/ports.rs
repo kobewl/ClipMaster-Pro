@@ -5,6 +5,7 @@ use crate::domain::model::{ClipGroup, ClipboardItem, ClipboardItemId, ContentTyp
 use crate::domain::settings::AppSettings;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 // ---------------------------------------------------------------------------
 //  查询 / 结果结构
@@ -28,6 +29,14 @@ pub struct SearchQuery {
 pub struct ListResult {
     pub items: Vec<ClipboardItem>,
     pub total: u64,
+    /// 每条条目命中了查询里的哪些词（条目 id → 词表，词序同查询词序）。
+    ///
+    /// 严格与放宽两条路径**都**装配；`query` 为空（浏览列表）时是 `None`——
+    /// 那时没有查询词可言，多填一个空 map 只会让前端多分支。
+    pub matched_terms: Option<HashMap<String, Vec<String>>>,
+    /// 放宽召回后仍没有任何保留条目命中的词（前端横幅用它解释「为什么放宽了」）。
+    /// `None` = 本次没走放宽路径。
+    pub relaxed_dropped: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -54,6 +63,20 @@ pub trait ClipboardRepository: Send + Sync {
     ) -> Result<ClipboardItem, RepositoryError>;
 
     async fn search(&self, query: SearchQuery) -> Result<ListResult, RepositoryError>;
+
+    /// 放宽召回：查询词之间是 **OR** 语义（命中任一即返回），最多 `cap` 条、时间倒序。
+    ///
+    /// 它是 `search` 的补充而不是替代：严格路径（AND、COUNT、分页全在 SQL 里）
+    /// 一行不改，放宽只负责把候选拉回来，够不够格由应用层按命中词数判断。
+    ///
+    /// `filters` 的 `group_id` / `content_type` / `since` 照常生效 ——
+    /// 放宽的是**查询词**，不是用户的筛选条件；`limit`/`offset`/`search_text` 不参与。
+    async fn search_relaxed(
+        &self,
+        filters: &SearchQuery,
+        terms: &[String],
+        cap: u32,
+    ) -> Result<Vec<ClipboardItem>, RepositoryError>;
 
     async fn get_by_id(&self, id: ClipboardItemId) -> Result<ClipboardItem, RepositoryError>;
 

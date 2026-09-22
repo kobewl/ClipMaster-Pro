@@ -20,6 +20,10 @@ pub struct ClipboardItemDto {
     pub last_copied_at: String,
     pub source_app: Option<String>,
     pub source_url: Option<String>,
+    /// 这条命中了查询里的哪些词（词序同查询词序）。`None` = 本次查询为空，
+    /// 序列化时整字段省略 —— 空 query 的响应因此与加字段之前逐字节一致。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub matched_terms: Option<Vec<String>>,
 }
 
 impl From<ClipboardItem> for ClipboardItemDto {
@@ -50,6 +54,7 @@ impl From<ClipboardItem> for ClipboardItemDto {
             last_copied_at: item.last_copied_at.to_rfc3339(),
             source_app: item.source_app,
             source_url: item.source_url,
+            matched_terms: None,
         }
     }
 }
@@ -87,6 +92,9 @@ pub struct ListQueryDto {
 pub struct ListResultDto {
     pub items: Vec<ClipboardItemDto>,
     pub total: u64,
+    /// 本次放宽召回里"没有任何保留条目命中"的词（前端横幅用）。`None` = 没走放宽。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub relaxed_dropped: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------
@@ -232,4 +240,56 @@ pub struct AgentRunDto {
     pub error_code: Option<String>,
     pub duration_ms: u64,
     pub output_chars: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_item() -> ClipboardItemDto {
+        ClipboardItemDto {
+            id: "11111111-1111-1111-1111-111111111111".into(),
+            content_type: "text",
+            content_text: "示例内容".into(),
+            preview: "示例内容".into(),
+            group_id: None,
+            created_at: "2026-09-22T00:00:00+00:00".into(),
+            updated_at: "2026-09-22T00:00:00+00:00".into(),
+            last_copied_at: "2026-09-22T00:00:00+00:00".into(),
+            source_app: None,
+            source_url: None,
+            matched_terms: None,
+        }
+    }
+
+    /// 空 query 的响应必须与加证据字段之前**逐字节一致**：
+    /// 新增字段在 `None` 时整字段省略，老前端解析到的 JSON 形状不变。
+    #[test]
+    fn evidence_fields_are_absent_when_none() {
+        let json = serde_json::to_string(&ListResultDto {
+            items: vec![sample_item()],
+            total: 1,
+            relaxed_dropped: None,
+        })
+        .expect("序列化列表响应");
+
+        assert!(!json.contains("relaxed_dropped"), "空 query 不得出现放宽字段：{json}");
+        assert!(!json.contains("matched_terms"), "空 query 不得出现命中词字段：{json}");
+    }
+
+    /// 有查询词时两个字段都如实出现（前端 Task 3 直接读它们）。
+    #[test]
+    fn evidence_fields_appear_when_present() {
+        let mut item = sample_item();
+        item.matched_terms = Some(vec!["番茄牛腩".into()]);
+        let json = serde_json::to_string(&ListResultDto {
+            items: vec![item],
+            total: 1,
+            relaxed_dropped: Some(vec!["做法".into()]),
+        })
+        .expect("序列化列表响应");
+
+        assert!(json.contains("\"matched_terms\":[\"番茄牛腩\"]"), "{json}");
+        assert!(json.contains("\"relaxed_dropped\":[\"做法\"]"), "{json}");
+    }
 }

@@ -48,6 +48,21 @@ pub fn build_search_text(content: &str) -> String {
     content.to_lowercase()
 }
 
+/// 一条内容用于检索的规范化文本，与写入 `search_text` 列的口径**完全一致**。
+///
+/// HTML 用去标签后的纯文本（标签名与 CSS 不是用户想搜的内容），其余类型直接用
+/// 原文；统一小写以支持大小写不敏感匹配。
+///
+/// 「命中证据」需要在应用层按同一口径重算搜索文本（库里只存了 content_text），
+/// 所以写入与重算必须共用这一个定义 —— 否则证据会与真正的检索结果对不上。
+pub fn searchable_text(content_type: crate::domain::model::ContentType, content: &str) -> String {
+    use crate::domain::model::ContentType;
+    match content_type {
+        ContentType::Html => build_search_text(&strip_html_tags(content)),
+        _ => build_search_text(content),
+    }
+}
+
 /// 去掉 HTML 标签，留下纯文本。
 ///
 /// 用于富文本条目的**搜索**与**列表预览** —— 标签本身（`<div>`、`style=`）不是

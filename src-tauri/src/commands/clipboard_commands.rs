@@ -93,10 +93,18 @@ pub async fn list_clipboard_items(
         query.offset,
     );
     let result = runtime.history.list(search_query).await.map_err(CommandError::from)?;
-    Ok(ListResultDto {
-        items: result.items.into_iter().map(ClipboardItemDto::from).collect(),
-        total: result.total,
-    })
+    // 命中词按条目 id 分发到各行：装配在应用层完成，这里只做 DTO 层的搬运。
+    let mut matched_by_id = result.matched_terms.unwrap_or_default();
+    let items = result
+        .items
+        .into_iter()
+        .map(|item| {
+            let mut dto = ClipboardItemDto::from(item);
+            dto.matched_terms = matched_by_id.remove(&dto.id);
+            dto
+        })
+        .collect();
+    Ok(ListResultDto { items, total: result.total, relaxed_dropped: result.relaxed_dropped })
 }
 
 #[tauri::command]

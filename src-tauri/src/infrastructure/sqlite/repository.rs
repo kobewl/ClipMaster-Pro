@@ -12,7 +12,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::error::RepositoryError;
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
-use crate::domain::normalize::{build_search_text, strip_html_tags};
+use crate::domain::normalize::searchable_text;
 use crate::domain::ports::{
     CleanupResult, ClipboardRepository, DeleteResult, ListResult, SearchQuery,
 };
@@ -21,9 +21,91 @@ pub struct SqliteClipboardRepository {
     conn: Arc<Mutex<Connection>>,
 }
 
+/// 放宽召回里 FTS 子查询的取数子句：与严格路径相同的「主表 ⋈ FTS」口径。
+const RELAXED_FTS_FROM: &str = "clipboard_items INNER JOIN clipboard_items_fts \
+                                ON clipboard_items.rowid = clipboard_items_fts.rowid";
+
+/// 拼放宽召回子查询的 WHERE：用户筛选条件（group / 类型 / 时间）之间是 AND，
+/// 查询词之间是 OR（`term_templates` 多项时用 OR 连接，单项即原样）。
+///
+/// 返回 `(WHERE 子句, 绑定值)`。`?N` 序号按「先筛选条件、后查询词」分配，
+/// 与绑定值入列顺序严格一致 —— 这里错位就会静默查出错误的数据。
+fn relaxed_where(filters: &SearchQuery, term_templates: &[(String, String)]) -> (String, Vec<String>) {
+    let mut conditions: Vec<String> = Vec::new();
+    let mut binds: Vec<String> = Vec::new();
+
+    if let Some(ref gid) = filters.group_id {
+        binds.push(gid.clone());
+        conditions.push(format!("clipboard_items.group_id = ?{}", binds.len()));
+    }
+    if let Some(ref content_type) = filters.content_type {
+        binds.push(content_type.as_str().to_string());
+        conditions.push(format!("clipboard_items.content_type = ?{}", binds.len()));
+    }
+    if let Some(ref since) = filters.since {
+        binds.push(since.clone());
+        conditions.push(format!("clipboard_items.created_at >= ?{}", binds.len()));
+    }
+
+    let term_expr = term_templates
+        .iter()
+        .map(|(template, value)| {
+            binds.push(value.clone());
+            template.replace("{}", &format!("?{}", binds.len()))
+        })
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    conditions.push(format!("({term_expr})"));
+
+    (format!("WHERE {}", conditions.join(" AND ")), binds)
+}
+
 impl SqliteClipboardRepository {
     pub fn new(conn: Arc<Mutex<Connection>>) -> Self {
         Self { conn }
+    }
+
+    /// 执行一条放宽召回子查询：`from_clause` + 已拼好的 WHERE，取 `cap` 条。
+    ///
+    /// 绑定值先以 `String` 收着、在这里才装箱成 `Box<dyn ToSql>`：
+    /// `dyn ToSql` 不满足 Send，不能跨进 spawn_blocking 的闭包。
+    async fn run_relaxed_query(
+        &self,
+        from_clause: &str,
+        where_sql: &str,
+        binds: Vec<String>,
+        cap: u32,
+    ) -> Result<Vec<ClipboardItem>, RepositoryError> {
+        // 排序与严格路径一致：已分组优先、再按复制时间倒序
+        // （内存并集后还会按同一口径重排一次，两条子查询各自有序是为了让
+        // LIMIT cap 截出来的是「最该被看到的 cap 条」）。
+        let sql = format!(
+            "SELECT clipboard_items.* FROM {from_clause} {where_sql}
+             ORDER BY (clipboard_items.group_id IS NULL) ASC,
+                      clipboard_items.last_copied_at DESC
+             LIMIT ?{}",
+            binds.len() + 1
+        );
+        let conn = self.conn.clone();
+        tokio::task::spawn_blocking(move || {
+            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = binds
+                .into_iter()
+                .map(|value| Box::new(value) as Box<dyn rusqlite::types::ToSql>)
+                .collect();
+            param_values.push(Box::new(cap));
+            let refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_values.iter().map(|p| p.as_ref()).collect();
+            let mut stmt = conn.prepare(&sql).map_err(Self::map_db_err)?;
+            let mut rows = stmt.query(refs.as_slice()).map_err(Self::map_db_err)?;
+            let mut items = Vec::new();
+            while let Some(row) = rows.next().map_err(Self::map_db_err)? {
+                items.push(Self::row_to_item(row).map_err(Self::map_db_err)?);
+            }
+            Ok(items)
+        })
+        .await
+        .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
     fn map_db_err(err: rusqlite::Error) -> RepositoryError {
@@ -146,12 +228,9 @@ impl ClipboardRepository for SqliteClipboardRepository {
         tokio::task::spawn_blocking(move || {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let now = Utc::now().to_rfc3339();
-            // HTML 的搜索文本取去标签后的纯文本 —— 标签名不是用户想搜的内容；
-            // 其余类型（文本 / 文件路径）直接用原文。
-            let search_text = match item.content_type {
-                ContentType::Html => build_search_text(&strip_html_tags(&item.content_text)),
-                _ => build_search_text(&item.content_text),
-            };
+            // 搜索文本与「命中证据」的重算口径必须一致：统一走 `searchable_text`
+            // （HTML 去标签 + 小写），应用层装配证据时用的是同一个函数。
+            let search_text = searchable_text(item.content_type, &item.content_text);
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
             let existing: Option<(String, String)> = tx
@@ -320,10 +399,85 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 items.push(Self::row_to_item(row).map_err(Self::map_db_err)?);
             }
 
-            Ok(ListResult { items, total: total as u64 })
+            Ok(ListResult { items, total: total as u64, matched_terms: None, relaxed_dropped: None })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
+    }
+
+    /// 放宽召回：查询词之间是 **OR** 关系，命中任一即返回，最多 `cap` 条、时间倒序。
+    ///
+    /// 与 [`ClipboardRepository::search`] 的分工：
+    /// - 严格的 AND 语义一行不改（多打一个词就把结果打成 0 是它的正确行为）；
+    /// - 放宽只负责"把候选拉回来"，"哪些候选真的够格"由应用层按命中词数过滤
+    ///   （阈值 ⌈n/2⌉ 与证据装配都在 `HistoryService::list`）。
+    ///
+    /// `filters` 里的 `group_id` / `content_type` / `since` 照常生效 —— 放宽的是
+    /// **查询词**，不是用户选择的筛选条件；忽略筛选会让"只看图片"这类视图里冒出文本。
+    /// `filters.limit/offset/search_text` 在这里不参与（分页由调用方在内存里做）。
+    async fn search_relaxed(
+        &self,
+        filters: &SearchQuery,
+        terms: &[String],
+        cap: u32,
+    ) -> Result<Vec<ClipboardItem>, RepositoryError> {
+        // 长词（≥3 字）走 FTS、短词走 LIKE，**分两条查询再在内存里并集**。
+        //
+        // 为什么不合成一条 SQL：FTS5 的 MATCH 必须作为顶层约束出现，
+        // 一旦放进 OR 里，SQLite 会直接报
+        // "unable to use function MATCH in the requested context" ——
+        // 而放宽的语义恰恰是"词间 OR"（命中任一即候选）。
+        //
+        // 查询词内部的 OR 则用 FTS5 自己的查询语法表达（`"a" OR "b"`），
+        // 这也是唯一能保留 FTS 索引加速的写法。
+
+        // 长词：拼成 FTS5 的 OR 表达式。
+        let fts_terms: Vec<String> = terms
+            .iter()
+            .filter(|term| term.chars().count() >= 3)
+            .map(|term| format!("\"{}\"", term.replace('"', "\"\"")))
+            .collect();
+        // 短词（trigram 索引不到）：LIKE 兜底，同样是 OR。
+        let like_patterns: Vec<String> = terms
+            .iter()
+            .filter(|term| !term.is_empty() && term.chars().count() < 3)
+            .map(|term| {
+                let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+                format!("%{escaped}%")
+            })
+            .collect();
+
+        let mut merged: Vec<ClipboardItem> = Vec::new();
+        if !fts_terms.is_empty() {
+            let template = (
+                "clipboard_items_fts MATCH {}".to_string(),
+                fts_terms.join(" OR "),
+            );
+            let (where_sql, binds) = relaxed_where(filters, &[template]);
+            merged
+                .extend(self.run_relaxed_query(RELAXED_FTS_FROM, &where_sql, binds, cap).await?);
+        }
+        if !like_patterns.is_empty() {
+            let templates: Vec<(String, String)> = like_patterns
+                .into_iter()
+                .map(|pattern| ("clipboard_items.search_text LIKE {} ESCAPE '\\'".to_string(), pattern))
+                .collect();
+            let (where_sql, binds) = relaxed_where(filters, &templates);
+            merged.extend(self.run_relaxed_query("clipboard_items", &where_sql, binds, cap).await?);
+        }
+
+        // 同一条可能既中长词又中短词：按 id 去重（保留先到的，字段完全一致）。
+        let mut seen = std::collections::HashSet::new();
+        merged.retain(|item| seen.insert(item.id.to_string()));
+        // 与严格路径同一套排序口径：已分组优先，再按复制时间倒序。
+        merged.sort_by(|a, b| {
+            a.group_id
+                .is_none()
+                .cmp(&b.group_id.is_none())
+                .then_with(|| b.last_copied_at.cmp(&a.last_copied_at))
+        });
+        merged.truncate(cap as usize);
+        Ok(merged)
     }
 
     async fn get_by_id(&self, id: ClipboardItemId) -> Result<ClipboardItem, RepositoryError> {

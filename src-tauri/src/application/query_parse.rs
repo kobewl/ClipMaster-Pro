@@ -26,12 +26,22 @@ const QUERY_PREFIXES: &[&str] = &[
     "为什么", "是什么", "怎么做", "请问", "帮我", "如何", "怎么", "怎样", "搜索", "关于", "找找",
 ];
 
+/// **词内符号白名单**：这些符号出现在技术词里是内容的一部分，不能当标点剥掉。
+///
+/// `C++` 剥成 `c` 会让查询命中全库（`c` 是一字宽匹配），`c#`、`node.js`、
+/// `min-width`、`a/b` 同理。白名单制而不是黑名单制：标点无穷而内容符号有限，
+/// 白名单漏了谁最多是少剥一个标点，黑名单漏了谁就是切坏一个正常词。
+const CONTENT_SYMBOLS: &[char] = &[
+    '+', '#', '.', '_', '-', '/', '\\', '~', '&', '=', '@', '$', '%', '*', '^', '|', '`',
+];
+
 /// 把原始查询串解析成检索词：trim、按空白分词、逐词去首尾标点、小写、
 /// 剥检索前缀、剔停用词、去重（保序）。
 ///
-/// 保底规则：全部词都被剔空时回退到「原始非空词」（只做过标点/大小写归一，
-/// 不再剔停用词）—— 空词集在上游会被当成浏览列表，
-/// 静默丢掉用户的筛选意图比搜不准更糟。
+/// **保底规则**：只要有非空白输入，就至少留下一个词 —— 全部被剔空时回退到
+/// 「归一后的原始词」，归一后仍为空的（纯符号词，如 `😀`）保留原文。空词集在上游
+/// 会被当成浏览列表，静默丢掉用户的筛选意图比搜不准更糟：纯符号查询宁可搜出 0 条，
+/// 也不能变成「把整库倒出来」（旧路径本可 `LIKE '%😀%'` 命中）。
 pub fn parse_query(raw: &str) -> Vec<String> {
     let mut tokens: Vec<String> = Vec::new();
     for raw_token in raw.split_whitespace() {
@@ -48,10 +58,10 @@ pub fn parse_query(raw: &str) -> Vec<String> {
         }
     }
     if tokens.is_empty() {
-        // 保底：用归一后的原始词，保证「至少有一个词」这个不变量成立。
         for raw_token in raw.split_whitespace() {
             let token = strip_boundary_punct(raw_token).to_lowercase();
-            if !token.is_empty() && !tokens.iter().any(|t| t == &token) {
+            let token = if token.is_empty() { raw_token.to_string() } else { token };
+            if !tokens.iter().any(|t| t == &token) {
                 tokens.push(token);
             }
         }
@@ -79,10 +89,11 @@ pub fn matched_terms(search_text: &str, terms: &[String]) -> Vec<String> {
         .collect()
 }
 
-/// 去掉词首尾的标点（`？`、`：`、`《` 等）。只动两端，词内的
-/// 连字符、下划线、点号都是内容的一部分（`min-width`、`v1.0.7`）。
+/// 去掉词首尾的标点：`!is_alphanumeric() && !CONTENT_SYMBOLS.contains(..)`。
+///
+/// 只动两端 —— 词内的符号保留（`min-width` / `c++` / `v1.0.7` / `a/b`）。
 fn strip_boundary_punct(token: &str) -> &str {
-    token.trim_matches(|ch: char| !ch.is_alphanumeric())
+    token.trim_matches(|ch: char| !ch.is_alphanumeric() && !CONTENT_SYMBOLS.contains(&ch))
 }
 
 /// 反复剥掉词首的检索前缀，直到没有可剥的（`请问怎么做redis` → `redis`）。
@@ -136,6 +147,61 @@ mod tests {
             vec!["找", "一下"],
             "全部被停用词吃掉时必须回退到原始非空词，否则查询会退化成浏览列表"
         );
+    }
+
+    #[test]
+    fn parse_query_keeps_content_symbols() {
+        assert_eq!(
+            parse_query("C++"),
+            vec!["c++"],
+            "「+」是词的一部分：剥成「c」会让查询变成命中全库的单字"
+        );
+        assert_eq!(parse_query("C#"), vec!["c#"], "「#」同理（C# 是语言名）");
+        assert_eq!(parse_query("node.js"), vec!["node.js"], "词内的点号是内容，不是句末标点");
+        assert_eq!(
+            parse_query("？（redis）"),
+            vec!["redis"],
+            "句子级标点仍要剥（问号、括号）"
+        );
+        assert_eq!(
+            parse_query("★热点"),
+            vec!["热点"],
+            "与内容无关的装饰符号照旧剥掉：★ 不在词内符号白名单里"
+        );
+    }
+
+    #[test]
+    fn parse_query_keeps_symbol_only_tokens() {
+        assert_eq!(
+            parse_query("😀"),
+            vec!["😀"],
+            "纯符号查询必须保留原词照常检索；解析成空词集会静默变成浏览整库"
+        );
+        assert_eq!(parse_query("→"), vec!["→"], "箭头同理");
+        assert_eq!(
+            parse_query("？？？"),
+            vec!["？？？"],
+            "标点自成一词且剥空时保留原文：宁可搜不到，也不能静默丢掉筛选意图"
+        );
+    }
+
+    #[test]
+    fn parse_query_is_idempotent() {
+        // list 会对 build_search_query 的结果二次 parse，幂等是硬性不变量。
+        for raw in [
+            "请问怎么做 Redis 超时？",
+            "找 一下",
+            "C++ 模板报错",
+            "★热点",
+            "😀",
+            "？？？",
+            "番茄牛腩 做法",
+            "  ",
+        ] {
+            let once = parse_query(raw).join(" ");
+            let twice = parse_query(&once).join(" ");
+            assert_eq!(once, twice, "二次解析必须与一次解析结果相同：{raw:?}");
+        }
     }
 
     #[test]

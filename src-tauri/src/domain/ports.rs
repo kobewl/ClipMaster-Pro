@@ -66,8 +66,9 @@ pub trait ClipboardRepository: Send + Sync {
 
     /// 放宽召回：查询词之间是 **OR** 语义（命中任一即返回），最多 `cap` 条、时间倒序。
     ///
-    /// 它是 `search` 的补充而不是替代：严格路径（AND、COUNT、分页全在 SQL 里）
-    /// 一行不改，放宽只负责把候选拉回来，够不够格由应用层按命中词数判断。
+    /// 与 [`ClipboardRepository::search`] 的分工：严格路径（AND、COUNT、分页全在
+    /// SQL 里）一行不改；放宽只负责把候选拉回来，够不够格由应用层按命中词数判断。
+    /// 实现细节（FTS / LIKE 双查询、筛选条件如何参与）见 SQLite 实现处的注释。
     ///
     /// `filters` 的 `group_id` / `content_type` / `since` 照常生效 ——
     /// 放宽的是**查询词**，不是用户的筛选条件；`limit`/`offset`/`search_text` 不参与。

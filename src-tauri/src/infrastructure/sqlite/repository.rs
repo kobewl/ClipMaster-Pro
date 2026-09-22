@@ -405,16 +405,10 @@ impl ClipboardRepository for SqliteClipboardRepository {
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    /// 放宽召回：查询词之间是 **OR** 关系，命中任一即返回，最多 `cap` 条、时间倒序。
-    ///
-    /// 与 [`ClipboardRepository::search`] 的分工：
-    /// - 严格的 AND 语义一行不改（多打一个词就把结果打成 0 是它的正确行为）；
-    /// - 放宽只负责"把候选拉回来"，"哪些候选真的够格"由应用层按命中词数过滤
-    ///   （阈值 ⌈n/2⌉ 与证据装配都在 `HistoryService::list`）。
-    ///
-    /// `filters` 里的 `group_id` / `content_type` / `since` 照常生效 —— 放宽的是
-    /// **查询词**，不是用户选择的筛选条件；忽略筛选会让"只看图片"这类视图里冒出文本。
-    /// `filters.limit/offset/search_text` 在这里不参与（分页由调用方在内存里做）。
+    /// 见 trait 上的契约说明。这里的实现要点：
+    /// - 用户筛选条件（group / 类型 / 时间）照常生效 —— 忽略它们会让「只看图片」
+    ///   这类视图里冒出文本；
+    /// - `filters.limit/offset/search_text` 不参与（分页由调用方在内存里做）。
     async fn search_relaxed(
         &self,
         filters: &SearchQuery,
@@ -423,13 +417,14 @@ impl ClipboardRepository for SqliteClipboardRepository {
     ) -> Result<Vec<ClipboardItem>, RepositoryError> {
         // 长词（≥3 字）走 FTS、短词走 LIKE，**分两条查询再在内存里并集**。
         //
-        // 为什么不合成一条 SQL：FTS5 的 MATCH 必须作为顶层约束出现，
-        // 一旦放进 OR 里，SQLite 会直接报
-        // "unable to use function MATCH in the requested context" ——
-        // 而放宽的语义恰恰是"词间 OR"（命中任一即候选）。
+        // 为什么不合成一条 SQL：FTS5 的 MATCH 不能**直接**出现在 OR 表达式里
+        // （`fts MATCH ?1 OR search_text LIKE ?2` 会被 SQLite 拒绝，报
+        // "unable to use function MATCH in the requested context"），而放宽的语义
+        // 恰恰是词间 OR。放进子查询（`rowid IN (SELECT rowid ... MATCH ?)`）也能绕过，
+        // 但那样每个短词仍要走 LIKE，拆成两条反倒更直白。
         //
-        // 查询词内部的 OR 则用 FTS5 自己的查询语法表达（`"a" OR "b"`），
-        // 这也是唯一能保留 FTS 索引加速的写法。
+        // 查询词内部的 OR 用 FTS5 自己的查询语法表达（`"a" OR "b"`），
+        // 这样长词侧完全走索引。
 
         // 长词：拼成 FTS5 的 OR 表达式。
         let fts_terms: Vec<String> = terms

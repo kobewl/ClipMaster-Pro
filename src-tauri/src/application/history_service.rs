@@ -19,8 +19,8 @@ pub const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024;
 /// 放宽召回的候选上限。
 ///
 /// 放宽是「严格 0 命中的兜底」，不是主力检索：候选再多也不会都被用户看到，
-/// 而每条候选都要在内存里重算一遍命中词。300 条足够覆盖真实历史的放宽场景，
-/// 又给单次查询的成本钉了个上界（Task 2 的重排窗口 500 另算）。
+/// 而每条候选都要在内存里重算一遍命中词，所以这里给单次查询的成本钉一个上界。
+/// 300 条足够覆盖真实剪贴板历史规模下的放宽场景。
 const RELAX_RECALL_CAP: u32 = 300;
 
 pub struct HistoryService {
@@ -184,27 +184,23 @@ impl HistoryService {
         Ok(())
     }
 
-    /// 列表 / 检索的统一入口。判定顺序就是这段代码的骨架：
-    ///
-    /// 1. **空 query（浏览列表）**：完全走原来的 `search`，
-    ///    连证据字段都不装配（`matched_terms` / `relaxed_dropped` 保持 `None`）——
-    ///    没有查询词可言，顺序与分页也必须零变化。
-    /// 2. **严格查询**：词间 AND（多打一个词就 0 命中，这是正确行为）。
-    ///    只有 0 命中才考虑放宽；有命中就照旧返回，绝不掺入"只中一半"的条目。
-    /// 3. **放宽召回**：仅当严格 0 命中且词数 ≥2。OR 拉回候选后按
-    ///    「命中词数 ≥ ⌈n/2⌉」过滤，再按 (命中数 desc, 时间 desc) 稳定排序、
-    ///    内存切页；`total` = 过滤后的条数，`relaxed_dropped` 记录一条都没命中的词。
+    /// 列表 / 检索的统一入口。判定顺序就是这段代码的骨架：浏览列表（空 query）→
+    /// 严格查询（词间 AND）→ 放宽召回（严格 0 命中且词数 ≥2）。三档的边界条件与
+    /// 各档 `total` 的口径见行内注释。
     pub async fn list(&self, query: SearchQuery) -> Result<ListResult, AppError> {
         let terms: Vec<String> = match query.search_text.as_deref() {
             Some(text) => query_parse::parse_query(text),
             None => Vec::new(),
         };
+        // 空 query：完全走原来的 `search`，连证据字段都不装配（`matched_terms` /
+        // `relaxed_dropped` 保持 `None`）—— 没有查询词可言，顺序与分页也必须零变化。
         if terms.is_empty() {
             return Ok(self.repository.search(query).await?);
         }
 
-        // 严格路径：用解析后的词重写 search_text（同一份词集既是检索输入，
-        // 也是后面装配证据的依据），其余筛选/分页参数原样透传。
+        // 严格查询：词间 AND（多打一个词就 0 命中，这是正确行为）。只有 0 命中才
+        // 考虑放宽；有命中就照旧返回，绝不掺入「只中一半」的条目。
+        // 用解析后的词重写 search_text：同一份词集既是检索输入，也是装配证据的依据。
         let strict_query = SearchQuery { search_text: Some(terms.join(" ")), ..query.clone() };
         let strict = self.repository.search(strict_query).await?;
         if strict.total > 0 {
@@ -233,6 +229,8 @@ impl HistoryService {
             });
         }
 
+        // 放宽召回：OR 拉回候选，再按「命中词数 ≥ ⌈n/2⌉」过滤。`total` = 过滤后的
+        // 保留条数（匹配总数，与 limit/offset 无关），切页在内存里做。
         let candidates = self
             .repository
             .search_relaxed(&query, &terms, RELAX_RECALL_CAP)
@@ -245,7 +243,8 @@ impl HistoryService {
                 kept.push((matched, item));
             }
         }
-        // 稳定序：命中多的在前；同命中数按复制时间倒序（重排在 Task 2，这里只保证确定）。
+        // 稳定序：命中多的在前，同命中数按复制时间倒序 —— 只求确定，
+        // 更精细的相关性排序不在召回层职责内。
         kept.sort_by(|(matched_a, item_a), (matched_b, item_b)| {
             matched_b
                 .len()
@@ -293,8 +292,9 @@ impl HistoryService {
     /// 停用词与句末标点在**进入 SQL 之前**就被剥掉，词间用空格连接
     /// （repository 侧按空白重新分词，两边口径一致）。
     ///
-    /// 唯一会解析成空串的输入是「全部由标点组成」（parse_query 的保底也只能
-    /// 回到原始词，仍是空），这种输入按浏览列表处理 —— 它本来就不含任何检索意图。
+    /// **不变量**：只要输入含非空白字符，`search_text` 就必须是 `Some` ——
+    /// `None` 在下游等于「浏览列表」，会把用户的检索静默变成倒出整库。
+    /// 纯符号查询（`😀`）因此也照常检索（可能 0 命中，但不会变成浏览）。
     pub fn build_search_query(
         group_id: Option<String>,
         search: Option<String>,
@@ -417,4 +417,44 @@ fn spawn_image_cleanup(paths: Vec<String>) {
 fn parse_id(id_str: &str) -> Result<ClipboardItemId, AppError> {
     ClipboardItemId::from_str(id_str)
         .map_err(|_| AppError::Repository(RepositoryError::NotFound(id_str.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 含非空白字符的查询串**永远**不能变成 `None`（浏览列表）。
+    ///
+    /// 这是静默降级的守门测试：曾经纯符号查询（`😀`）会被解析成空词集，
+    /// 到下游变成「浏览整库」——用户以为在筛，实际看到的是全部历史。
+    #[test]
+    fn non_blank_query_never_falls_back_to_browsing() {
+        for raw in ["😀", "→", "？？？", "C++", "C#", "★热点", "请问怎么做 redis", "的 了 吗"] {
+            let query = HistoryService::build_search_query(
+                None,
+                Some(raw.to_string()),
+                None,
+                None,
+                10,
+                0,
+            );
+            assert!(
+                query.search_text.is_some(),
+                "查询 {raw:?} 不得退化成浏览列表（search_text 为 None）"
+            );
+        }
+
+        // 反向：真正的空输入仍必须走浏览路径，否则列表页会去搜一个不存在的词。
+        for raw in ["", "   ", "\n\t"] {
+            let query = HistoryService::build_search_query(
+                None,
+                Some(raw.to_string()),
+                None,
+                None,
+                10,
+                0,
+            );
+            assert!(query.search_text.is_none(), "空白输入 {raw:?} 应按浏览列表处理");
+        }
+    }
 }

@@ -277,7 +277,7 @@ mod tests {
         assert!(!json.contains("matched_terms"), "空 query 不得出现命中词字段：{json}");
     }
 
-    /// 有查询词时两个字段都如实出现（前端 Task 3 直接读它们）。
+    /// 有查询词时两个字段都如实出现（前端横幅与行内命中词直接读它们）。
     #[test]
     fn evidence_fields_appear_when_present() {
         let mut item = sample_item();

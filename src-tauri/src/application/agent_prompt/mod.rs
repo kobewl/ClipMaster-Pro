@@ -81,7 +81,10 @@ const SYSTEM_PROMPT: &str = "你是 ClipMaster 的本地优先剪贴板助手。
 pub fn prepare_prompt(task: PromptTask<'_>, inputs: &[AgentInput]) -> PreparedPrompt {
     // 转义必须在分配预算之前：转义才是真正发给模型的形态，
     // 按原文长度算的话，每有一个 `</clip>` 就会让实际发送量比预算多 1 个字符。
-    let escaped: Vec<String> = inputs.iter().map(|item| escape_clip_tags(&item.text)).collect();
+    let escaped: Vec<String> = inputs
+        .iter()
+        .map(|item| escape_clip_tags(&item.text))
+        .collect();
     let needs: Vec<usize> = escaped.iter().map(|text| text.chars().count()).collect();
     let allocations = allocate(inputs, &needs);
 
@@ -163,5 +166,10 @@ pub fn prepare_prompt(task: PromptTask<'_>, inputs: &[AgentInput]) -> PreparedPr
     user.push_str("\n\n");
     user.push_str(&blocks.join("\n\n"));
 
-    PreparedPrompt { system: SYSTEM_PROMPT.to_string(), user, used, dropped }
+    PreparedPrompt {
+        system: SYSTEM_PROMPT.to_string(),
+        user,
+        used,
+        dropped,
+    }
 }

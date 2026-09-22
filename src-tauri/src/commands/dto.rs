@@ -2,10 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::application::agent_service::AgentAction;
 use crate::domain::model::{build_preview, ClipGroup, ClipboardItem};
 use crate::domain::normalize::strip_html_tags;
 use crate::domain::settings::AppSettings;
-use crate::application::agent_service::AgentAction;
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -31,8 +31,10 @@ impl From<ClipboardItem> for ClipboardItemDto {
             ContentType::Text => build_preview(&item.content_text),
             ContentType::Image => "[图片]".to_string(),
             ContentType::Html => {
-                let plain: String =
-                    strip_html_tags(&item.content_text).split_whitespace().collect::<Vec<_>>().join(" ");
+                let plain: String = strip_html_tags(&item.content_text)
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ");
                 build_preview(&plain)
             }
             ContentType::Files => build_preview(&file_names_summary(&item.content_text)),

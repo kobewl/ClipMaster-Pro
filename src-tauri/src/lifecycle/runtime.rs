@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::agent_service::{AgentService, REQUEST_COOLDOWN};
+use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
 use crate::application::settings_service::SettingsService;
@@ -97,8 +97,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     let settings_store: Arc<dyn SettingsStore> = settings_impl.clone();
 
     let image_dir = app_data_dir.join("images");
-    std::fs::create_dir_all(&image_dir)
-        .map_err(|e| format!("创建图片存储目录失败: {e}"))?;
+    std::fs::create_dir_all(&image_dir).map_err(|e| format!("创建图片存储目录失败: {e}"))?;
 
     #[cfg(target_os = "macos")]
     let (writer, source): (

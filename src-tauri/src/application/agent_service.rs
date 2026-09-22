@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 
-use crate::application::agent_prompt::{prepare_prompt, AgentInput, PromptTask, TOTAL_BUDGET_CHARS};
+use crate::application::agent_prompt::{
+    prepare_prompt, AgentInput, PromptTask, TOTAL_BUDGET_CHARS,
+};
 use crate::application::history_service::HistoryService;
 use crate::domain::model::ContentType;
 use crate::domain::normalize::strip_html_tags;
@@ -114,9 +116,7 @@ impl AgentAction {
             }
             // format_json 对一组内容没有意义：把五段各自合法的 JSON 拼在一起
             // 不是合法 JSON，分别格式化又等于做了五次单条操作。
-            Self::FormatJson => {
-                "格式化 JSON 这个动作只对单条内容有意义，请只选中一条再运行。"
-            }
+            Self::FormatJson => "格式化 JSON 这个动作只对单条内容有意义，请只选中一条再运行。",
         }
     }
 
@@ -168,20 +168,29 @@ pub enum AgentError {
     NotConfigured,
     /// 带上位置：一次选了多条时，"有一条含密钥"和"是第 3 条含密钥"对用户
     /// 是完全不同的信息量 —— 后者让他知道把哪条去掉就能继续。
-    #[error("选择中的第 {position} 条内容里检测到可能的 Token、密码或私钥，已阻止整批发送到云端。")]
+    #[error(
+        "选择中的第 {position} 条内容里检测到可能的 Token、密码或私钥，已阻止整批发送到云端。"
+    )]
     SensitiveContent { position: usize },
     #[error("AI Actions 暂只支持文本和 HTML 内容。")]
     UnsupportedContent,
-    #[error("一次最多处理 {MAX_AGENT_INPUT_ITEMS} 条记录，当前选中了 {count} 条，请缩小范围后重试。")]
+    #[error(
+        "一次最多处理 {MAX_AGENT_INPUT_ITEMS} 条记录，当前选中了 {count} 条，请缩小范围后重试。"
+    )]
     TooManyItems { count: usize },
     #[error("这个动作只能对单条内容运行，请只选中一条再试。")]
     BatchUnsupportedAction,
-    #[error("内容过长（最多 {} 个字符），请先裁剪后再运行 AI Action。", TOTAL_BUDGET_CHARS)]
+    #[error(
+        "内容过长（最多 {} 个字符），请先裁剪后再运行 AI Action。",
+        TOTAL_BUDGET_CHARS
+    )]
     InputTooLong,
     /// 下面五个变体都带上 `provider` 而不是写死 "DeepSeek"：用户可以把地址换成
     /// OpenAI / Ollama / 中转站，报错却写着 DeepSeek 会把排查方向带偏。
     /// 服务名由 `provider_label(&config.base_url)` 在调用点算好传进来。
-    #[error("{provider} 拒绝了这次请求（API Key 可能无效或已被撤销），请到「设置 → AI 助手」检查。")]
+    #[error(
+        "{provider} 拒绝了这次请求（API Key 可能无效或已被撤销），请到「设置 → AI 助手」检查。"
+    )]
     Unauthorized { provider: String },
     #[error("{provider} 账户余额不足，请充值后重试。")]
     InsufficientBalance { provider: String },
@@ -657,7 +666,9 @@ impl AgentService {
             .bearer_auth(api_key)
             .send()
             .await
-            .map_err(|_| AgentError::ProviderUnavailable { provider: label.clone() })?;
+            .map_err(|_| AgentError::ProviderUnavailable {
+                provider: label.clone(),
+            })?;
         if response.status().is_success() {
             return Ok(());
         }
@@ -681,8 +692,13 @@ impl AgentService {
         action: AgentAction,
         request_id: Option<String>,
     ) -> Result<AgentResult, AgentError> {
-        self.run_items(&[item_id.to_string()], action, InputMode::Single, request_id)
-            .await
+        self.run_items(
+            &[item_id.to_string()],
+            action,
+            InputMode::Single,
+            request_id,
+        )
+        .await
     }
 
     /// 多条内容的 AI 动作：跨记录归纳。
@@ -806,7 +822,9 @@ impl AgentService {
             return Err(AgentError::ItemUnavailable);
         }
         if item_ids.len() > MAX_AGENT_INPUT_ITEMS {
-            return Err(AgentError::TooManyItems { count: item_ids.len() });
+            return Err(AgentError::TooManyItems {
+                count: item_ids.len(),
+            });
         }
         if mode == InputMode::Batch && !action.supports_batch() {
             return Err(AgentError::BatchUnsupportedAction);
@@ -836,7 +854,9 @@ impl AgentService {
                 }
             };
             if contains_sensitive_content(&text) {
-                return Err(AgentError::SensitiveContent { position: position + 1 });
+                return Err(AgentError::SensitiveContent {
+                    position: position + 1,
+                });
             }
             // 单条路径保持 Phase 0 的约定：超长直接报错让用户先裁剪，
             // 而不是悄悄截断后给出一个基于残缺内容的结论。
@@ -874,8 +894,16 @@ impl AgentService {
             &inputs,
         );
 
-        audit.input_chars = prepared.used.iter().map(|used| used.used_chars as u64).sum();
-        audit.input_item_ids = prepared.used.iter().map(|used| used.item_id.clone()).collect();
+        audit.input_chars = prepared
+            .used
+            .iter()
+            .map(|used| used.used_chars as u64)
+            .sum();
+        audit.input_item_ids = prepared
+            .used
+            .iter()
+            .map(|used| used.item_id.clone())
+            .collect();
         audit.dropped_item_ids = prepared.dropped.clone();
 
         let config = self.config().await?;
@@ -909,7 +937,9 @@ impl AgentService {
             }))
             .send()
             .await
-            .map_err(|_| AgentError::ProviderUnavailable { provider: provider.clone() })?;
+            .map_err(|_| AgentError::ProviderUnavailable {
+                provider: provider.clone(),
+            })?;
 
         if !response.status().is_success() {
             let status = response.status();
@@ -917,10 +947,13 @@ impl AgentService {
             tracing::warn!(status = %status, host = %host_of(&config.base_url), "模型请求失败");
             return Err(map_status_error(status, &provider));
         }
-        let body: ChatCompletion = response
-            .json()
-            .await
-            .map_err(|_| AgentError::InvalidResponse { provider: provider.clone() })?;
+        let body: ChatCompletion =
+            response
+                .json()
+                .await
+                .map_err(|_| AgentError::InvalidResponse {
+                    provider: provider.clone(),
+                })?;
         let content = body
             .choices
             .into_iter()
@@ -928,7 +961,9 @@ impl AgentService {
             .and_then(|choice| choice.message.content)
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .ok_or(AgentError::InvalidResponse { provider: provider.clone() })?;
+            .ok_or(AgentError::InvalidResponse {
+                provider: provider.clone(),
+            })?;
 
         let label = action.label();
         Ok(AgentResult {
@@ -945,7 +980,11 @@ impl AgentService {
             content,
             provider,
             model: config.model,
-            source_item_ids: prepared.used.iter().map(|used| used.item_id.clone()).collect(),
+            source_item_ids: prepared
+                .used
+                .iter()
+                .map(|used| used.item_id.clone())
+                .collect(),
             inputs: prepared
                 .used
                 .iter()
@@ -1318,7 +1357,10 @@ mod tests {
     #[test]
     fn api_key_validation_accepts_realistic_keys() {
         assert!(validate_api_key("sk-1234567890abcdef").is_ok());
-        assert!(validate_api_key("  sk-1234567890abcdef  ").is_ok(), "首尾空白应被忽略");
+        assert!(
+            validate_api_key("  sk-1234567890abcdef  ").is_ok(),
+            "首尾空白应被忽略"
+        );
     }
 
     #[test]
@@ -1326,7 +1368,10 @@ mod tests {
         assert!(validate_api_key("").is_err(), "空值");
         assert!(validate_api_key("sk-123").is_err(), "太短");
         assert!(validate_api_key("sk-abc def").is_err(), "含空格");
-        assert!(validate_api_key("sk-密钥").is_err(), "非 ASCII（复制到中文标点）");
+        assert!(
+            validate_api_key("sk-密钥").is_err(),
+            "非 ASCII（复制到中文标点）"
+        );
     }
 
     #[test]
@@ -1394,14 +1439,26 @@ mod tests {
     fn provider_errors_name_the_real_endpoint_not_deepseek() {
         let err = map_status_error(reqwest::StatusCode::UNAUTHORIZED, "my-proxy.example.com");
         let msg = err.to_string();
-        assert!(msg.contains("my-proxy.example.com"), "自定义端点的错误必须报真实主机名：{msg}");
-        assert!(!msg.contains("DeepSeek"), "接了中转站还报 DeepSeek 就是误导：{msg}");
+        assert!(
+            msg.contains("my-proxy.example.com"),
+            "自定义端点的错误必须报真实主机名：{msg}"
+        );
+        assert!(
+            !msg.contains("DeepSeek"),
+            "接了中转站还报 DeepSeek 就是误导：{msg}"
+        );
 
         let err = map_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "DeepSeek");
-        assert!(err.to_string().contains("DeepSeek"), "默认地址照旧报 DeepSeek");
+        assert!(
+            err.to_string().contains("DeepSeek"),
+            "默认地址照旧报 DeepSeek"
+        );
 
         let msg = AgentError::NotConfigured.to_string();
-        assert!(!msg.contains("DeepSeek"), "未配置提示不应绑定具体厂商：{msg}");
+        assert!(
+            !msg.contains("DeepSeek"),
+            "未配置提示不应绑定具体厂商：{msg}"
+        );
     }
 
     /// 五个模板逐个过：只要有一个漏了 `{provider}`（比如后来改文案时手滑写回
@@ -1411,15 +1468,28 @@ mod tests {
     fn every_provider_error_template_names_the_given_provider() {
         let provider = "ollama.local:11434";
         let errors = [
-            AgentError::Unauthorized { provider: provider.to_string() },
-            AgentError::InsufficientBalance { provider: provider.to_string() },
-            AgentError::RateLimited { provider: provider.to_string() },
-            AgentError::ProviderUnavailable { provider: provider.to_string() },
-            AgentError::InvalidResponse { provider: provider.to_string() },
+            AgentError::Unauthorized {
+                provider: provider.to_string(),
+            },
+            AgentError::InsufficientBalance {
+                provider: provider.to_string(),
+            },
+            AgentError::RateLimited {
+                provider: provider.to_string(),
+            },
+            AgentError::ProviderUnavailable {
+                provider: provider.to_string(),
+            },
+            AgentError::InvalidResponse {
+                provider: provider.to_string(),
+            },
         ];
         for err in errors {
             let msg = err.to_string();
-            assert!(msg.contains(provider), "每条服务类错误都要报真实服务名：{msg}");
+            assert!(
+                msg.contains(provider),
+                "每条服务类错误都要报真实服务名：{msg}"
+            );
             assert!(!msg.contains("DeepSeek"), "错误文案里不得写死厂商：{msg}");
         }
     }
@@ -1450,7 +1520,10 @@ mod tests {
         // 远程明文地址会让 API Key 裸奔，必须拦住
         let err = normalize_base_url("http://api.deepseek.com").unwrap_err();
         assert!(err.contains("https"), "错误信息要告诉用户正确答案：{err}");
-        assert!(normalize_base_url("http://192.168.1.50:8000").is_err(), "内网 IP 也不算本机");
+        assert!(
+            normalize_base_url("http://192.168.1.50:8000").is_err(),
+            "内网 IP 也不算本机"
+        );
         // 伪装成本地的远程地址：主机名以 localhost 开头但不是它
         assert!(normalize_base_url("http://localhost.evil.com").is_err());
     }
@@ -1460,18 +1533,30 @@ mod tests {
         assert!(normalize_base_url("").is_err(), "空值");
         assert!(normalize_base_url("api.deepseek.com").is_err(), "缺协议头");
         assert!(normalize_base_url("https://").is_err(), "只有协议头");
-        assert!(normalize_base_url("ftp://example.com").is_err(), "不支持的协议");
+        assert!(
+            normalize_base_url("ftp://example.com").is_err(),
+            "不支持的协议"
+        );
         // 凭据不能放在地址里：地址要显示在界面上
         assert!(normalize_base_url("https://user:pass@example.com").is_err());
-        assert!(normalize_base_url("https://example.com?key=abc").is_err(), "查询串");
-        assert!(normalize_base_url("https://example.com#frag").is_err(), "片段");
+        assert!(
+            normalize_base_url("https://example.com?key=abc").is_err(),
+            "查询串"
+        );
+        assert!(
+            normalize_base_url("https://example.com#frag").is_err(),
+            "片段"
+        );
     }
 
     #[test]
     fn provider_label_tells_the_user_where_data_went() {
         assert_eq!(provider_label(DEFAULT_BASE_URL), "DeepSeek");
         // 换成自定义地址后必须显示真实主机名，不能继续报 "DeepSeek"
-        assert_eq!(provider_label("https://my-proxy.example.com/v1"), "my-proxy.example.com");
+        assert_eq!(
+            provider_label("https://my-proxy.example.com/v1"),
+            "my-proxy.example.com"
+        );
         assert_eq!(provider_label("http://127.0.0.1:11434/v1"), "127.0.0.1");
         assert_eq!(host_of("https://api.deepseek.com"), "api.deepseek.com");
     }
@@ -1481,8 +1566,14 @@ mod tests {
         // 前端用 crypto.randomUUID() 生成，形如 550e8400-e29b-41d4-a716-446655440000。
         let uuid = "550e8400-e29b-41d4-a716-446655440000";
         assert_eq!(validate_request_id(uuid).unwrap(), uuid);
-        assert_eq!(validate_request_id("  req-test-abc_123  ").unwrap(), "req-test-abc_123");
-        assert!(validate_request_id(&"x".repeat(64)).is_ok(), "正好 64 字符应当放行");
+        assert_eq!(
+            validate_request_id("  req-test-abc_123  ").unwrap(),
+            "req-test-abc_123"
+        );
+        assert!(
+            validate_request_id(&"x".repeat(64)).is_ok(),
+            "正好 64 字符应当放行"
+        );
     }
 
     #[test]
@@ -1492,7 +1583,10 @@ mod tests {
         assert!(validate_request_id("含中文号").is_err(), "非 ASCII");
         assert!(validate_request_id("space id").is_err(), "含空格");
         assert!(validate_request_id("semi;colon").is_err(), "含标点");
-        assert!(validate_request_id(&"x".repeat(65)).is_err(), "超过 64 字符");
+        assert!(
+            validate_request_id(&"x".repeat(65)).is_err(),
+            "超过 64 字符"
+        );
     }
 
     #[test]
@@ -1500,15 +1594,24 @@ mod tests {
         // 前端按 code 分派引导文案，改动这里等于改 API 契约。
         assert_eq!(AgentError::NotConfigured.code(), "ai_not_configured");
         assert_eq!(
-            AgentError::Unauthorized { provider: "DeepSeek".to_string() }.code(),
+            AgentError::Unauthorized {
+                provider: "DeepSeek".to_string()
+            }
+            .code(),
             "ai_unauthorized"
         );
         assert_eq!(
-            AgentError::InsufficientBalance { provider: "DeepSeek".to_string() }.code(),
+            AgentError::InsufficientBalance {
+                provider: "DeepSeek".to_string()
+            }
+            .code(),
             "ai_insufficient_balance"
         );
         assert_eq!(
-            AgentError::RateLimited { provider: "DeepSeek".to_string() }.code(),
+            AgentError::RateLimited {
+                provider: "DeepSeek".to_string()
+            }
+            .code(),
             "ai_rate_limited"
         );
         assert_eq!(
@@ -1516,12 +1619,21 @@ mod tests {
             "ai_invalid_request_id"
         );
 
-        assert!(AgentError::RateLimited { provider: "DeepSeek".to_string() }.retryable());
+        assert!(AgentError::RateLimited {
+            provider: "DeepSeek".to_string()
+        }
+        .retryable());
         assert!(
-            !AgentError::Unauthorized { provider: "DeepSeek".to_string() }.retryable(),
+            !AgentError::Unauthorized {
+                provider: "DeepSeek".to_string()
+            }
+            .retryable(),
             "Key 无效重试多少次都没用"
         );
-        assert!(!AgentError::InsufficientBalance { provider: "DeepSeek".to_string() }.retryable());
+        assert!(!AgentError::InsufficientBalance {
+            provider: "DeepSeek".to_string()
+        }
+        .retryable());
         assert!(
             !AgentError::InvalidRequestId("bad".to_string()).retryable(),
             "号不合法是调用方 bug，重试不会变好"
@@ -1623,8 +1735,14 @@ mod tests {
             !state.pre_cancelled.contains(&"tomb-1".to_string()),
             "第二个最老的也该淘汰"
         );
-        assert!(state.pre_cancelled.contains(&"tomb-8".to_string()), "最新的号必须留下");
-        assert!(state.pre_cancelled.contains(&"tomb-9".to_string()), "最新的号必须留下");
+        assert!(
+            state.pre_cancelled.contains(&"tomb-8".to_string()),
+            "最新的号必须留下"
+        );
+        assert!(
+            state.pre_cancelled.contains(&"tomb-9".to_string()),
+            "最新的号必须留下"
+        );
         drop(state);
 
         // 去重：重复入队会让一个号挤掉别的号，真正该被取消的那个反而被淘汰出队。
@@ -1633,7 +1751,11 @@ mod tests {
         }
         let state = agent.state.lock().expect("运行状态锁");
         assert_eq!(
-            state.pre_cancelled.iter().filter(|id| *id == "dup-id").count(),
+            state
+                .pre_cancelled
+                .iter()
+                .filter(|id| *id == "dup-id")
+                .count(),
             1,
             "同一个号不许在墓碑队列里占两格"
         );
@@ -1648,7 +1770,10 @@ mod tests {
         // 直接对生产路径写进队列的号调用真函数（`take_from` 是自由函数，
         // 设计上就要求调用方已持锁，所以这里不会重入死锁）。
         let mut state = agent.state.lock().expect("运行状态锁");
-        assert!(take_from(&mut state.pre_cancelled, "once-id"), "记过的号必须能取中");
+        assert!(
+            take_from(&mut state.pre_cancelled, "once-id"),
+            "记过的号必须能取中"
+        );
         assert!(
             !take_from(&mut state.pre_cancelled, "once-id"),
             "取过就没了 —— 墓碑不能让同一个号取消两次"

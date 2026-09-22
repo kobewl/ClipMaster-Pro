@@ -47,7 +47,10 @@ pub(crate) fn allocate(inputs: &[AgentInput], needs: &[usize]) -> Vec<Allocation
     priority.sort_by(|&a, &b| inputs[b].last_copied_at.cmp(&inputs[a].last_copied_at));
 
     let mut result: Vec<Allocation> = (0..n)
-        .map(|_| Allocation { quota: 0, dropped: true })
+        .map(|_| Allocation {
+            quota: 0,
+            dropped: true,
+        })
         .collect();
 
     // 条数上限：预算除以最小可用额度。超出的（最旧的）整条丢弃。

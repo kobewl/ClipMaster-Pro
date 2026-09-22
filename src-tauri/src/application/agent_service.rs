@@ -340,8 +340,9 @@ pub struct AgentService {
     /// 两次 IPC 的先后不由前端决定 —— 取消先到时槽位还是空的，没了着落。没有墓碑，
     /// 这次取消就静默丢失：晚到的运行命令照常注册、发出、计费，用户以为取消了其实没有。
     ///
-    /// 记下这样的号，`run_items` 在挂槽位之前先来取一次（`take_pre_cancelled`），
+    /// 记下这样的号，`run_items` 挂上槽位之后立刻取一次（`take_pre_cancelled`），
     /// 命中就一个字节都不发。队列是 FIFO + 去重，容量 `PRE_CANCELLED_CAP`。
+    /// （消费排在挂槽位**之后**是这个竞态的关键，理由见 run_items 里的顺序论证。）
     ///
     /// 两个**已知且接受**的角落（都不修，理由如下）：
     /// 1. 墓碑命中的 run 若先撞上闸门（busy / 冷却），会以闸门错误结束，墓碑留到
@@ -395,9 +396,9 @@ impl AgentService {
     ///   结束而丢弃，此时没有在途请求，按契约给 `false`）。
     /// - 槽位被**别人**占着 → `false`，什么都不动。
     /// - 槽位空着 → `false`，但**额外**把这个号记进预取消墓碑：这多半是取消命令
-    ///   比运行命令先到（关窗竞态，见 `pre_cancelled` 字段注释），晚到的 run 会在
-    ///   挂槽位之前取中它并就地取消。返回 `false` 是诚实的 —— 这一瞬间确实没有
-    ///   在途请求被取消；墓碑只是让这次取消**别丢**。
+    ///   比运行命令先到（关窗竞态，见 `pre_cancelled` 字段注释），晚到的 run 会取中它
+    ///   并就地取消（消费排在挂槽位之后，见 `run_items` 的顺序论证）。返回 `false`
+    ///   是诚实的 —— 这一瞬间确实没有在途请求被取消；墓碑只是让这次取消**别丢**。
     pub fn cancel(&self, request_id: &str) -> bool {
         let mut slot = self.cancel.lock().expect("取消锁");
         // 先只看不动：号不匹配时槽位必须原封不动（否则下一个请求会没了取消通道）。
@@ -659,23 +660,46 @@ impl AgentService {
             input_item_ids: item_ids.to_vec(),
             ..Default::default()
         };
-        // 墓碑检查放在审计初始化**之后**、挂槽位**之前**：命中说明取消命令比这次运行
-        // 命令先到（关窗竞态），请求从未发出 —— 一个字节都不该发出去，省下的是真金白银。
-        // 放在审计之后是因为「取消总有审计」照常成立：条目已预填进 audit，即便
-        // run_inner 一次都没被 poll，这行审计也有主语、不会因为空条目被 store 丢掉。
+        // 挂槽位**先于**消费墓碑，顺序是这个竞态的关键：任意时刻到达的取消
+        // 只可能落进两条路径之一，两条都以 ai_cancelled 收场 ——
+        //   1. 取消在挂槽位**之前**到达 → 它看到的槽位是空的 → 记下墓碑 →
+        //      下面的 take 必然命中（take 排在挂槽位之后）。
+        //   2. 取消在挂槽位**之后**到达 → 号匹配 → 它取走槽位并 send →
+        //      rx 立即就绪，下面的 select 必然看到。
+        // 早前版本是「先 take 后挂」：take 未命中到挂上槽位之间那条缝里到达的取消，
+        // 会被记成永不命中的墓碑、请求照发 —— 换到现在的顺序后这类取消落在路径 1
+        // 或路径 2 上，不再有第三条。
+        //
+        // 残留（已知、极窄、非零；收口办法见 Task 9 报告第 8 章）：`cancel()` 在
+        // 「读槽位」与「记墓碑」之间会释放槽位锁，若取消线程恰好被抢占在此处、而本次
+        // run 在那一刻跑完了下面两步，取消仍会丢。要真正构造性清零，得让 cancel 在
+        // 持有槽位锁期间记墓碑、并让这里的「挂槽位 + 消费墓碑」同处一把槽位锁内。
+        //
+        // 挂上取消通道再进 select：用户点取消时，run_inner 会**被真的丢掉**
+        // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        *self.cancel.lock().expect("取消锁") = Some((request_id.clone(), cancel_tx));
+        // 命中墓碑说明取消命令比这次运行命令先到（关窗竞态），请求从未发出 ——
+        // 一个字节都不该发出去，省下的是真金白银。
         //
         // 已知且接受：这条检查在闸门之后，所以墓碑命中的请求若先撞上 busy / 冷却，
         // 会以闸门错误结束、墓碑留到被 FIFO 淘汰。此时弹窗早已关掉、用户看不见；
         // 号是一次性 uuid，留着也不会误伤后来的请求。
         if self.take_pre_cancelled(&request_id) {
+            // 清掉自己刚挂的槽位。无需比对号：单飞闸门（_permit 还在本函数作用域里）
+            // 保证这条槽位只可能是本次挂上的，而 cancel 只 take、从不 install，
+            // 不会把它替换成别人的。
+            //
+            // 若取消恰好抢在我们清槽之前 match 并 send 了：它已经把槽位 take 走，
+            // 这里的清空是 no-op，两边结果一致（都是 Cancelled），没有泄漏、
+            // 也不需要额外处理 —— 这正是「两条路径合流」而不是互相打架。
+            *self.cancel.lock().expect("取消锁") = None;
+            // 「取消总有审计」照常成立：条目已预填进 audit，即便 run_inner 一次都
+            // 没被 poll，这行审计也有主语、不会因为空条目被 store 丢掉。
             let result: Result<AgentResult, AgentError> = Err(AgentError::Cancelled);
             self.audit(&action, &result, audit, started.elapsed()).await;
             return result;
         }
-        // 挂上取消通道再进 select：用户点取消时，run_inner 会**被真的丢掉**
-        // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
-        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        *self.cancel.lock().expect("取消锁") = Some((request_id, cancel_tx));
         let result = tokio::select! {
             res = self.run_inner(item_ids, &action, mode, &mut audit) => res,
             _ = cancel_rx => Err(AgentError::Cancelled),
@@ -1437,5 +1461,51 @@ mod tests {
             "取过就没了 —— 墓碑不能让同一个号取消两次"
         );
         assert!(!agent.take_pre_cancelled("never-seen"), "没记过的号取不中");
+    }
+
+    /// 「挂槽位先于消费墓碑」的直接钉子：命中墓碑的分支必须清掉自己刚挂的槽位。
+    ///
+    /// 顺序调换的代价是命中路径**先**挂了一条槽位再取消 —— 忘了清就会留下一条指向
+    /// 已返回函数的悬空通道（下一次请求的取消可能打在它上面）。这个不变量在模块内
+    /// 才可断言（私有字段），所以在单测里钉死；同时钉住「取消总有审计」在这条路径上
+    /// 照常成立（条目已预填进 audit，空条目行不会被 store 丢掉）。
+    #[tokio::test]
+    async fn tombstone_hit_clears_the_slot_it_just_installed() {
+        let agent = agent_for_tombstone_tests();
+        let item = agent
+            .history
+            .capture_text("内容".into(), None, None)
+            .await
+            .expect("造一条内容");
+
+        // 取消先到：槽位为空 → 记墓碑（返回 false，契约不变）。
+        assert!(!agent.cancel("req-pre"), "空闲时取消没有在途请求被立即取消");
+
+        let err = agent
+            .run_with_request_id(
+                &item.id.to_string(),
+                AgentAction::Summarize,
+                Some("req-pre".into()),
+            )
+            .await
+            .expect_err("晚到的运行命令必须被墓碑取消");
+        assert_eq!(err.code(), "ai_cancelled");
+        assert_eq!(err.to_string(), AgentError::Cancelled.to_string());
+
+        assert!(
+            agent.cancel.lock().expect("取消锁").is_none(),
+            "命中墓碑返回前必须清掉自己刚挂的槽位，不许留下悬空通道"
+        );
+
+        let run = agent
+            .find_run("req-pre")
+            .await
+            .expect("查审计")
+            .expect("墓碑取消也要留审计：用户事后要能回答「那次为什么没有结果」");
+        assert_eq!(run.error_code.as_deref(), Some("ai_cancelled"));
+        assert!(
+            !run.input_item_ids.is_empty(),
+            "审计要记得这次本来要处理哪条内容，否则这行会被 store 丢掉"
+        );
     }
 }

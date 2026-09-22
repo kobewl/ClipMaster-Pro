@@ -495,7 +495,22 @@ impl AgentService {
             }
         };
         if let Some(saved) = saved {
-            return migrate_legacy_deepseek_model(saved);
+            let saved = migrate_legacy_deepseek_model(saved);
+            // 运行时二次校验：保存时合法 ≠ 现在仍然合法 —— 旧版本遗留、手工改库、
+            // 被篡改的 SQLite 都可能留下非法值。校验必须与保存时**同源**，
+            // 否则会出现"存不进但读得出"（或反过来）的幽灵配置。
+            match normalize_base_url(&saved.base_url) {
+                Ok(base_url) => match validate_model_name(&saved.model) {
+                    Ok(model) => return AgentProviderConfig { base_url, model },
+                    Err(reason) => {
+                        tracing::warn!(%reason, "库里的模型名未通过校验，整份配置作废")
+                    }
+                },
+                Err(reason) => {
+                    tracing::warn!(%reason, "库里的服务地址未通过校验，整份配置作废")
+                }
+            }
+            // 作废后不返回：落到下面的环境变量/默认值分支，AI 功能照样能用。
         }
         AgentProviderConfig {
             base_url: env_base_url().unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
@@ -530,15 +545,9 @@ impl AgentService {
         model: &str,
     ) -> Result<AgentConfigInfo, AgentError> {
         let base_url = normalize_base_url(base_url).map_err(AgentError::InvalidBaseUrl)?;
-        let model = model.trim();
-        if model.is_empty() {
-            return Err(AgentError::InvalidModel("模型名不能为空。".to_string()));
-        }
-        if model.chars().any(char::is_whitespace) {
-            return Err(AgentError::InvalidModel(
-                "模型名不能包含空格或换行。".to_string(),
-            ));
-        }
+        // 模型名校验与读取路径共用同一个函数：两处口径一旦分叉，就会冒出
+        // "存得进却读不出"（或反过来）的幽灵配置。
+        let model = validate_model_name(model).map_err(AgentError::InvalidModel)?;
         self.config_store
             .save_agent_config(AgentProviderConfig {
                 base_url,
@@ -1072,6 +1081,22 @@ fn normalize_base_url(raw: &str) -> Result<String, String> {
     }
 
     Ok(candidate.to_string())
+}
+
+/// 校验并规范化模型名。保存与读取走的是**同一个**函数：两处规则一旦分叉，
+/// 就会冒出"存得进却读不出"（或反过来）的幽灵配置，而用户完全无从理解。
+///
+/// 规则：trim 后非空；内部不许有空白 —— 模型名会被原样拼进请求体，
+/// 带空格的名字要么请求失败，要么被服务端当成另一个模型。
+fn validate_model_name(raw: &str) -> Result<String, String> {
+    let model = raw.trim();
+    if model.is_empty() {
+        return Err("模型名不能为空。".to_string());
+    }
+    if model.chars().any(char::is_whitespace) {
+        return Err("模型名不能包含空格或换行。".to_string());
+    }
+    Ok(model.to_string())
 }
 
 /// 取主机名，用于日志与结果卡片的来源标注。

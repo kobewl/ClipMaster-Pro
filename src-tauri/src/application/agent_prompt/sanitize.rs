@@ -73,8 +73,8 @@ pub(crate) fn looks_like_injection(text: &str) -> bool {
     PATTERNS.iter().any(|pattern| lower.contains(pattern))
 }
 
-/// 剥掉属性值里的双引号：来源名和时间是元数据、不是内容，
-/// 但同样可能夹带引号把属性撑破，伪造出别的属性（防伪造标签闭合）。
+/// 剥掉属性值里的双引号：来源名是元数据、不是内容，
+/// 但应用名可能自带引号把属性撑破，伪造出别的属性（防伪造标签闭合）。
 pub(crate) fn strip_attribute_quotes(value: &str) -> String {
     value.replace('"', "")
 }

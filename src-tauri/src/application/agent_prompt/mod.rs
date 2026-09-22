@@ -114,7 +114,8 @@ pub fn prepare_prompt(task: PromptTask<'_>, inputs: &[AgentInput]) -> PreparedPr
             .unwrap_or_else(|| "未知来源".to_string());
         let time = input.last_copied_at.format("%m-%d %H:%M").to_string();
 
-        // 防伪造标签闭合：来源名和时间同样可能夹带引号把属性撑破。
+        // 防伪造标签闭合：来源名可能自带引号把属性撑破。
+        // （time 是固定格式、不含引号，不需要处理。）
         let safe_source = strip_attribute_quotes(&source);
         let mut attributes = format!(
             "id=\"{number}\" source=\"{safe_source}\" time=\"{time}\" type=\"{}\"",

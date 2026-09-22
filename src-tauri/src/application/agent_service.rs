@@ -11,6 +11,7 @@ use crate::application::agent_prompt::{
     prepare_prompt, AgentInput, PromptTask, TOTAL_BUDGET_CHARS,
 };
 use crate::application::history_service::HistoryService;
+use crate::application::planner_build::PLANNER_INSTRUCTION;
 use crate::domain::model::ContentType;
 use crate::domain::normalize::strip_html_tags;
 use crate::domain::ports::{
@@ -328,6 +329,64 @@ fn fallback_endpoint() -> AgentProviderConfig {
 enum InputMode {
     Single,
     Batch,
+}
+
+/// 一次运行的类型：四类 AI 动作，或者 Planner 建议。
+///
+/// Planner 需要的东西（能被取消、撞同一道单飞闸门、留审计）与动作**完全一样**，
+/// 所以它不是新的 service，而是 `AgentService` 上的第二种运行类型 ——
+/// 复用同一套闸门 / 冷却 / 取消槽位 / 审计，只在 `key` / `label` / `instruction`
+/// 三个语义点上分叉。新起一个 service 等于把「同时只允许一个模型请求」这条
+/// 全局不变量拆成两份互相看不见的状态。
+///
+/// 这个枚举**私有**：对外只有四个动作入口（各包一层 `RunKind::Action`）与
+/// `run_planner_with_request_id`（包 `RunKind::Planner`），所以模型侧没有任何
+/// 通道能自己指定运行类型。
+#[derive(Debug)]
+enum RunKind {
+    Action(AgentAction),
+    Planner,
+}
+
+impl RunKind {
+    /// 机器可读的动作名，审计表里存这个（`suggest_actions` 是稳定、可检索的串）。
+    fn key(&self) -> &'static str {
+        match self {
+            RunKind::Action(action) => action.key(),
+            RunKind::Planner => "suggest_actions",
+        }
+    }
+
+    /// 界面文案：结果卡片标题、prompt 里的任务名都用它。
+    fn label(&self) -> &'static str {
+        match self {
+            RunKind::Action(action) => action.label(),
+            RunKind::Planner => "下一步建议",
+        }
+    }
+
+    /// 这次调用的任务指令。Planner 只有一套（不分单条 / 批量）：
+    /// 协议文本与解析器在 `planner_build` 里同源，改一处就是两套口径。
+    fn instruction(&self, mode: InputMode) -> &'static str {
+        match self {
+            RunKind::Action(action) => {
+                if mode == InputMode::Batch {
+                    action.batch_instruction()
+                } else {
+                    action.instruction()
+                }
+            }
+            RunKind::Planner => PLANNER_INSTRUCTION,
+        }
+    }
+
+    /// 这个运行类型能不能对一组内容运行。Planner 天然是多条（一次会话的成员）。
+    fn supports_batch(&self) -> bool {
+        match self {
+            RunKind::Action(action) => action.supports_batch(),
+            RunKind::Planner => true,
+        }
+    }
 }
 
 /// `run` 执行过程中逐步补齐的审计上下文：走到哪一步，才知道哪些字段有真值。
@@ -695,7 +754,7 @@ impl AgentService {
     ) -> Result<AgentResult, AgentError> {
         self.run_items(
             &[item_id.to_string()],
-            action,
+            &RunKind::Action(action),
             InputMode::Single,
             request_id,
         )
@@ -718,14 +777,42 @@ impl AgentService {
         action: AgentAction,
         request_id: Option<String>,
     ) -> Result<AgentResult, AgentError> {
-        self.run_items(item_ids, action, InputMode::Batch, request_id)
+        self.run_items(
+            item_ids,
+            &RunKind::Action(action),
+            InputMode::Batch,
+            request_id,
+        )
+        .await
+    }
+
+    /// Planner 建议：在一组会话成员上产出「下一步做什么」的建议。
+    ///
+    /// 走 `RunKind::Planner` + `InputMode::Batch`：会话上限
+    /// `SESSION_MAX_ITEMS` 直接引用 `MAX_AGENT_INPUT_ITEMS`，所以一个会话永远
+    /// 塞得进一次调用 —— 超长按预算截断而不是整批报错、跳过图片与文件、
+    /// 要求模型标注来源，全部继承批量路径的既有语义。
+    ///
+    /// 返回值复用 [`AgentResult`]：`content` 是**模型原始输出**（协议解析由
+    /// `PlannerService` 负责），`inputs` 是本次实际送出的 `[n]` → item_id 映射。
+    ///
+    /// `content` **只在本次响应内活着**：调用方解析成建议列表后即弃，不落库、
+    /// 不进审计正文（审计的隐私边界见 `AgentRunRecord` 的注释）。闸门 / 冷却 /
+    /// 取消 / 审计与四类动作共用同一个入口，所以「跨路径 `ai_busy`」是设计而不是
+    /// 缺陷：预览窗口里正在跑一次总结时，Planner 必然撞上它。
+    pub async fn run_planner_with_request_id(
+        &self,
+        item_ids: &[String],
+        request_id: Option<String>,
+    ) -> Result<AgentResult, AgentError> {
+        self.run_items(item_ids, &RunKind::Planner, InputMode::Batch, request_id)
             .await
     }
 
     async fn run_items(
         &self,
         item_ids: &[String],
-        action: AgentAction,
+        kind: &RunKind,
         mode: InputMode,
         request_id: Option<String>,
     ) -> Result<AgentResult, AgentError> {
@@ -793,13 +880,13 @@ impl AgentService {
             // 「取消总有审计」照常成立：条目已预填进 audit，即便 run_inner 一次都
             // 没被 poll，这行审计也有主语、不会因为空条目被 store 丢掉。
             let result: Result<AgentResult, AgentError> = Err(AgentError::Cancelled);
-            self.audit(&action, &result, audit, started.elapsed()).await;
+            self.audit(kind, &result, audit, started.elapsed()).await;
             return result;
         }
         // 槽位已挂上，可以进 select 了：用户点取消时，run_inner 会**被真的丢掉**
         // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
         let result = tokio::select! {
-            res = self.run_inner(item_ids, &action, mode, &mut audit) => res,
+            res = self.run_inner(item_ids, kind, mode, &mut audit) => res,
             _ = cancel_rx => Err(AgentError::Cancelled),
         };
         // 先清空槽位再写审计：清空晚于审计的话，一次迟到的取消会打在下一次请求上。
@@ -808,14 +895,14 @@ impl AgentService {
         self.state.lock().expect("运行状态锁").slot = None;
         // 审计写在 select 之后：取消也要留痕，用户事后要能回答
         // 「那次为什么没有结果」。
-        self.audit(&action, &result, audit, started.elapsed()).await;
+        self.audit(kind, &result, audit, started.elapsed()).await;
         result
     }
 
     async fn run_inner(
         &self,
         item_ids: &[String],
-        action: &AgentAction,
+        kind: &RunKind,
         mode: InputMode,
         audit: &mut RunAudit,
     ) -> Result<AgentResult, AgentError> {
@@ -827,7 +914,7 @@ impl AgentService {
                 count: item_ids.len(),
             });
         }
-        if mode == InputMode::Batch && !action.supports_batch() {
+        if mode == InputMode::Batch && !kind.supports_batch() {
             return Err(AgentError::BatchUnsupportedAction);
         }
         // 先把"用户选中了什么"记进审计：后面任何一步失败，这条线索都在。
@@ -884,12 +971,8 @@ impl AgentService {
 
         let prepared = prepare_prompt(
             PromptTask {
-                label: action.label(),
-                instruction: if mode == InputMode::Batch {
-                    action.batch_instruction()
-                } else {
-                    action.instruction()
-                },
+                label: kind.label(),
+                instruction: kind.instruction(mode),
                 cite_sources: mode == InputMode::Batch,
             },
             &inputs,
@@ -966,7 +1049,7 @@ impl AgentService {
                 provider: provider.clone(),
             })?;
 
-        let label = action.label();
+        let label = kind.label();
         Ok(AgentResult {
             request_id: audit
                 .request_id
@@ -1010,7 +1093,7 @@ impl AgentService {
     /// 用户需要的答案，只在成功时记录等于把最有用的那一半丢掉。
     async fn audit(
         &self,
-        action: &AgentAction,
+        kind: &RunKind,
         result: &Result<AgentResult, AgentError>,
         audit: RunAudit,
         elapsed: std::time::Duration,
@@ -1030,7 +1113,7 @@ impl AgentService {
                 .clone()
                 .expect("run 入口已经把 request_id 放进 audit"),
             created_at: chrono::Utc::now().to_rfc3339(),
-            action: action.key().to_string(),
+            action: kind.key().to_string(),
             provider,
             model,
             // 条目在读它的时候还在（ItemUnavailable 的情况本来就没条目可挂，

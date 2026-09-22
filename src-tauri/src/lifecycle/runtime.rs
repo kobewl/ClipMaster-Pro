@@ -8,6 +8,7 @@ use crate::application::agent_service::{AgentService, REQUEST_COOLDOWN};
 use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
+use crate::application::planner_service::PlannerService;
 use crate::application::session_service::SessionService;
 use crate::application::settings_service::SettingsService;
 use crate::domain::error::AppError;
@@ -40,6 +41,9 @@ pub struct AppRuntime {
     pub settings: Arc<SettingsService>,
     pub groups: Arc<GroupService>,
     pub sessions: Arc<SessionService>,
+    /// Planner 建议。与 `agent` 共用**同一个** `AgentService` 实例：单飞闸门、
+    /// 启动冷却、按号取消、审计因此都是同一份状态（不新起 service、不新起并发）。
+    pub planner: Arc<PlannerService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
     settings_store: Arc<dyn SettingsStore>,
 }
@@ -143,7 +147,13 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     // service 同时拿到条目取数口（Task 3 的候选取数要用它）。
     let session_store: Arc<dyn crate::domain::ports::AgentSessionStore> =
         Arc::new(SqliteSessionStore::new(conn.clone()));
-    let sessions = Arc::new(SessionService::new(repository.clone(), session_store));
+    let sessions = Arc::new(SessionService::new(
+        repository.clone(),
+        session_store.clone(),
+    ));
+    // Planner 与 sessions 共用同一个 store（clone 出去），agent 也复用上面那一个
+    // 实例 —— 「复用同一道闸门」在接线上一眼可见，没有第二个构造点。
+    let planner = Arc::new(PlannerService::new(session_store, agent.clone()));
 
     spawn_retention_cleanup_timer(history.clone(), settings_store.clone());
 
@@ -173,6 +183,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         settings,
         groups,
         sessions,
+        planner,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),
         settings_store,
     })

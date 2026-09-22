@@ -102,6 +102,23 @@ pub trait ClipboardRepository: Send + Sync {
         &self,
         retention_days: i64,
     ) -> Result<CleanupResult, RepositoryError>;
+
+    /// 会话候选取数：`last_copied_at >= since` 的最近 `limit` 条，新复制在前。
+    ///
+    /// **与 [`SearchQuery::since`] 的语义差异是刻意的**（见关键判断 9）：
+    /// 那边用 `created_at`（首次入库时间，检索的时间筛选语义），这边用
+    /// `last_copied_at` —— 会话按「最近一次复制」成组，同一条内容被再复制一次
+    /// 就该回到工作记忆的顶端。既有 `search` 的 `since` 语义一行不改。
+    async fn list_since(
+        &self,
+        since: &str,
+        limit: u32,
+    ) -> Result<Vec<ClipboardItem>, RepositoryError>;
+
+    /// 按 id 批量取条目（一条 `WHERE id IN (…)`），按 `last_copied_at` 升序
+    /// 保证顺序确定；**只返回仍然存在的那些** —— 不存在的 id 由调用方
+    /// 与入参比对得出（用户手动保存时条数对不上要如实报错）。
+    async fn get_many(&self, ids: &[String]) -> Result<Vec<ClipboardItem>, RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------

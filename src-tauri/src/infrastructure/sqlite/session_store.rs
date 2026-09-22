@@ -69,12 +69,68 @@ fn ensure_position(position: i64, item_id: &str) -> Result<(), RepositoryError> 
     Ok(())
 }
 
+/// 写会话行时撞到同 id 的处理策略。
+///
+/// 为什么需要两种：会话 id 由成员集合派生（关键判断 4），所以「同一个 id」
+/// 一定会出现 —— 只是出现的路径不同，而两条路径的正确答案相反。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Conflict {
+    /// 用户路径：同一批成员重复保存 = 同一个 id = 「还是那个会话」，按覆盖处理。
+    /// 用户点两次保存不是两次意图，第二次只是把同一个会话再写一遍。
+    Overwrite,
+    /// agent 重算路径：让位给已存在的那条。
+    ///
+    /// 重算前刚删光全部 `source='agent'` 行，此处的同 id 冲突**只可能**是用户
+    /// 手存的会话（计划第 5 条「`source='user'` 永不参与替换」的延伸）。
+    /// 若在这里覆盖或报错，用户手动保存的恰恰是自动聚类会分出的那一组 ——
+    /// 最自然的用户行为 —— 会让整笔重算事务回滚、工作台每次打开都失败。
+    ///
+    /// 同一批里出现重复 id 时也是「先到先得」（`build` 产出的 id 由互斥成员
+    /// 集合派生，批内重复不可达；真出现时跳过比覆盖更保守）。
+    Skip,
+}
+
 /// 写一条会话 + 它的成员行。调用方负责事务 —— 重算（整体替换）与用户手动保存
-/// 共用这一条写入路径，两条路径的口径不会分叉。
+/// 共用这一条写入路径，两条路径的口径不会分叉；**冲突策略**是唯一的分叉点，
+/// 由调用方按上面 `Conflict` 的语义选。
+///
+/// 返回是否真的写入了（`Skip` 撞到同 id 时返回 `false`）。
 fn write_session(
     tx: &rusqlite::Transaction<'_>,
     session: &AgentSessionDraft,
-) -> Result<(), RepositoryError> {
+    conflict: Conflict,
+) -> Result<bool, RepositoryError> {
+    if conflict == Conflict::Overwrite {
+        // 显式「先删同 id 再写」，而不是 `INSERT OR REPLACE`：
+        // 覆盖的真实脆点是**成员行残留** —— 旧行的成员必须跟着旧行一起走，
+        // 而这靠的是外键级联（显式 DELETE 一定触发）。REPLACE 走的是内部的
+        // 删行路径，是否触发 delete 触发器取决于 `recursive_triggers` pragma
+        // （当前构建实测两者行为等价，但那是环境事实、不是语句保证）。
+        // 显式删除让时序与预期一致，不把「新旧行谁活下来」押在一个 pragma
+        // 的默认值上。
+        tx.execute(
+            "DELETE FROM agent_sessions WHERE id = ?1",
+            params![session.id],
+        )
+        .map_err(SqliteSessionStore::map_db_err)?;
+    }
+
+    // 冲突跳过：agent 重算产出同 id 时，库里那条是用户手存的会话 ——
+    // 一个字都不动（含成员与理由），本次写入整条放弃。
+    if conflict == Conflict::Skip
+        && tx
+            .query_row(
+                "SELECT 1 FROM agent_sessions WHERE id = ?1",
+                params![session.id],
+                |_| Ok(()),
+            )
+            .optional()
+            .map_err(SqliteSessionStore::map_db_err)?
+            .is_some()
+    {
+        return Ok(false);
+    }
+
     tx.execute(
         "INSERT INTO agent_sessions (id, source, title, summary, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -110,7 +166,7 @@ fn write_session(
         )
         .map_err(SqliteSessionStore::map_db_err)?;
     }
-    Ok(())
+    Ok(true)
 }
 
 /// 写入后把 agent 源会话裁到 [`MAX_SESSIONS`]。
@@ -152,12 +208,15 @@ impl AgentSessionStore for SqliteSessionStore {
             tx.execute("DELETE FROM agent_sessions WHERE source = 'agent'", [])
                 .map_err(SqliteSessionStore::map_db_err)?;
 
+            // 与用户手存会话同 id 的那条**跳过**（让位给用户）：见 `Conflict::Skip`。
+            let mut written: u64 = 0;
             for session in &sessions {
-                write_session(&tx, session)?;
+                if write_session(&tx, session, Conflict::Skip)? {
+                    written += 1;
+                }
             }
             trim_agent_sessions(&tx)?;
 
-            let written = sessions.len() as u64;
             tx.commit().map_err(SqliteSessionStore::map_db_err)?;
             Ok(written)
         })
@@ -171,7 +230,8 @@ impl AgentSessionStore for SqliteSessionStore {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let tx = conn.transaction().map_err(SqliteSessionStore::map_db_err)?;
 
-            write_session(&tx, &session)?;
+            // 用户路径：同 id 是「还是那个会话」，覆盖写（见 `Conflict::Overwrite`）。
+            write_session(&tx, &session, Conflict::Overwrite)?;
             trim_agent_sessions(&tx)?;
 
             tx.commit().map_err(SqliteSessionStore::map_db_err)?;
@@ -315,5 +375,30 @@ impl AgentSessionStore for SqliteSessionStore {
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `session_source` 的退路语义：只有库里被人改出第三个值时才会走到
+    /// 认不出的分支，此时退回 `Agent`（要求理由、会被重算替换的那一侧）
+    /// 比「装作无事」保守 —— 一条来源不明的成员行不该被当成用户亲手存的，
+    /// 那会让它永远躲过重算。
+    #[test]
+    fn unknown_source_strings_fall_back_to_agent() {
+        assert_eq!(session_source("user".to_string()), SessionSource::User);
+        assert_eq!(session_source("agent".to_string()), SessionSource::Agent);
+        assert_eq!(
+            session_source("robot".to_string()),
+            SessionSource::Agent,
+            "认不出的来源退回 Agent（保守侧），而不是 User"
+        );
+        assert_eq!(
+            session_source(String::new()),
+            SessionSource::Agent,
+            "空串同样退回 Agent"
+        );
     }
 }

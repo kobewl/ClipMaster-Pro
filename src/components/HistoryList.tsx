@@ -14,6 +14,11 @@ interface Props {
   hasMore: boolean;
   /** 当前搜索词，用于结果高亮。 */
   keyword: string;
+  /**
+   * 当前查询词的总数（`parseQueryTerms(keyword)` 的长度），命中 chip 的分母。
+   * 由 App 统一算一次传下来：几百行各自分词等于白烧 CPU（见 `HistoryItemRow`）。
+   */
+  queryTermCount: number;
   /** 分组或关键词变化时用它触发「选中行回到第一条」。 */
   resetKey: string;
   /** 是否已经按某个分组过滤（过滤时不画"未分组"分隔线）。 */
@@ -40,6 +45,7 @@ export function HistoryList({
   loadingMore,
   hasMore,
   keyword,
+  queryTermCount,
   resetKey,
   groupFilterActive,
   multiSelect,
@@ -242,9 +248,16 @@ export function HistoryList({
     );
   }
 
-  // 后端把已分组的条目排在前面，这里在两种内容的分界处补一条分隔线。
+  // 「未分组」分隔线只画在**浏览路径**上。
+  //
+  // 它成立的前提是「已分组的条目整体排在前面」（SQL 的
+  // `ORDER BY (group_id IS NULL) ASC, ...`）。搜索路径要经过本地重排，
+  // 分组/未分组会交错，这个前提不再成立 —— 照旧在第一处 group_id 为空的
+  // 位置画线，会把后面那些已分组的条目标成"未分组"。宁可少画一条线，
+  // 也不给用户一个错的归属暗示。
+  const browsing = keyword.trim().length === 0;
   const firstUngrouped = items.findIndex((item) => item.group_id === null);
-  const showDivider = !groupFilterActive && firstUngrouped > 0;
+  const showDivider = browsing && !groupFilterActive && firstUngrouped > 0;
 
   return (
     <ul
@@ -270,6 +283,7 @@ export function HistoryList({
             now={now}
             groups={groups}
             keyword={keyword}
+            queryTermCount={queryTermCount}
             iconSrc={getSourceIconPath(item.source_app)}
             multiSelect={multiSelect}
             picked={selected.has(item.id)}

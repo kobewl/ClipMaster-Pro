@@ -11,6 +11,13 @@ export interface ClipboardItem {
   last_copied_at: string;
   source_app: string | null;
   source_url: string | null;
+  /**
+   * 这条命中了查询里的哪些词（词序同查询词序）。
+   *
+   * 由后端在**非空查询**时装配；空 query（浏览列表）时字段整个不下发，
+   * 所以这里是可选的 —— 有值才画「命中 N/M 词」，浏览列表零残留。
+   */
+  matched_terms?: string[];
 }
 
 export interface ClipGroup {
@@ -35,6 +42,15 @@ export interface ListQuery {
 export interface ListResult {
   items: ClipboardItem[];
   total: number;
+  /**
+   * 本次查询走了放宽召回时，**没有任何保留条目命中**的查询词（横幅用）。
+   *
+   * 三态要分清，别用 `?? []` 抹平：
+   * - `undefined`：没走放宽（严格路径命中，或空 query）= 不画横幅；
+   * - `[]`：走了放宽但没有词完全落空 = 只画横幅前半句；
+   * - 非空：放宽把这几个词筛掉了 = 横幅追加「本次被筛除的词：…」。
+   */
+  relaxed_dropped?: string[];
 }
 
 export interface AppSettings {
@@ -164,3 +180,109 @@ export const GROUP_COLORS = [
   "#06B6D4", "#3B82F6", "#8B5CF6", "#EC4899",
   "#6B7280",
 ] as const;
+
+// ---------------------------------------------------------------------------
+//  查询分词（后端 query_parse::parse_query 的前端镜像）
+// ---------------------------------------------------------------------------
+
+/**
+ * 命中词 chip 的分母来源。
+ *
+ * **为什么不问后端要 `query_term_count`**：DTO 加字段要动 Rust 侧契约（本任务
+ * 范围只在前端），而分母必须与分子 `matched_terms` 用**同一套分词规则** ——
+ * 对不上就会出现「命中 2/4 词」这种把用户绕晕的数字。
+ *
+ * **同源风险（重要）**：下面三张表与 `src-tauri/src/application/query_parse.rs`
+ * 是**两份拷贝**，改一边必须改另一边，`clipboard.test.ts` 里的用例逐条照抄了
+ * Rust 单测做钉子。真要根治，应在 DTO 上加 `query_term_count` 由后端下发布。
+ */
+const QUERY_STOP_WORDS: ReadonlySet<string> = new Set([
+  "的", "了", "吗", "呢", "吧", "啊", "一下", "找", "找找", "搜索", "关于",
+  "请问", "帮我", "如何", "怎么", "怎样", "为什么", "是什么", "怎么做",
+]);
+
+/** 检索前缀，按长度从长到短（「怎么做」不能被「怎么」先吃掉一半）。 */
+const QUERY_PREFIXES: readonly string[] = [
+  "为什么", "是什么", "怎么做", "请问", "帮我", "如何", "怎么", "怎样", "搜索", "关于", "找找",
+];
+
+/** 词内符号白名单：技术词里的这些符号是内容，不能当首尾标点剥掉。 */
+const CONTENT_SYMBOLS: ReadonlySet<string> = new Set([
+  "+", "#", ".", "_", "-", "/", "\\", "~", "&", "=", "@", "$", "%", "*", "^", "|", "`",
+]);
+
+/**
+ * 与 Rust `char::is_whitespace()` 对齐的空白集合（`White_Space` 属性），
+ * **不是** JS 的 `\s`：两者差在两端 ——
+ * `\s` 多含 U+FEFF（零宽不换行空格），少含 U+0085（NEL）。
+ * 用 `\s` 会在「只由零宽空格组成的查询」上把 JS 分词算成 0 个词、
+ * 而 Rust 算成 1 个（进而在不该出 chip 时出 chip）。
+ */
+const RUST_WHITESPACE = /[ \t\n\v\f\r\u0085\u00a0\u1680\u2000-\u200a\u2028\u2029\u202f\u205f\u3000]+/;
+
+/**
+ * 与 Rust `char::is_alphanumeric()` 对齐：`Alphabetic || Nd || Nl || No`。
+ *
+ * **为什么不是 `\p{L}\p{N}`**：二者实测差 6167 个码点，全部集中在
+ * Mn(927) / Mc(438) / So(130) 与版本差 Cn(4672) —— 比如天城文元音符
+ * `ा`(U+093E, Mc) 与带圈字母 `Ⓜ`(U+24C2, So) 在 Rust 侧算"内容"，
+ * 用 `\p{L}\p{N}` 却会被当标点剥掉，直接导致 chip 的分子分母不同源。
+ * `\p{Alphabetic}` 恰好覆盖 Sn 里那些 Other_Alphabetic 的记号，
+ * 换成它之后上述**已分配字符**的差异归零。
+ *
+ * 残留差异只有 4672 个「JS 引擎的 Unicode 表尚未分配、Rust 已分配」的新码点
+ * （版本差，随引擎升级自然收敛），方向恒为 Rust 真 / JS 假 ——
+ * 影响是 JS 会把它当首尾标点剥掉，而保底回退仍保住词数（见 `parseQueryTerms`）。
+ */
+function isAlphanumeric(ch: string): boolean {
+  return /[\p{Alphabetic}\p{N}]/u.test(ch);
+}
+
+/** 去掉词首尾的标点，词内符号保留（`min-width` / `c++` / `node.js`）。 */
+function stripBoundaryPunct(token: string): string {
+  const chars = Array.from(token);
+  let start = 0;
+  let end = chars.length;
+  while (start < end && !isAlphanumeric(chars[start]) && !CONTENT_SYMBOLS.has(chars[start])) start += 1;
+  while (end > start && !isAlphanumeric(chars[end - 1]) && !CONTENT_SYMBOLS.has(chars[end - 1])) end -= 1;
+  return chars.slice(start, end).join("");
+}
+
+/** 反复剥掉词首的检索前缀（「请问怎么做redis」→「redis」）。 */
+function stripQueryPrefixes(token: string): string {
+  let rest = token;
+  for (;;) {
+    const hit = QUERY_PREFIXES.find((prefix) => rest.startsWith(prefix));
+    if (hit === undefined) return rest;
+    rest = rest.slice(hit.length);
+  }
+}
+
+/**
+ * 把原始查询串解析成检索词，规则与后端 `query_parse::parse_query` 完全一致：
+ * 按空白分词 → 去首尾标点 → 小写 → 剥检索前缀 → 剔停用词 → 去重（保序）。
+ *
+ * 全被剔空时回退到「归一后的原始非空词」（纯符号词如 `😀` 保留原文），
+ * 与后端的保底规则一致 —— 否则 chip 的分母会比分子所在的词集少。
+ */
+export function parseQueryTerms(raw: string): string[] {
+  const tokens: string[] = [];
+  const push = (token: string) => {
+    if (!tokens.includes(token)) tokens.push(token);
+  };
+
+  for (const rawToken of raw.split(RUST_WHITESPACE).filter((t) => t.length > 0)) {
+    const token = stripBoundaryPunct(rawToken).toLowerCase();
+    if (token.length === 0) continue;
+    const stripped = stripQueryPrefixes(token);
+    if (stripped.length === 0 || QUERY_STOP_WORDS.has(stripped)) continue;
+    push(stripped);
+  }
+  if (tokens.length === 0) {
+    for (const rawToken of raw.split(RUST_WHITESPACE).filter((t) => t.length > 0)) {
+      const token = stripBoundaryPunct(rawToken).toLowerCase();
+      push(token.length === 0 ? rawToken : token);
+    }
+  }
+  return tokens;
+}

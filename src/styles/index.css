@@ -399,6 +399,34 @@ button {
 .image-preview__fallback { display: flex; align-items: center; justify-content: center; color: var(--cm-fg-faint); }
 .image-preview__fallback svg { width: 20px; }
 
+/* ---------------------------------------------------------------------------
+   Ask 检索证据：放宽召回横幅 + 行内命中词 chip
+--------------------------------------------------------------------------- */
+
+/* 横幅解释的是「整份结果的来历」，所以贴列表顶部通栏，不缩进成卡片。 */
+.search-relax-banner {
+  display: flex; align-items: flex-start; gap: 7px;
+  border-bottom: 1px solid var(--cm-line);
+  background: var(--cm-surface2);
+  padding: 7px 16px;
+  color: var(--cm-fg-muted);
+  font-size: 11px; line-height: 16px;
+}
+.search-relax-banner strong { color: var(--cm-accent-text); font-weight: 600; }
+.search-relax-banner__icon { display: flex; flex: none; margin-top: 1px; }
+.search-relax-banner__icon svg { width: 13px; height: 13px; }
+
+/* 行内命中词：贴着 meta 行的小标签，比时间戳略重、比分组徽标轻。 */
+.search-match-chip {
+  display: inline-flex; flex: none; align-items: center;
+  border-radius: var(--cm-radius-xs);
+  background: var(--cm-hover);
+  padding: 0 5px;
+  color: var(--cm-fg-muted);
+  font-size: 10.5px; line-height: 15px;
+  font-variant-numeric: tabular-nums;
+}
+
 .list-divider {
   display: flex; align-items: center; gap: 8px;
   padding: 12px 4px 6px;

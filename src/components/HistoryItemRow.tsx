@@ -12,6 +12,11 @@ interface Props {
   now: number;
   groups: ClipGroup[];
   keyword: string;
+  /**
+   * 本行装配时的查询词总数（命中 chip 的分母）。
+   * 由列表统一传下来：每行自己 parse 一次查询词，在数百行的列表里纯属浪费。
+   */
+  queryTermCount: number;
   /** 来源应用的真实图标路径（null 时退回 emoji / 图片图标）。 */
   iconSrc: string | null;
   /** 多选模式：最左侧多一列勾选框，单击整行 = 勾选而不是粘贴。 */
@@ -55,6 +60,7 @@ export const HistoryItemRow = memo(function HistoryItemRow({
   now,
   groups,
   keyword,
+  queryTermCount,
   iconSrc,
   multiSelect,
   picked,
@@ -132,6 +138,16 @@ export const HistoryItemRow = memo(function HistoryItemRow({
   const domain = extractDomain(item.source_url);
   const appIcon = getAppIcon(item.source_app);
   const group = item.group_id ? groups.find((g) => g.id === item.group_id) : null;
+  // 命中词证据只在搜索路径存在（浏览列表后端不下发这个字段）。
+  // 只显示「命中多/共少」，**不列出具体是哪几个词**：词表里免不了夹带用户
+  // 输入的自然语言片段，而 meta 行是给来源/时间这种短标签用的。
+  //
+  // 分子夹一道 `Math.min` 是为了症状兜底：分子来自后端的 `matched_terms`、
+  // 分母来自前端同规则复算，两边一旦因 Unicode 表版本差漂移，就可能渲染出
+  // 「命中 3/2 词」这种自相矛盾的标签。根因（分词器同源）在
+  // types/clipboard.ts 的 `parseQueryTerms` 里治，这里只保证不会显示出错数字。
+  const matchedCount = Math.min(item.matched_terms?.length ?? 0, queryTermCount);
+  const showMatchChip = item.matched_terms !== undefined && queryTermCount > 0;
 
   // 真实的来源应用图标优先；取不到时才退回「图片类型 → 图片图标 / 文件类型 → 📁 / 其余 → emoji」。
   const iconUrl = iconSrc && iconSrc !== brokenIconSrc ? convertFileSrc(iconSrc) : null;
@@ -171,6 +187,14 @@ export const HistoryItemRow = memo(function HistoryItemRow({
           <span className="truncate">{domain ?? item.source_app ?? "未知来源"}</span>
           <span className="meta-dot" />
           <time>{formatTime(item.last_copied_at, now)}</time>
+          {showMatchChip && (
+            <span
+              className="search-match-chip"
+              title={`本次查询共 ${queryTermCount} 个关键词，这条命中 ${matchedCount} 个`}
+            >
+              命中 {matchedCount}/{queryTermCount} 词
+            </span>
+          )}
           {group && (
             <span className="group-badge" style={{ backgroundColor: `${group.color}16`, color: group.color }}>
               <i style={{ backgroundColor: group.color }} />{group.name}

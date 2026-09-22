@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SearchBar } from "@/components/SearchBar";
 import { Toolbar } from "@/components/Toolbar";
 import { HistoryList } from "@/components/HistoryList";
+import { Icon } from "@/components/Icon";
 import { StatusBar } from "@/components/StatusBar";
 import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -50,6 +51,8 @@ export default function App() {
     loadState,
     loadingMore,
     hasMore,
+    queryTermCount,
+    relaxedDropped,
     errorMessage,
     clearError,
     reload,
@@ -328,6 +331,16 @@ export default function App() {
 
   const trimmedSearch = debouncedSearch.trim();
 
+  /**
+   * 放宽召回横幅。归属选在 App 而不是 SearchBar：`relaxed_dropped` 是**列表响应**
+   * 的一部分（随 `list_clipboard_items` 回来，和 items 同一代），而 SearchBar
+   * 是只认识输入值的纯展示组件 —— 让它去读列表数据就等于把数据源穿透进展示层。
+   *
+   * `relaxedDropped !== null` 才是「本次走了放宽召回」的信号：后端只在放宽路径
+   * 才带上这个字段，`[]`（没有词完全落空）同样说明放宽发生过，横幅只说前半句。
+   */
+  const relaxBannerVisible = trimmedSearch.length > 0 && relaxedDropped !== null;
+
   return (
     <main className="app-shell">
       <section className="app-surface">
@@ -364,6 +377,23 @@ export default function App() {
         </div>
       )}
 
+      {/* 放宽召回横幅：严格 0 命中、结果来自放宽时必须说明来历，
+          否则用户看到的是"搜不到却出来一堆"。
+          放在列表上方（跟错误条同一层），因为它解释的是**整份结果**。 */}
+      {relaxBannerVisible && (
+        <div role="status" className="search-relax-banner">
+          <span className="search-relax-banner__icon" aria-hidden>
+            <Icon name="search" />
+          </span>
+          <span className="min-w-0">
+            <strong>严格匹配 0 条，已放宽召回（命中过半关键词的结果才保留）。</strong>
+            {relaxedDropped && relaxedDropped.length > 0 && (
+              <>本次被筛除的词：{relaxedDropped.join("、")}</>
+            )}
+          </span>
+        </div>
+      )}
+
         <HistoryList
           items={items}
           groups={groups}
@@ -371,6 +401,7 @@ export default function App() {
           loadingMore={loadingMore}
           hasMore={hasMore}
           keyword={trimmedSearch}
+          queryTermCount={queryTermCount}
           resetKey={`${activeGroupId ?? "all"}::${trimmedSearch}`}
           groupFilterActive={activeGroupId !== null}
           multiSelect={multiSelect}

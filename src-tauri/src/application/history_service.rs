@@ -4,7 +4,10 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
+use chrono::Utc;
+
 use crate::application::query_parse;
+use crate::application::rerank;
 use crate::domain::error::{AppError, DomainError, RepositoryError};
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::normalize::{
@@ -22,6 +25,21 @@ pub const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024;
 /// 而每条候选都要在内存里重算一遍命中词，所以这里给单次查询的成本钉一个上界。
 /// 300 条足够覆盖真实剪贴板历史规模下的放宽场景。
 const RELAX_RECALL_CAP: u32 = 300;
+
+/// 重排窗口：一次查询进入重排的候选池上限（常量，边界写死在这里）。
+///
+/// 重排要看到**整个候选池**才可能给出全局稳定序，而分页在重排之后才切，所以
+/// 取数时一次取到窗口上限。500 与前端单页上限（`MAX_PAGE_SIZE`）同量级 ——
+/// 真实剪贴板历史里一次查询的命中很少超过这个数，超过的部分（第 501 条起）
+/// **永远不可达**：这是本实现的已知边界，不是偶然的截断。放宽路径另有自己的
+/// 召回 cap（[`RELAX_RECALL_CAP`]），两者互不影响。
+///
+/// **成本上界（可核对）**：窗口 500 × 单条内容上限 [`MAX_CONTENT_BYTES`]（5MB）
+/// ⇒ 单次检索最多同时持有约 2.5GB 的原始文本，再加每条的 `search_text` 副本
+/// （`ItemSignals` 持有它，与 `content_text` 同量级）。SQL 侧真正返回的条数还
+/// 受历史库总量与筛选条件限制，这是**上限**而不是常态；两个常量任一上调都要
+/// 重新核对这个乘积。
+const RERANK_WINDOW_CAP: u32 = 500;
 
 pub struct HistoryService {
     repository: Arc<dyn ClipboardRepository>,
@@ -187,6 +205,16 @@ impl HistoryService {
     /// 列表 / 检索的统一入口。判定顺序就是这段代码的骨架：浏览列表（空 query）→
     /// 严格查询（词间 AND）→ 放宽召回（严格 0 命中且词数 ≥2）。三档的边界条件与
     /// 各档 `total` 的口径见行内注释。
+    ///
+    /// **重排不变量**（本阶段新增，改动前请先读完这三条）：
+    /// 1. **只有 query 非空时才重排**。空 query（浏览列表）完全走原路径：顺序与分页
+    ///    仍由 SQL 的 `group_id / last_copied_at` 决定，逐条与重排前相同。
+    /// 2. 重排先把候选池**一次取到窗口上限**（常量 `RERANK_WINDOW_CAP`，offset=0），
+    ///    复用 `repository.search` 现成的 limit/offset 签名，**不动 SQL 排序**；
+    ///    真正的分页在重排之后于内存里切 `[offset, offset+limit)`。所以同一 query 的
+    ///    连续两页来自同一个稳定序，页间不会重复或丢失（窗口内）。
+    /// 3. `total` 与重排无关，且在切页之前算好：严格路径 = 原 COUNT（同一 WHERE，
+    ///    与 limit/offset 无关），放宽路径 = 过阈值后的候选数。两者口径都没变。
     pub async fn list(&self, query: SearchQuery) -> Result<ListResult, AppError> {
         let terms: Vec<String> = match query.search_text.as_deref() {
             Some(text) => query_parse::parse_query(text),
@@ -198,20 +226,38 @@ impl HistoryService {
             return Ok(self.repository.search(query).await?);
         }
 
+        // 同一次请求里只读一次「现在」，注入给纯函数：窗口里所有条目共用同一个
+        // 时间基准，否则逐条打分之间的时间衰减会有微小但无意义的抖动。
+        let now = Utc::now();
+        // 单页上限一旦被调到窗口之上，`[offset, offset+limit)` 就会切到窗口外：
+        // 请求 600 条时返回 500 条却没有任何报错，是静默的少返回。取数前先拦下。
+        debug_assert!(
+            query.limit <= RERANK_WINDOW_CAP,
+            "单页上限 {} 超过重排窗口 {}：超出窗口的条目取不到，会静默少返回",
+            query.limit,
+            RERANK_WINDOW_CAP
+        );
+        // 取数窗口：**固定取窗口上限、offset=0**，与本次请求的页大小无关 ——
+        // 重排是整池的属性，只取一页去重排等于每页各自最优（页序自相矛盾）；
+        // 并且必须取到满窗口，否则 `[offset, offset+limit)` 切不出一页正常的
+        // 结果（offset=2、窗口只有 2 条时第二页会空）。
+        let window_query = SearchQuery {
+            limit: RERANK_WINDOW_CAP,
+            offset: 0,
+            ..query.clone()
+        };
+
         // 严格查询：词间 AND（多打一个词就 0 命中，这是正确行为）。只有 0 命中才
-        // 考虑放宽；有命中就照旧返回，绝不掺入「只中一半」的条目。
+        // 考虑放宽；有命中就重排后返回，绝不掺入「只中一半」的条目。
         // 用解析后的词重写 search_text：同一份词集既是检索输入，也是装配证据的依据。
-        let strict_query = SearchQuery { search_text: Some(terms.join(" ")), ..query.clone() };
+        let strict_query = SearchQuery {
+            search_text: Some(terms.join(" ")),
+            ..window_query
+        };
         let strict = self.repository.search(strict_query).await?;
         if strict.total > 0 {
-            let mut evidence = HashMap::new();
-            let items = strict
-                .items
-                .into_iter()
-                .inspect(|item| {
-                    evidence.insert(item.id.to_string(), match_evidence_of(item, &terms));
-                })
-                .collect();
+            let ranked = rerank::rerank_with_matched(strict.items, &terms, now);
+            let (items, evidence) = slice_page(ranked, &query);
             return Ok(ListResult {
                 items,
                 total: strict.total,
@@ -230,51 +276,44 @@ impl HistoryService {
         }
 
         // 放宽召回：OR 拉回候选，再按「命中词数 ≥ ⌈n/2⌉」过滤。`total` = 过滤后的
-        // 保留条数（匹配总数，与 limit/offset 无关），切页在内存里做。
+        // 保留条数（匹配总数，与 limit/offset 无关）。
+        //
+        // 过滤用的 `match_evidence_of` 与下面 rerank 内部的装配重复算了一遍，
+        // 这是刻意的取舍：过滤必须先有命中数才能决定留不留，而重排的信号装配要
+        // 吃整份文本；把中间结果传来传去只会让接口变复杂，候选数本身有 cap（300）。
         let candidates = self
             .repository
             .search_relaxed(&query, &terms, RELAX_RECALL_CAP)
             .await?;
         let threshold = query_parse::relax_threshold(terms.len());
-        let mut kept: Vec<(Vec<String>, ClipboardItem)> = Vec::new();
+        let mut kept: Vec<ClipboardItem> = Vec::new();
+        // 每个查询词是否被至少一条保留条目命中 —— 横幅里「被筛除的词」就是没打上勾的那些。
+        let mut term_hit = vec![false; terms.len()];
         for item in candidates {
             let matched = match_evidence_of(&item, &terms);
-            if matched.len() >= threshold {
-                kept.push((matched, item));
+            if matched.len() < threshold {
+                continue;
             }
+            for (idx, term) in terms.iter().enumerate() {
+                if matched.contains(term) {
+                    term_hit[idx] = true;
+                }
+            }
+            kept.push(item);
         }
-        // 稳定序：命中多的在前，同命中数按复制时间倒序 —— 只求确定，
-        // 更精细的相关性排序不在召回层职责内。
-        kept.sort_by(|(matched_a, item_a), (matched_b, item_b)| {
-            matched_b
-                .len()
-                .cmp(&matched_a.len())
-                .then_with(|| item_b.last_copied_at.cmp(&item_a.last_copied_at))
-        });
-
         let total = kept.len() as u64;
         // 被筛掉词的口径：查询词里"没有任何一条保留条目命中"的词。
         // 只按保留条目的命中集合算，不宣称"这些词在库里不存在"——
         // 它们也可能只是没被放宽召回（cap）或没达到阈值。
         let dropped: Vec<String> = terms
             .iter()
-            .filter(|term| !kept.iter().any(|(matched, _)| matched.contains(term)))
-            .cloned()
+            .zip(&term_hit)
+            .filter(|(_, hit)| !**hit)
+            .map(|(term, _)| term.clone())
             .collect();
 
-        let page: Vec<(Vec<String>, ClipboardItem)> = kept
-            .into_iter()
-            .skip(query.offset as usize)
-            .take(query.limit as usize)
-            .collect();
-        let mut evidence = HashMap::new();
-        let items = page
-            .into_iter()
-            .map(|(matched, item)| {
-                evidence.insert(item.id.to_string(), matched);
-                item
-            })
-            .collect();
+        let ranked = rerank::rerank_with_matched(kept, &terms, now);
+        let (items, evidence) = slice_page(ranked, &query);
         Ok(ListResult {
             items,
             total,
@@ -399,6 +438,27 @@ impl HistoryService {
 fn match_evidence_of(item: &ClipboardItem, terms: &[String]) -> Vec<String> {
     let text = searchable_text(item.content_type, &item.content_text);
     query_parse::matched_terms(&text, terms)
+}
+
+/// 从**已排好序**的候选池里切出本页，并把证据装成「条目 id → 命中词」。
+///
+/// `skip/take` 是纯内存操作，代价与窗口大小成正比，与内容体积无关；
+/// 命中词的来源见 [`rerank::rerank_with_matched`] 的说明，这里只做搬运。
+fn slice_page(
+    ranked: Vec<(ClipboardItem, Vec<String>)>,
+    query: &SearchQuery,
+) -> (Vec<ClipboardItem>, HashMap<String, Vec<String>>) {
+    let mut evidence = HashMap::new();
+    let items = ranked
+        .into_iter()
+        .skip(query.offset as usize)
+        .take(query.limit as usize)
+        .map(|(item, matched)| {
+            evidence.insert(item.id.to_string(), matched);
+            item
+        })
+        .collect();
+    (items, evidence)
 }
 
 fn spawn_image_cleanup(paths: Vec<String>) {

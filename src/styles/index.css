@@ -691,6 +691,44 @@ button {
 .agent-batch__preview-more { padding: 3px 0; color: var(--cm-fg-faint); font-size: 10px; }
 
 /* ---------------------------------------------------------------------------
+   Planner 确认卡片（Phase 1 第 5 步 · Task 4）：四个信息位 + 唯一一个输入（分组）
+   宽度照 .flow-card；是非破坏性动作的确认，所以不用 .confirm-card 的告警形态
+--------------------------------------------------------------------------- */
+
+.action-confirm-card { width: min(520px, calc(100vw - 32px)); }
+.action-confirm__row { margin-top: 12px; }
+.action-confirm__label { display: block; color: var(--cm-fg-faint); font-size: 10px; line-height: 15px; }
+.action-confirm__value { margin: 3px 0 0; color: var(--cm-fg); font-size: 12px; line-height: 18px; word-break: break-word; }
+.action-confirm__line { margin: 0; }
+.action-confirm__line + .action-confirm__line { margin-top: 4px; }
+/* 恢复路径：比影响范围弱一档 —— 它是「怎么退回去」，不是「会发生什么」 */
+.action-confirm__undo { margin: 6px 0 0; color: var(--cm-fg-muted); font-size: 11px; line-height: 16px; }
+.action-confirm__targets { margin: 3px 0 0; padding: 0; list-style: none; }
+.action-confirm__target { display: flex; gap: 8px; border-top: 1px solid var(--cm-line); padding: 6px 0; }
+.action-confirm__target:first-child { border-top: 0; padding-top: 0; }
+/* 编号圆标与会话详情里的成员编号同一形态：界面上的号就是库里的 position */
+.action-confirm__index {
+  display: flex; height: 18px; width: 18px; flex: none;
+  align-items: center; justify-content: center;
+  border-radius: var(--cm-radius-pill);
+  background: var(--cm-accent-soft);
+  color: var(--cm-accent-text);
+  font-size: 10px; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.action-confirm__target-text { min-width: 0; flex: 1; }
+.action-confirm__preview { margin: 0; color: var(--cm-fg); font-size: 11.5px; line-height: 17px; word-break: break-word; }
+.action-confirm__source { margin: 2px 0 0; color: var(--cm-fg-faint); font-size: 10px; }
+.action-confirm__select {
+  width: 100%; height: 30px; margin-top: 4px;
+  border: 1px solid var(--cm-line); border-radius: var(--cm-radius-sm);
+  background: var(--cm-surface); color: var(--cm-fg);
+  padding: 0 8px; font-size: 12px;
+}
+.action-confirm__select:disabled { color: var(--cm-fg-faint); cursor: not-allowed; }
+.action-confirm__hint { margin: 6px 0 0; color: var(--cm-fg-faint); font-size: 10.5px; line-height: 16px; }
+.action-confirm__error { margin: 6px 0 0; color: var(--cm-danger); font-size: 10.5px; line-height: 16px; }
+
+/* ---------------------------------------------------------------------------
    Flow 会话工作台（Phase 1 第 3 步）：单栏两级（列表 → 详情）
 --------------------------------------------------------------------------- */
 

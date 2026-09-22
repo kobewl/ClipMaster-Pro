@@ -12,6 +12,7 @@ import type {
   ClipboardItem,
   ListQuery,
   ListResult,
+  PlannerSuggestionSet,
   UpdateStatus,
 } from "@/types/clipboard";
 
@@ -187,6 +188,21 @@ export const commands = {
   /** 一键清除所有 AI 派生数据（会话 + 使用记录）；原始剪贴板记录不受影响。 */
   clearAgentDerivedData(): Promise<ClearDerivedDataResult> {
     return invoke("clear_agent_derived_data");
+  },
+
+  // Planner（Phase 1 第 5 步）：只在用户显式点「下一步建议」时调用 ——
+  // 打开工作台不等于授权花钱（会触发一次真实模型调用与计费）。
+  /**
+   * 在一条会话上求「下一步建议」。
+   *
+   * **建议不落库**：返回值就是建议本体，关掉工作台即弃（存建议等于存模型响应正文，
+   * 与审计的隐私边界冲突）。requestId 由前端预置，理由同 `runAgentAction`：
+   * 界面要能按号取消、迟到响应要做守卫，号必须在发起那一刻就握在手里。
+   */
+  suggestSessionActions(sessionId: string, requestId: string): Promise<PlannerSuggestionSet> {
+    return invoke("suggest_session_actions", {
+      request: { session_id: sessionId, request_id: requestId },
+    });
   },
 };
 

@@ -122,6 +122,36 @@ export function supportsBatch(action: AgentAction): boolean {
   return action !== "format_json";
 }
 
+/**
+ * AI 动作的界面文案（唯一词表）。
+ *
+ * 用 `Record<AgentAction, string>` 而不是 `Record<string, string>`：**加第 6 个动作时
+ * TS 直接编译不过**，不会出现「后端认、界面没词」的半成品。既有两个对话框保留各自
+ * 的按钮数组（它们要的是按钮顺序，不是映射），不强行重构。
+ *
+ * 词与 `PreviewDialog.tsx` 的按钮文案同词 —— 同一件事在两处长成两个名字，用户会以为
+ * 是两个功能。
+ */
+export const AGENT_ACTION_LABELS: Record<AgentAction, string> = {
+  summarize: "总结",
+  translate_zh: "翻译",
+  explain: "解释",
+  extract_tasks: "提取待办",
+  format_json: "格式化 JSON",
+};
+
+/**
+ * 把后端下发的字符串窄化成 `AgentAction`（`runAgentAction` 的 TS 签名要的是联合类型）。
+ *
+ * 参数收 `string | null`：后端 DTO 的 `ai_action` 对非 AI 类是显式 `null`（前端要按
+ * `null` 区分「不是 AI 动作」与「字段缺失」），调用方不想为此写两次判断。
+ * 用 `Object.hasOwn` 而不是 `in` / `key in obj`：**原型链上的 key 不算**
+ * （`"toString"` 这类串必须落到 false，否则 `as` 硬转的替代品就漏了）。
+ */
+export function isAgentAction(value: string | null): value is AgentAction {
+  return value !== null && Object.hasOwn(AGENT_ACTION_LABELS, value);
+}
+
 /** Key 的来源：系统钥匙串（用户填的）或开发期环境变量。 */
 export type AgentKeySource = "keychain" | "env";
 
@@ -242,6 +272,57 @@ export const GROUP_COLORS = [
   "#06B6D4", "#3B82F6", "#8B5CF6", "#EC4899",
   "#6B7280",
 ] as const;
+
+// ---------------------------------------------------------------------------
+//  Planner 建议（Phase 1 第 5 步）
+// ---------------------------------------------------------------------------
+
+/**
+ * 建议的动作类型，**镜像后端白名单**（`planner_build::PLANNER_ACTION_KEYS`，
+ * 唯一入口在那边）。
+ *
+ * 同源风险：这两份清单改一边必须改另一边。后果不对称 —— 后端删一类、前端还留着，
+ * 界面会出现一个点了必被后端丢弃的按钮；前端少一类、后端多一类，那一类建议会
+ * 显示成「当前版本不支持这个动作」。四类都是可逆 / 零损害动作，删除类永不入列。
+ */
+export type PlannerSuggestionKind = "copy" | "paste" | "group" | "ai";
+
+/**
+ * 一条建议的目标。
+ *
+ * **刻意不用 `ClipboardItem`**（与后端 DTO 同一取舍）：确认卡片要的是「哪一条 +
+ * 长什么样」，一条 5MB 的记录没必要为了显示一行预览被整份搬过来。
+ */
+export interface PlannerTarget {
+  item_id: string;
+  /** 会话成员**在库里的** 1-based 编号 —— 界面上的号就是它，不是 prompt 的 `[n]`。 */
+  position: number;
+  preview: string;
+  source_app: string | null;
+  /** 当前分组：确认卡片要显示「已经在哪个分组」并识别「已经在这个分组里」的空转。 */
+  group_id: string | null;
+}
+
+/** 一条建议。`action` 是后端下发的 key（用 `isSupportedPlannerAction` 窄化）。 */
+export interface PlannerSuggestion {
+  /** 这次建议列表里的第几条（1-based，连续无空洞：被丢弃的行不占号）。 */
+  index: number;
+  action: string;
+  /** `ai` 类的子动作 key；非 AI 类是 `null`（不是「字段缺失」）。 */
+  ai_action: string | null;
+  targets: PlannerTarget[];
+  /** 模型给的理由原文（说不清理由的行在后端就被丢了）。 */
+  reason: string;
+}
+
+/**
+ * 一次建议的全部。**不落库**：返回值就是建议本体，关掉工作台即弃
+ * （`dropped` = 模型给的但不符合协议、被后端丢弃的行数，界面上要如实告知）。
+ */
+export interface PlannerSuggestionSet {
+  suggestions: PlannerSuggestion[];
+  dropped: number;
+}
 
 // ---------------------------------------------------------------------------
 //  查询分词（后端 query_parse::parse_query 的前端镜像）

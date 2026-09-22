@@ -134,3 +134,97 @@ pub fn build_preview(content: &str) -> String {
     let truncated: String = content.chars().take(PREVIEW_MAX_CHARS).collect();
     format!("{truncated}…")
 }
+
+// ---------------------------------------------------------------------------
+//  Flow 会话（Phase 1 第 3 步）
+// ---------------------------------------------------------------------------
+
+/// 会话的来源。
+///
+/// 两个值代表两种完全不同的信任级别：`user` 是用户亲手保存的（为什么成群他自己
+/// 知道），`agent` 是本地聚类自动产出的（每一行成员都必须说得清为什么，
+/// 见 migration 7 里 `reason` 的条件 CHECK）。「重算只替换 agent」也以此为依据。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SessionSource {
+    User,
+    Agent,
+}
+
+impl SessionSource {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            SessionSource::User => "user",
+            SessionSource::Agent => "agent",
+        }
+    }
+
+    /// 从库里的字符串还原。认不出来返回 `None`：CHECK 保证只有这两个值，
+    /// 真读出第三个说明库被人改过 —— 由调用方决定退路，而不是在这里悄悄糊一个。
+    pub fn from_db_str(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(SessionSource::User),
+            "agent" => Some(SessionSource::Agent),
+            _ => None,
+        }
+    }
+}
+
+/// 一条待写入的会话。
+///
+/// 成员行的 `source` 不在这里：它由 store 取自所属会话，避免「会话是什么来源」
+/// 出现第二个真相源。`items` 里的 `position` 从 1 开始（关键判断 12：
+/// 界面上的编号就是库里的编号）。
+#[derive(Debug, Clone)]
+pub struct AgentSessionDraft {
+    pub id: String,
+    pub source: SessionSource,
+    pub title: String,
+    pub summary: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub items: Vec<AgentSessionItemDraft>,
+}
+
+/// 会话的一条成员行。
+#[derive(Debug, Clone)]
+pub struct AgentSessionItemDraft {
+    pub item_id: String,
+    pub position: i64,
+    /// `agent` 源必须给且 trim 后非空（数据库 CHECK 也钉着这一条）；
+    /// `user` 源不给理由 —— 只有自动成组才需要解释。
+    pub reason: Option<String>,
+}
+
+/// 列表用的会话摘要。`item_count` 由查询时统计成员行得出，不落列
+/// （成员数是派生量，存下来就要在每次增删成员时同步维护）。
+#[derive(Debug, Clone)]
+pub struct AgentSessionSummary {
+    pub id: String,
+    pub source: SessionSource,
+    pub title: String,
+    pub summary: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub item_count: u64,
+}
+
+/// 详情里的一条成员：条目本身 + 位置 + 理由。
+#[derive(Debug, Clone)]
+pub struct AgentSessionMember {
+    pub item: ClipboardItem,
+    pub position: i64,
+    pub reason: Option<String>,
+}
+
+/// 会话详情。成员按 `position` 升序，编号直接就是界面上的编号。
+#[derive(Debug, Clone)]
+pub struct AgentSessionDetail {
+    pub id: String,
+    pub source: SessionSource,
+    pub title: String,
+    pub summary: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub members: Vec<AgentSessionMember>,
+}

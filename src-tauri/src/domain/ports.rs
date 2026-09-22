@@ -1,7 +1,10 @@
 //! Domain 定义的端口（接口）。Infrastructure 负责实现。
 
 use crate::domain::error::{ClipboardSourceError, RepositoryError, SecretError};
-use crate::domain::model::{ClipGroup, ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
+use crate::domain::model::{
+    AgentSessionDetail, AgentSessionDraft, AgentSessionSummary, ClipGroup, ClipboardItem,
+    ClipboardItemId, ContentType, NewClipboardItem,
+};
 use crate::domain::settings::AppSettings;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -190,6 +193,44 @@ pub trait AgentRunStore: Send + Sync {
     /// 按 ID 取一条（结果卡片的「查看来源」用）。
     async fn find(&self, id: &str) -> Result<Option<AgentRunRecord>, RepositoryError>;
     /// 清空全部审计，返回删掉的条数。
+    async fn clear(&self) -> Result<u64, RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
+//  AgentSessionStore（Flow 会话派生数据）
+// ---------------------------------------------------------------------------
+
+/// 会话派生数据的读写端口。
+///
+/// 两条不变量由实现方负责：`source='agent'` 的会话由重算**整体替换**（单事务），
+/// `source='user'` 的会话只受用户自己的删除影响（重算与自动裁剪都不碰它）。
+#[async_trait]
+pub trait AgentSessionStore: Send + Sync {
+    /// 重算的落库动作：**单事务**内先删掉全部 `source='agent'` 会话，再写入
+    /// `sessions`，返回写入的会话条数。会话 id 由成员集合派生（见关键判断 4），
+    /// 所以未变化的会话在替换前后是同一行 —— 重算因此是幂等的。
+    async fn replace_agent_sessions(
+        &self,
+        sessions: Vec<AgentSessionDraft>,
+    ) -> Result<u64, RepositoryError>;
+
+    /// 写一条会话。只用于用户显式保存（`source='user'`）。
+    async fn insert_session(&self, session: AgentSessionDraft) -> Result<(), RepositoryError>;
+
+    /// 最近 `limit` 条会话，新的在前（`updated_at DESC`），带成员计数。
+    async fn list(&self, limit: u32) -> Result<Vec<AgentSessionSummary>, RepositoryError>;
+
+    /// 按 id 取详情，成员按 `position ASC` 排。`Ok(None)` = 会话已不在
+    /// （条目被删到一条不剩时由触发器带走），属正常状态而不是错误。
+    async fn find(&self, id: &str) -> Result<Option<AgentSessionDetail>, RepositoryError>;
+
+    /// 删一条会话（成员行由外键级联消失）。返回是否真的删掉一条。
+    async fn delete(&self, id: &str) -> Result<bool, RepositoryError>;
+
+    /// 清空全部会话，返回删掉的条数。
+    ///
+    /// **含 `source='user'`**：这是用户显式要求的「清除所有 AI 派生数据」，
+    /// 用户手动保存的会话同样是派生数据（原始剪贴板记录不受影响）。
     async fn clear(&self) -> Result<u64, RepositoryError>;
 }
 

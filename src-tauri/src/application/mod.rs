@@ -5,4 +5,5 @@ pub mod group_service;
 pub mod history_service;
 pub mod query_parse;
 pub mod rerank;
+pub mod session_service;
 pub mod settings_service;

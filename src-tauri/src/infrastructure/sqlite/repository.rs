@@ -112,7 +112,10 @@ impl SqliteClipboardRepository {
         RepositoryError::Database(err.to_string())
     }
 
-    fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
+    /// 条目行的唯一映射口径。`pub(crate)` 而不是私有：会话详情要按同一口径把
+    /// `clipboard_items` 的行映射成 `ClipboardItem`（`session_store::find` 的
+    /// JOIN 取数），两份 row 映射迟早会漂移。
+    pub(crate) fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
         let id_str: String = row.get("id")?;
         let content_type_str: String = row.get("content_type")?;
         let created_at_str: String = row.get("created_at")?;
@@ -135,7 +138,12 @@ impl SqliteClipboardRepository {
     }
 }
 
-fn parse_datetime(value: &str) -> DateTime<Utc> {
+/// RFC3339 文本 → `DateTime<Utc>`，解析失败退回当前时刻。
+///
+/// `pub(crate)`：会话的读模型（`session_store`）与条目行用同一套时间解析口径 ——
+/// 与 `row_to_item` 同一个理由，两份解析的退路不同就会让同一条记录在
+/// 两个接口里显示不同时间。
+pub(crate) fn parse_datetime(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
         .map(|dt| dt.with_timezone(&Utc))
         .unwrap_or_else(|_| Utc::now())

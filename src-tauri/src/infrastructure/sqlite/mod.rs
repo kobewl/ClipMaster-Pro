@@ -2,6 +2,7 @@ pub mod agent_run_store;
 pub mod group_repository;
 pub mod migrations;
 pub mod repository;
+pub mod session_store;
 pub mod settings_store;
 
 use std::path::Path;

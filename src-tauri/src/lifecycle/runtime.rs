@@ -8,6 +8,7 @@ use crate::application::agent_service::{AgentService, REQUEST_COOLDOWN};
 use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
+use crate::application::session_service::SessionService;
 use crate::application::settings_service::SettingsService;
 use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
@@ -15,6 +16,7 @@ use crate::domain::settings::AppSettings;
 use crate::infrastructure::sqlite::agent_run_store::SqliteAgentRunStore;
 use crate::infrastructure::sqlite::group_repository::SqliteGroupRepository;
 use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
+use crate::infrastructure::sqlite::session_store::SqliteSessionStore;
 use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
 
 #[cfg(target_os = "macos")]
@@ -37,6 +39,7 @@ pub struct AppRuntime {
     pub agent: Arc<AgentService>,
     pub settings: Arc<SettingsService>,
     pub groups: Arc<GroupService>,
+    pub sessions: Arc<SessionService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
     settings_store: Arc<dyn SettingsStore>,
 }
@@ -136,6 +139,11 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     );
     let settings = Arc::new(SettingsService::new(settings_store.clone()));
     let groups = Arc::new(GroupService::new(group_repository));
+    // 会话派生数据：store 走同一把连接（外键 ON，级联与孤儿触发器才生效），
+    // service 同时拿到条目取数口（Task 3 的候选取数要用它）。
+    let session_store: Arc<dyn crate::domain::ports::AgentSessionStore> =
+        Arc::new(SqliteSessionStore::new(conn.clone()));
+    let sessions = Arc::new(SessionService::new(repository.clone(), session_store));
 
     spawn_retention_cleanup_timer(history.clone(), settings_store.clone());
 
@@ -164,6 +172,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         agent,
         settings,
         groups,
+        sessions,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),
         settings_store,
     })

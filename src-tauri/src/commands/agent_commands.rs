@@ -10,10 +10,12 @@
 use tauri::State;
 
 use crate::application::agent_service::{AgentAction, AgentConfigInfo};
+use crate::application::planner_service::PlannerError;
 use crate::application::session_service::SessionError;
 use crate::commands::dto::{
     AgentRunDto, AgentSessionDetailDto, AgentSessionSummaryDto, ClearDerivedDataDto,
-    CreateAgentSessionDto, SaveAgentEndpointDto, SaveAgentKeyDto,
+    CreateAgentSessionDto, PlannerSuggestionSetDto, SaveAgentEndpointDto, SaveAgentKeyDto,
+    SuggestSessionActionsDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::ports::AgentRunRecord;
@@ -201,13 +203,46 @@ pub async fn clear_agent_derived_data(
     Ok(ClearDerivedDataDto { sessions, runs })
 }
 
+/// 在一条会话上产出「下一步建议」—— 全链只有这一条产建议的命令。
+///
+/// **为什么带 `request_id`**：这条命令会产生一次真实的模型调用（也是花钱的
+/// 那一次），所以它和 `run_agent_action(_batch)` 一样要能被按号取消 ——
+/// 用户关掉工作台 / 切走会话时，在途的这次调用不该白花钱；迟到的响应也要能
+/// 用号做守卫，不能把上一次会话的建议画到这一次上。
+///
+/// **为什么建议不落库**：返回值就是这次建议的全部，不写表、不写文件、不进
+/// 审计正文（审计只多一行元数据：`action = "suggest_actions"`、输入是本次会话
+/// 成员）。存建议等于存模型响应正文，而审计的隐私边界明写了「不存 prompt 正文
+/// 与模型响应正文」；建议的时效性也强（依赖会话当下成员与用户当前分组），
+/// 存下来第二天再显示反而是坏体验。将来要做记忆化，**必须重新拍板**。
+#[tauri::command]
+pub async fn suggest_session_actions(
+    runtime: State<'_, AppRuntime>,
+    request: SuggestSessionActionsDto,
+) -> Result<PlannerSuggestionSetDto, CommandError> {
+    let set = runtime
+        .planner
+        .suggest(&request.session_id, request.request_id)
+        .await
+        .map_err(planner_error)?;
+    Ok(PlannerSuggestionSetDto::from(set))
+}
+
 impl From<AgentRunRecord> for AgentRunDto {
     fn from(record: AgentRunRecord) -> Self {
         // 认不出来的动作名原样显示：将来加了新动作，旧版本的界面
         // 至少还能显示一个可读的标识，而不是空白。
-        let action_label = AgentAction::from_key(&record.action)
-            .map(|action| action.label().to_string())
-            .unwrap_or_else(|| record.action.clone());
+        //
+        // Planner 的 `suggest_actions` 单独给一句人话：它是 `RunKind::Planner`
+        // 的机器可读名（不是 `AgentAction` 的变体），`from_key` 认不出来 ——
+        // 不补这条映射，用户会在「使用记录」里看到一个英文串。
+        let action_label = if record.action == "suggest_actions" {
+            "下一步建议".to_string()
+        } else {
+            AgentAction::from_key(&record.action)
+                .map(|action| action.label().to_string())
+                .unwrap_or_else(|| record.action.clone())
+        };
         Self {
             id: record.id,
             created_at: record.created_at,
@@ -239,9 +274,22 @@ fn session_error(err: SessionError) -> CommandError {
     CommandError::new(err.code(), err.to_string(), err.retryable())
 }
 
+/// Planner 用例的错误映射。
+///
+/// 与 [`session_error`] / [`agent_error`] 分开的理由同 `PlannerError` 自己存在的
+/// 理由：两个 `planner_*` 码都不是「Key / 设置」类问题，用 `ai_*` 会把用户往
+/// 「设置 → AI 助手」引。code 与 retryable 全部由 `PlannerError` 自己给出，
+/// 命令层不重写（含 `ai_busy` 的语境化文案 —— 那只在前端显示层）。
+fn planner_error(err: PlannerError) -> CommandError {
+    CommandError::new(err.code(), err.to_string(), err.retryable())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use crate::application::agent_service::AgentError;
+    use crate::domain::ports::AgentRunRecord;
 
     /// 命令层是错误码**离开进程前**的最后一站：这里必须逐字透传服务层的 code
     /// 与 retryable，不许改写。`session_error` 是纯函数，所以这条钉子不需要
@@ -273,5 +321,70 @@ mod tests {
                 "message 必须给用户一句可读的提示"
             );
         }
+    }
+
+    /// Planner 的错误映射同样是纯透传：两个新码由 `PlannerError` 给出，
+    /// 其余（`ai_busy` / `ai_cooldown` / `ai_session_*`）原样转出 ——
+    /// 命令层不重写 code，也不重写 retryable（`ai_busy` 在这里被改成
+    /// 不可重试的话，前端的语境化文案就会少一个「再试」的出口）。
+    ///
+    /// 同 `session_error` 那条：`planner_error` 是纯函数所以钉得住，
+    /// **命令层本身仍没有后端集成测试基建**（`AppRuntime` 需要 Tauri
+    /// `AppHandle` 与采集管线，测试构造不出来）—— `suggest_session_actions`
+    /// 本身由前端 mock invoke 与人工跑一遍覆盖，不假装有后端集成测试。
+    #[test]
+    fn planner_error_passes_the_service_code_through_unchanged() {
+        let busy = planner_error(PlannerError::Agent(AgentError::Busy));
+        assert_eq!(busy.code, "ai_busy", "ai_busy 必须逐字透传");
+        assert!(busy.retryable, "等它完成或取消后可以重试");
+        assert!(!busy.message.is_empty());
+
+        let gone = planner_error(PlannerError::SessionGone);
+        assert_eq!(gone.code, "planner_session_missing");
+        assert!(!gone.retryable, "会话已经不在了，再点一次不会把它变回来");
+        assert!(!gone.message.is_empty());
+
+        let unusable = planner_error(PlannerError::SuggestionsUnusable { dropped: 3 });
+        assert_eq!(unusable.code, "planner_suggestions_unusable");
+        assert!(unusable.retryable, "模型没按协议输出：再试一次可能成功");
+        assert!(
+            unusable.message.contains('3'),
+            "丢弃行数要如实带出来，而不是一句「解析失败」：{}",
+            unusable.message
+        );
+    }
+
+    /// 审计里的 `suggest_actions` 要在「使用记录」里显示成人话。
+    ///
+    /// 它**不是** `AgentAction` 的变体（那会让 Planner 能从 `run_agent_action`
+    /// 被任意触发，白名单就不成立了），所以 `from_key` 认不出来 —— 这条
+    /// 映射补在 DTO 这一层，其余未知 key 保持原样显示。
+    #[test]
+    fn run_dto_labels_the_planner_action_in_words() {
+        let record = |action: &str| AgentRunRecord {
+            id: "run-1".into(),
+            created_at: "2026-09-22T10:00:00+00:00".into(),
+            action: action.into(),
+            provider: Some("DeepSeek".into()),
+            model: Some("deepseek-v4-pro".into()),
+            input_item_ids: vec!["item-1".into()],
+            input_chars: 12,
+            status: "ok".into(),
+            error_code: None,
+            duration_ms: 900,
+            output_chars: Some(40),
+        };
+
+        let planner = AgentRunDto::from(record("suggest_actions"));
+        assert_eq!(planner.action, "suggest_actions", "机器可读名不改");
+        assert_eq!(planner.action_label, "下一步建议", "界面文案给一句人话");
+
+        // 既有动作的标签走 `AgentAction::label()`，一个字不变。
+        let summarize = AgentRunDto::from(record("summarize"));
+        assert_eq!(summarize.action_label, AgentAction::Summarize.label());
+
+        // 认不出来的动作名原样显示（既有行为：旧版本界面至少有个可读标识）。
+        let unknown = AgentRunDto::from(record("whatever_new_action"));
+        assert_eq!(unknown.action_label, "whatever_new_action");
     }
 }

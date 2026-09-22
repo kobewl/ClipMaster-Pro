@@ -310,6 +310,13 @@ pub struct AgentConfigInfo {
 /// 生产环境两次请求启动之间的最小间隔；测试默认 0，由 runtime.rs 显式开启。
 pub const REQUEST_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(1);
 
+/// 预取消墓碑最多记几个号（FIFO 淘汰最老、重复号只占一格）。
+///
+/// 8 格远超实际需要：单飞闸门保证同时最多一个在途请求，界面在离开时也只可能
+/// 有一两个号在飞。给这么小是刻意的 —— 墓碑里躺着的多是永不命中的号
+/// （取消晚于请求结束到达，见字段注释），不该长期占内存。
+const PRE_CANCELLED_CAP: usize = 8;
+
 pub struct AgentService {
     history: Arc<HistoryService>,
     secrets: Arc<dyn SecretStore>,
@@ -328,6 +335,21 @@ pub struct AgentService {
     /// 槽位里存的是 `(request_id, sender)`：取消必须**报号**，号对不上就
     /// 什么都不做。将来即便允许多个请求并存，按号定向取消也不会取消错对象。
     cancel: std::sync::Mutex<Option<(String, tokio::sync::oneshot::Sender<()>)>>,
+    /// 预取消墓碑：取消命令可能**比运行命令更早到达**。前端在所有「离开」路径上
+    /// 都是 fire-and-forget 地发取消（关窗、切条目、组件卸载），而运行命令走 invoke，
+    /// 两次 IPC 的先后不由前端决定 —— 取消先到时槽位还是空的，没了着落。没有墓碑，
+    /// 这次取消就静默丢失：晚到的运行命令照常注册、发出、计费，用户以为取消了其实没有。
+    ///
+    /// 记下这样的号，`run_items` 在挂槽位之前先来取一次（`take_pre_cancelled`），
+    /// 命中就一个字节都不发。队列是 FIFO + 去重，容量 `PRE_CANCELLED_CAP`。
+    ///
+    /// 两个**已知且接受**的角落（都不修，理由如下）：
+    /// 1. 墓碑命中的 run 若先撞上闸门（busy / 冷却），会以闸门错误结束，墓碑留到
+    ///    被 FIFO 淘汰。此时弹窗早已关掉、用户看不见这个错误；号又是一次性的
+    ///    uuid、不会复用，留着也不会误伤后来的请求。
+    /// 2. 前端对「离开」一律 fire-and-forget 取消，所以取消晚于请求**正常结束**
+    ///    到达时也会记下一个永不命中的号 —— 同属预期，靠 8 格 FIFO 淘汰。
+    pre_cancelled: std::sync::Mutex<std::collections::VecDeque<String>>,
 }
 
 impl AgentService {
@@ -351,6 +373,7 @@ impl AgentService {
             cooldown: std::time::Duration::ZERO,
             last_started: std::sync::Mutex::new(None),
             cancel: std::sync::Mutex::new(None),
+            pre_cancelled: std::sync::Mutex::new(std::collections::VecDeque::new()),
         }
     }
 
@@ -360,22 +383,61 @@ impl AgentService {
         self
     }
 
-    /// 按请求号取消进行中的模型请求，返回是否确有请求被取消。
+    /// 按请求号取消进行中的模型请求，返回是否**立即**取消了在途请求。
     ///
-    /// **号不匹配一律返回 false 且不动槽位**：取消是破坏性动作，宁可少取消一次，
-    /// 也不能把另一个请求打断 —— 用户按的是"取消这次"，不是"取消随便哪个"。
+    /// **号不匹配一律返回 false 且不动槽位、不记墓碑**：取消是破坏性动作，宁可少取消
+    /// 一次，也不能把另一个请求打断 —— 用户按的是"取消这次"，不是"取消随便哪个"。
     /// 号由前端在发起时生成并握在手里（见 `run_with_request_id` 的说明）。
+    ///
+    /// 返回值契约（不变）：`true` 恒等于「有一个在途请求被立即取消」。
+    /// 三种情况的落点：
+    /// - 槽位里就是它 → 取走通道、发取消信号，`true`（发送失败说明接收端已随请求
+    ///   结束而丢弃，此时没有在途请求，按契约给 `false`）。
+    /// - 槽位被**别人**占着 → `false`，什么都不动。
+    /// - 槽位空着 → `false`，但**额外**把这个号记进预取消墓碑：这多半是取消命令
+    ///   比运行命令先到（关窗竞态，见 `pre_cancelled` 字段注释），晚到的 run 会在
+    ///   挂槽位之前取中它并就地取消。返回 `false` 是诚实的 —— 这一瞬间确实没有
+    ///   在途请求被取消；墓碑只是让这次取消**别丢**。
     pub fn cancel(&self, request_id: &str) -> bool {
         let mut slot = self.cancel.lock().expect("取消锁");
         // 先只看不动：号不匹配时槽位必须原封不动（否则下一个请求会没了取消通道）。
         let matched = matches!(slot.as_ref(), Some((id, _)) if id == request_id);
-        if !matched {
+        if matched {
+            let (_, tx) = slot.take().expect("刚刚匹配过");
+            // send 失败 = 接收端已随请求结束而丢弃，此时没有「进行中的请求」，
+            // 按契约返回 false。
+            return tx.send(()).is_ok();
+        }
+        // 槽位被别人占着：号对不上，不打断、也不记墓碑 —— 记了就会把那个无辜的号
+        // 变成"下次一发起就被取消"，而它只是恰好撞上了别人在跑。
+        if slot.is_some() {
             return false;
         }
-        let (_, tx) = slot.take().expect("刚刚匹配过");
-        // send 失败 = 接收端已随请求结束而丢弃，此时没有「进行中的请求」，
-        // 按契约返回 false。
-        tx.send(()).is_ok()
+        // 槽位空着：这是取消先于注册到达的竞态，记墓碑留给晚到的 run。
+        drop(slot);
+        let mut queue = self.pre_cancelled.lock().expect("墓碑锁");
+        // 去重：同一个号占两格会白挤掉另一个号，而那个号才是真的还要被取消的。
+        if !queue.contains(&request_id.to_string()) {
+            queue.push_back(request_id.to_string());
+            // 超容量淘汰最老的：墓碑是尽力而为的兜底，不是可靠队列。
+            if queue.len() > PRE_CANCELLED_CAP {
+                queue.pop_front();
+            }
+        }
+        false
+    }
+
+    /// 取一次预取消墓碑：命中就把它从队列里移除并返回 true。
+    ///
+    /// 一次性消费是必须的：号虽是一次性 uuid，但"取中即移除"让语义保持
+    /// "每个墓碑只取消一个请求"，也让 `mod tests` 里的行为测试能直接断言队列内容。
+    fn take_pre_cancelled(&self, request_id: &str) -> bool {
+        let mut queue = self.pre_cancelled.lock().expect("墓碑锁");
+        if let Some(index) = queue.iter().position(|id| id == request_id) {
+            queue.remove(index);
+            return true;
+        }
+        false
     }
 
     /// 生效配置：用户设置 → 环境变量 → 内置默认值。
@@ -597,6 +659,19 @@ impl AgentService {
             input_item_ids: item_ids.to_vec(),
             ..Default::default()
         };
+        // 墓碑检查放在审计初始化**之后**、挂槽位**之前**：命中说明取消命令比这次运行
+        // 命令先到（关窗竞态），请求从未发出 —— 一个字节都不该发出去，省下的是真金白银。
+        // 放在审计之后是因为「取消总有审计」照常成立：条目已预填进 audit，即便
+        // run_inner 一次都没被 poll，这行审计也有主语、不会因为空条目被 store 丢掉。
+        //
+        // 已知且接受：这条检查在闸门之后，所以墓碑命中的请求若先撞上 busy / 冷却，
+        // 会以闸门错误结束、墓碑留到被 FIFO 淘汰。此时弹窗早已关掉、用户看不见；
+        // 号是一次性 uuid，留着也不会误伤后来的请求。
+        if self.take_pre_cancelled(&request_id) {
+            let result: Result<AgentResult, AgentError> = Err(AgentError::Cancelled);
+            self.audit(&action, &result, audit, started.elapsed()).await;
+            return result;
+        }
         // 挂上取消通道再进 select：用户点取消时，run_inner 会**被真的丢掉**
         // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
@@ -1240,5 +1315,127 @@ mod tests {
             !AgentError::InvalidRequestId("bad".to_string()).retryable(),
             "号不合法是调用方 bug，重试不会变好"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    //  预取消墓碑队列：容量、FIFO 淘汰、去重（模块内可读私有字段）
+    // -----------------------------------------------------------------------
+
+    /// 一个只用来测墓碑队列的 `AgentService`：端口全部落在内存库 / 空实现上。
+    ///
+    /// 这里刻意**不**复制一份队列逻辑来测 —— 直接驱动生产路径 `cancel()`
+    /// （槽位为空 → 记墓碑），再读私有字段断言，测到的才是真代码。
+    fn agent_for_tombstone_tests() -> AgentService {
+        use crate::domain::error::{ClipboardSourceError, SecretError};
+        use crate::domain::ports::{ClipboardWriter, SecretStore};
+        use crate::infrastructure::sqlite::agent_run_store::SqliteAgentRunStore;
+        use crate::infrastructure::sqlite::migrations;
+        use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
+        use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
+
+        /// 墓碑用例不会写剪贴板，写通道存在只是为了把 `HistoryService` 搭起来。
+        struct NoopWriter;
+
+        impl ClipboardWriter for NoopWriter {
+            fn write_text(&self, _content: &str) -> Result<(), ClipboardSourceError> {
+                Ok(())
+            }
+            fn write_image(&self, _image_path: &str) -> Result<(), ClipboardSourceError> {
+                Ok(())
+            }
+            fn write_html(&self, _html: &str) -> Result<(), ClipboardSourceError> {
+                Ok(())
+            }
+            fn write_files(&self, _paths: &[String]) -> Result<(), ClipboardSourceError> {
+                Ok(())
+            }
+        }
+
+        /// 墓碑用例不碰钥匙串：`cancel()` 只看槽位与墓碑两个字段。
+        struct UnusedSecrets;
+
+        #[async_trait::async_trait]
+        impl SecretStore for UnusedSecrets {
+            async fn get(&self, _account: &str) -> Result<Option<String>, SecretError> {
+                Ok(None)
+            }
+            async fn set(&self, _account: &str, _value: &str) -> Result<(), SecretError> {
+                Ok(())
+            }
+            async fn delete(&self, _account: &str) -> Result<(), SecretError> {
+                Ok(())
+            }
+        }
+
+        let mut conn = rusqlite::Connection::open_in_memory().expect("内存库");
+        migrations::run_migrations(&mut conn).expect("跑迁移");
+        let conn = Arc::new(std::sync::Mutex::new(conn));
+        let repository = Arc::new(SqliteClipboardRepository::new(conn.clone()));
+        let settings = Arc::new(SqliteSettingsStore::new(conn.clone()));
+        let history = Arc::new(HistoryService::new(
+            repository,
+            Arc::new(NoopWriter),
+            settings.clone(),
+        ));
+        AgentService::new(
+            history,
+            Arc::new(UnusedSecrets),
+            settings,
+            Arc::new(SqliteAgentRunStore::new(conn)),
+        )
+    }
+
+    /// 槽位为空时按「从未存在的号」取消：返回值必须仍是 false（契约不变），
+    /// 但号要进墓碑；队列有上限，最老的先被淘汰；重复号只占一格。
+    #[tokio::test]
+    async fn pre_cancelled_queue_is_capped_deduped_and_fifo() {
+        let agent = agent_for_tombstone_tests();
+
+        for index in 0..10 {
+            assert!(
+                !agent.cancel(&format!("tomb-{index}")),
+                "槽位为空：没有在途请求被取消，返回 false 是必须的"
+            );
+        }
+
+        let queue = agent.pre_cancelled.lock().expect("墓碑锁");
+        assert_eq!(
+            queue.len(),
+            PRE_CANCELLED_CAP,
+            "每个号都会记墓碑，但队列长度必须被上限卡住"
+        );
+        assert!(
+            !queue.contains(&"tomb-0".to_string()),
+            "最老的号应当被 FIFO 淘汰"
+        );
+        assert!(!queue.contains(&"tomb-1".to_string()), "第二个最老的也该淘汰");
+        assert!(queue.contains(&"tomb-8".to_string()), "最新的号必须留下");
+        assert!(queue.contains(&"tomb-9".to_string()), "最新的号必须留下");
+        drop(queue);
+
+        // 去重：重复入队会让一个号挤掉别的号，真正该被取消的那个反而被淘汰出队。
+        for _ in 0..3 {
+            agent.cancel("dup-id");
+        }
+        let queue = agent.pre_cancelled.lock().expect("墓碑锁");
+        assert_eq!(
+            queue.iter().filter(|id| *id == "dup-id").count(),
+            1,
+            "同一个号不许在墓碑队列里占两格"
+        );
+    }
+
+    /// 墓碑是**一次性**的：取中过就从队列里移除，同一个号不会被取消两次。
+    #[tokio::test]
+    async fn take_pre_cancelled_consumes_the_tombstone_once() {
+        let agent = agent_for_tombstone_tests();
+        agent.cancel("once-id");
+
+        assert!(agent.take_pre_cancelled("once-id"), "记过的号必须能取中");
+        assert!(
+            !agent.take_pre_cancelled("once-id"),
+            "取过就没了 —— 墓碑不能让同一个号取消两次"
+        );
+        assert!(!agent.take_pre_cancelled("never-seen"), "没记过的号取不中");
     }
 }

@@ -144,7 +144,9 @@ export const HistoryItemRow = memo(function HistoryItemRow({
       onClick={handleRowClick}
       className={`history-card group ${multiSelect ? "history-card--multi" : ""} ${
         multiSelect && picked ? "history-card--picked" : ""
-      } ${active && !multiSelect ? "history-card--active" : ""}`}
+      } ${active && !multiSelect ? "history-card--active" : ""} ${
+        menuOpen ? "history-card--menu-open" : ""
+      }`}
     >
       {multiSelect && (
         <span className="pick" aria-hidden>

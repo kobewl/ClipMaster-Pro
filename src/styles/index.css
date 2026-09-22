@@ -278,6 +278,10 @@ button {
   transition: background 110ms var(--cm-ease), box-shadow 110ms var(--cm-ease);
 }
 .history-card:hover { background: var(--cm-hover); }
+/* 菜单是卡片内的绝对定位弹层，而 content-visibility: auto 隐含的 paint containment
+   会把它裁剪在卡片 padding box 内（菜单被截半）。菜单打开期间临时关掉 containment：
+   contain-intrinsic-size 在 visible 下不生效，无需额外处理。 */
+.history-card.history-card--menu-open { content-visibility: visible; }
 
 /* 三种状态互斥（规范 5.3）：
    键盘选中 = accentSoft 底 + accentRing 内描边 + 左侧独立圆角色条。

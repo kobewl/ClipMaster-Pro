@@ -3,7 +3,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::application::agent_service::AgentAction;
-use crate::domain::model::{build_preview, ClipGroup, ClipboardItem};
+use crate::domain::model::{
+    build_preview, AgentSessionDetail, AgentSessionMember, AgentSessionSummary, ClipGroup,
+    ClipboardItem,
+};
 use crate::domain::normalize::strip_html_tags;
 use crate::domain::settings::AppSettings;
 
@@ -242,9 +245,126 @@ pub struct AgentRunDto {
     pub output_chars: Option<u64>,
 }
 
+// ---------------------------------------------------------------------------
+//  Session DTO（Flow 会话）
+// ---------------------------------------------------------------------------
+
+/// 列表用的会话摘要。
+///
+/// `source` 是 `&'static str` 字面量（`"user"` / `"agent"`）而不是枚举：
+/// 前端直接拿它比较，序列化形状不受枚举改名影响；时间一律 `to_rfc3339()`
+/// （照 `ClipboardItemDto` 的写法）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentSessionSummaryDto {
+    pub id: String,
+    pub source: &'static str,
+    pub title: String,
+    pub summary: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub item_count: u64,
+}
+
+impl From<AgentSessionSummary> for AgentSessionSummaryDto {
+    fn from(session: AgentSessionSummary) -> Self {
+        Self {
+            id: session.id,
+            source: session.source.as_str(),
+            title: session.title,
+            summary: session.summary,
+            created_at: session.created_at.to_rfc3339(),
+            updated_at: session.updated_at.to_rfc3339(),
+            item_count: session.item_count,
+        }
+    }
+}
+
+/// 会话详情：与摘要同样的字段面，外加成员列表。
+///
+/// 不给 `item_count`：详情的条数就是 `members.len()`，多一个字段就多一处
+/// 可能与成员列表对不上的地方（摘要才需要它 —— 那边没有成员可数）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentSessionDetailDto {
+    pub id: String,
+    pub source: &'static str,
+    pub title: String,
+    pub summary: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub members: Vec<AgentSessionMemberDto>,
+}
+
+impl From<AgentSessionDetail> for AgentSessionDetailDto {
+    fn from(session: AgentSessionDetail) -> Self {
+        Self {
+            id: session.id,
+            source: session.source.as_str(),
+            title: session.title,
+            summary: session.summary,
+            created_at: session.created_at.to_rfc3339(),
+            updated_at: session.updated_at.to_rfc3339(),
+            // 成员顺序原样透传：服务层已按 `position` 升序给出
+            // （关键判断 12），这里再排一次等于制造第二个排序真相源。
+            members: session
+                .members
+                .into_iter()
+                .map(AgentSessionMemberDto::from)
+                .collect(),
+        }
+    }
+}
+
+/// 详情里的一条成员。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentSessionMemberDto {
+    /// 条目本体，复用列表的条目 DTO（含 `preview`，前端不自己截断）。
+    pub item: ClipboardItemDto,
+    /// 会话内的编号，从 1 开始 —— 界面上的编号就是库里的编号。
+    pub position: i64,
+    /// `None` = 用户手动保存（他为什么把它们放在一起不需要机器解释）。
+    ///
+    /// **不用 `skip_serializing_if`**：前端要按 `null` 区分「用户手动保存」与
+    /// 「agent 有理由」，显式下发 `null`。字段缺席与「没有理由」是两种读法，
+    /// 整字段省略会让手动存的会话被当成「老版本响应」。
+    pub reason: Option<String>,
+}
+
+impl From<AgentSessionMember> for AgentSessionMemberDto {
+    fn from(member: AgentSessionMember) -> Self {
+        Self {
+            item: ClipboardItemDto::from(member.item),
+            position: member.position,
+            reason: member.reason,
+        }
+    }
+}
+
+/// 用户显式保存一次会话（多选若干条 → 「存为会话」）。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct CreateAgentSessionDto {
+    /// 用户选中的条目 id。条数边界与「条目还在不在」由服务层判定并报错。
+    pub item_ids: Vec<String>,
+}
+
+/// 一键清除 AI 派生数据的结果。
+///
+/// 两个数分别来自两个 store（会话 / 审计）各自的事务，见关键判断 11：
+/// 不做跨表事务，所以如实报出两边各清了多少。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct ClearDerivedDataDto {
+    pub sessions: u64,
+    pub runs: u64,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::model::{ClipboardItemId, ContentType, SessionSource};
 
     fn sample_item() -> ClipboardItemDto {
         ClipboardItemDto {
@@ -291,5 +411,147 @@ mod tests {
 
         assert!(json.contains("\"matched_terms\":[\"番茄牛腩\"]"), "{json}");
         assert!(json.contains("\"relaxed_dropped\":[\"做法\"]"), "{json}");
+    }
+
+    // -----------------------------------------------------------------------
+    //  Session DTO（Flow 会话）
+    // -----------------------------------------------------------------------
+
+    /// 测试用的领域条目。会话 DTO 只负责映射，这里的字段值只要够区分每一条。
+    fn sample_domain_item(content_text: &str, copied_at: &str) -> ClipboardItem {
+        let copied_at = rfc3339(copied_at);
+        ClipboardItem {
+            id: ClipboardItemId(
+                uuid::Uuid::parse_str("11111111-1111-1111-1111-111111111111").expect("固定 uuid"),
+            ),
+            content_type: ContentType::Text,
+            content_text: content_text.into(),
+            fingerprint: "fp-1".into(),
+            group_id: None,
+            created_at: copied_at,
+            updated_at: copied_at,
+            last_copied_at: copied_at,
+            source_app: Some("Safari".into()),
+            source_url: None,
+            legacy_id: None,
+        }
+    }
+
+    fn rfc3339(value: &str) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::parse_from_rfc3339(value)
+            .expect("测试时间字面量")
+            .with_timezone(&chrono::Utc)
+    }
+
+    fn member_dto(position: i64, reason: Option<&str>, text: &str) -> AgentSessionMemberDto {
+        AgentSessionMemberDto::from(AgentSessionMember {
+            item: sample_domain_item(text, "2026-09-22T10:00:00Z"),
+            position,
+            reason: reason.map(str::to_string),
+        })
+    }
+
+    /// `reason` 必须**显式**下发 `null`（字段在场，不用 `skip_serializing_if`）：
+    /// 前端按 `null` 区分「用户手动保存」与「agent 有理由」——
+    /// 字段缺席与「没有理由」是两种读法，混起来会让手动存的会话被误读成自动成组。
+    #[test]
+    fn session_member_reason_is_explicitly_null_when_none() {
+        let dto = member_dto(1, None, "示例内容");
+        let value = serde_json::to_value(&dto).expect("序列化会话成员");
+        let object = value.as_object().expect("成员是对象");
+
+        assert!(
+            object.contains_key("reason"),
+            "reason 字段必须在场（不能整字段省略）：{value}"
+        );
+        assert_eq!(value["reason"], serde_json::Value::Null, "{value}");
+        assert!(
+            serde_json::to_string(&dto)
+                .expect("序列化会话成员")
+                .contains("\"reason\":null"),
+            "前端按字面量 null 判断，不能依赖字段缺席"
+        );
+
+        // 成员里的条目复用 `ClipboardItemDto::from` 的既有预览规则，
+        // 不在这里另算一套（两套预览规则早晚会不一致）。
+        assert_eq!(value["item"]["preview"], "示例内容", "{value}");
+        assert_eq!(value["item"]["content_type"], "text", "{value}");
+        assert_eq!(
+            value["item"]["last_copied_at"], "2026-09-22T10:00:00+00:00",
+            "时间一律 to_rfc3339()：{value}"
+        );
+        assert_eq!(value["position"], 1, "{value}");
+    }
+
+    /// agent 源的理由原文照传，且成员顺序**原样透传**服务层的 `position` 升序
+    /// （Task 3 审查 M-2：DTO 层不重排、不做第二套排序假设 —— 界面上看到的
+    /// 编号就是库里的编号，DTO 再排一次只会制造第二个真相源）。
+    #[test]
+    fn session_members_carry_reason_text_in_service_order() {
+        let members: Vec<AgentSessionMemberDto> = vec![
+            member_dto(1, Some("与前一条同源（Safari）"), "第一条"),
+            member_dto(2, Some("与前一条共享关键词 redis"), "第二条"),
+        ];
+        let value = serde_json::to_value(&members).expect("序列化成员列表");
+        let array = value.as_array().expect("成员列表是数组");
+
+        assert_eq!(array[0]["item"]["content_text"], "第一条", "{value}");
+        assert_eq!(array[1]["item"]["content_text"], "第二条", "{value}");
+        assert_eq!(array[0]["position"], 1, "{value}");
+        assert_eq!(array[1]["position"], 2, "{value}");
+        assert_eq!(array[0]["reason"], "与前一条同源（Safari）", "{value}");
+        assert_eq!(array[1]["reason"], "与前一条共享关键词 redis", "{value}");
+    }
+
+    /// 摘要与详情的字段面：`source` 下发前端直接比较的字面量（`"user"` 显示
+    /// 「手动」小标），时间一律 `to_rfc3339()`，条数只由摘要给
+    /// （详情的条数就是成员列表长度，不重复落字段）。
+    #[test]
+    fn session_summary_and_detail_serialize_the_frontend_contract() {
+        let summary = AgentSessionSummaryDto::from(AgentSessionSummary {
+            id: "sess-abc".into(),
+            source: SessionSource::User,
+            title: "3 条内容 · 10:00–10:12".into(),
+            summary: "Safari 上的 3 条内容".into(),
+            created_at: rfc3339("2026-09-22T10:00:00Z"),
+            updated_at: rfc3339("2026-09-22T10:12:00Z"),
+            item_count: 3,
+        });
+        let json = serde_json::to_string(&summary).expect("序列化会话摘要");
+        assert!(json.contains("\"id\":\"sess-abc\""), "{json}");
+        assert!(json.contains("\"source\":\"user\""), "{json}");
+        assert!(json.contains("\"item_count\":3"), "{json}");
+        assert!(
+            json.contains("\"created_at\":\"2026-09-22T10:00:00+00:00\""),
+            "{json}"
+        );
+        assert!(
+            json.contains("\"updated_at\":\"2026-09-22T10:12:00+00:00\""),
+            "{json}"
+        );
+
+        let detail = AgentSessionDetailDto::from(AgentSessionDetail {
+            id: "sess-abc".into(),
+            source: SessionSource::Agent,
+            title: "3 条内容 · 10:00–10:12".into(),
+            summary: "Safari 上的 3 条内容".into(),
+            created_at: rfc3339("2026-09-22T10:00:00Z"),
+            updated_at: rfc3339("2026-09-22T10:12:00Z"),
+            members: vec![AgentSessionMember {
+                item: sample_domain_item("第一条", "2026-09-22T10:00:00Z"),
+                position: 1,
+                reason: None,
+            }],
+        });
+        let json = serde_json::to_string(&detail).expect("序列化会话详情");
+        assert!(
+            json.contains("\"source\":\"agent\""),
+            "两种来源字面量都要钉住：{json}"
+        );
+        assert!(json.contains("\"members\":["), "{json}");
+        assert!(
+            !json.contains("\"item_count\""),
+            "详情的条数由成员列表长度表达，不重复落字段：{json}"
+        );
     }
 }

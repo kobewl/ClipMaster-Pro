@@ -7,9 +7,10 @@ pub mod lifecycle;
 use tauri::Manager;
 
 use crate::commands::agent_commands::{
-    cancel_agent_action, clear_agent_key, clear_agent_runs, get_agent_config, get_agent_run,
-    list_agent_runs, reset_agent_endpoint, save_agent_endpoint, save_agent_key,
-    test_agent_connection,
+    cancel_agent_action, clear_agent_derived_data, clear_agent_key, clear_agent_runs,
+    create_agent_session, delete_agent_session, get_agent_config, get_agent_run, get_agent_session,
+    list_agent_runs, list_agent_sessions, reset_agent_endpoint, save_agent_endpoint,
+    save_agent_key, test_agent_connection,
 };
 use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, copy_text_to_clipboard, create_group, delete_clipboard_item,
@@ -170,6 +171,11 @@ pub fn run() {
             list_agent_runs,
             clear_agent_runs,
             get_agent_run,
+            list_agent_sessions,
+            get_agent_session,
+            create_agent_session,
+            delete_agent_session,
+            clear_agent_derived_data,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

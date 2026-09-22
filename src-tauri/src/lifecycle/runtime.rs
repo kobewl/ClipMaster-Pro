@@ -5,7 +5,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::application::capture_pipeline::CapturePipeline;
-use crate::application::agent_service::AgentService;
+use crate::application::agent_service::{AgentService, REQUEST_COOLDOWN};
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
 use crate::application::settings_service::SettingsService;
@@ -129,12 +129,12 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     let secrets: Arc<dyn crate::domain::ports::SecretStore> = Arc::new(PlatformSecretStore::new());
     let run_store: Arc<dyn crate::domain::ports::AgentRunStore> =
         Arc::new(SqliteAgentRunStore::new(conn.clone()));
-    let agent = Arc::new(AgentService::new(
-        history.clone(),
-        secrets,
-        settings_impl,
-        run_store,
-    ));
+    // 唯一的构造点：单飞闸门在 AgentService 内部，冷却只在这里开启 ——
+    // 测试一律走 `new()` 默认的 0，不被节流干扰。
+    let agent = Arc::new(
+        AgentService::new(history.clone(), secrets, settings_impl, run_store)
+            .with_cooldown(REQUEST_COOLDOWN),
+    );
     let settings = Arc::new(SettingsService::new(settings_store.clone()));
     let groups = Arc::new(GroupService::new(group_repository));
 

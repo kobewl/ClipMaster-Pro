@@ -202,6 +202,10 @@ pub enum AgentError {
     ConfigStoreUnavailable(String),
     #[error("无法读写 AI 使用记录：{0}")]
     RunStoreUnavailable(String),
+    #[error("已有一次 AI 请求正在进行，等它完成或取消后再试。")]
+    Busy,
+    #[error("上一次请求刚刚发出，请间隔一小会儿再试。")]
+    Cooldown,
 }
 
 impl AgentError {
@@ -225,13 +229,19 @@ impl AgentError {
             Self::SecretStoreUnavailable(_) => "secret_unavailable",
             Self::ConfigStoreUnavailable(_) => "ai_config_save_failed",
             Self::RunStoreUnavailable(_) => "ai_run_store_unavailable",
+            Self::Busy => "ai_busy",
+            Self::Cooldown => "ai_cooldown",
         }
     }
 
     pub fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::ProviderUnavailable | Self::InvalidResponse | Self::RateLimited
+            Self::ProviderUnavailable
+                | Self::InvalidResponse
+                | Self::RateLimited
+                | Self::Busy
+                | Self::Cooldown
         )
     }
 }
@@ -285,12 +295,21 @@ pub struct AgentConfigInfo {
     pub provider_label: String,
 }
 
+/// 生产环境两次请求启动之间的最小间隔；测试默认 0，由 runtime.rs 显式开启。
+pub const REQUEST_COOLDOWN: std::time::Duration = std::time::Duration::from_secs(1);
+
 pub struct AgentService {
     history: Arc<HistoryService>,
     secrets: Arc<dyn SecretStore>,
     config_store: Arc<dyn AgentConfigStore>,
     runs: Arc<dyn AgentRunStore>,
     client: reqwest::Client,
+    /// 单飞闸门：同一时刻只允许一个进行中的模型请求。
+    gate: tokio::sync::Semaphore,
+    /// 启动冷却；`new` 里为 0。
+    cooldown: std::time::Duration,
+    /// 上一次请求的启动时刻。
+    last_started: std::sync::Mutex<Option<std::time::Instant>>,
 }
 
 impl AgentService {
@@ -310,7 +329,16 @@ impl AgentService {
                 .build()
                 // 没有 client 时所有请求都会失败；继续让 run 映射成稳定错误。
                 .unwrap_or_else(|_| reqwest::Client::new()),
+            gate: tokio::sync::Semaphore::new(1),
+            cooldown: std::time::Duration::ZERO,
+            last_started: std::sync::Mutex::new(None),
         }
+    }
+
+    /// 生产入口用它开启启动冷却；`new` 默认 0，保证测试与开发不被节流干扰。
+    pub fn with_cooldown(mut self, cooldown: std::time::Duration) -> Self {
+        self.cooldown = cooldown;
+        self
     }
 
     /// 生效配置：用户设置 → 环境变量 → 内置默认值。
@@ -474,6 +502,20 @@ impl AgentService {
         action: AgentAction,
         mode: InputMode,
     ) -> Result<AgentResult, AgentError> {
+        // 冷却检查、单飞检查、登记启动时刻必须在同一把锁里完成，
+        // 否则两个并发请求可以都通过检查再各自放行。
+        let _permit = {
+            let mut seen = self.last_started.lock().expect("闸门锁中毒");
+            if let Some(prev) = *seen {
+                if prev.elapsed() < self.cooldown {
+                    return Err(AgentError::Cooldown);
+                }
+            }
+            let permit = self.gate.try_acquire().map_err(|_| AgentError::Busy)?;
+            *seen = Some(std::time::Instant::now());
+            permit
+        };
+
         let started = std::time::Instant::now();
         let mut audit = RunAudit {
             // 先定号：结果卡片要显示它，审计也要用它当主键。

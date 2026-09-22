@@ -5,6 +5,7 @@ import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import type { AgentAction, AgentResult, ClipboardItem } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
+import { createRequestId } from "@/lib/requestId";
 import { extractDomain, getAppIcon } from "@/lib/sourceIcons";
 import { AgentResultCard } from "./AgentResultCard";
 import { Icon } from "./Icon";
@@ -87,6 +88,9 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
    */
   const [providerLabel, setProviderLabel] = useState<string>("DeepSeek");
 
+  // 依赖 `item?.id` 而不是 `[]`：这个组件在 App 里是常驻挂载的，只跑一次的话，
+  // 用户在同一次会话里改完服务地址、回来再看，右上角仍写着旧服务名。
+  // 按条目刷新让"看哪条"与"发往哪里"两处始终同一次读取。
   useEffect(() => {
     commands
       .getAgentConfig()
@@ -94,7 +98,7 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
       .catch(() => {
         /* 读不到就保持默认文案，不影响 AI 操作本身（真正的错误会在点按钮时报出） */
       });
-  }, []);
+  }, [item?.id]);
 
   // 长文打开时从头开始看；不做滚动位置记忆，每次都是新的阅读。
   //
@@ -180,7 +184,7 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
 
   async function handleAgentAction(action: AgentAction) {
     if (!item || runningAction) return;
-    const requestId = crypto.randomUUID();
+    const requestId = createRequestId();
     activeRunRef.current = requestId;
     setRunningAction(action);
     setAgentError(null);
@@ -234,7 +238,6 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
       // 取消失败不致命：请求会自然结束，错误路径会正常显示
     }
   }
-
 
   if (!item || !meta) return null;
 

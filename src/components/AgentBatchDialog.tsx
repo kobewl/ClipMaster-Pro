@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import type { AgentAction, AgentResult, ClipboardItem } from "@/types/clipboard";
 import { MAX_AGENT_INPUT_ITEMS, isCommandError, supportsBatch } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
+import { createRequestId } from "@/lib/requestId";
 import { AgentResultCard } from "./AgentResultCard";
 import { Icon } from "./Icon";
 
@@ -72,7 +73,7 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
 
   async function handleRun(action: AgentAction) {
     if (running) return;
-    const requestId = crypto.randomUUID();
+    const requestId = createRequestId();
     activeRunRef.current = requestId;
     setRunning(action);
     setError(null);

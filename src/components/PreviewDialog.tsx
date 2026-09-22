@@ -97,6 +97,11 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
   }, []);
 
   // 长文打开时从头开始看；不做滚动位置记忆，每次都是新的阅读。
+  //
+  // 依赖 `item?.id` 而不是 `item`：App.tsx 的 previewItem 是每次从刷新的 items
+  // 数组里 find 出来的**同 id 新对象**，按对象身份依赖的话，用户在系统里复制
+  // 任何东西（列表刷新）都会把正在看的结果和进行中的状态一起清掉。
+  // 真正要重置的时机只有"换了另一条内容"（id 变）与"弹窗关掉"（id 变 undefined）。
   useEffect(() => {
     if (item) bodyRef.current?.scrollTo({ top: 0 });
     setAgentResult(null);
@@ -104,14 +109,17 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     setAgentErrorCode(null);
     setRunningAction(null);
     setCopiedResult(false);
-  }, [item]);
+  }, [item?.id]);
 
   /**
-   * 换条目（以及卸载：关弹窗时 App.tsx 把 item 置空/摘掉组件）时，把还在飞的
-   * 请求取消掉。两条理由：用户已经不打算看这次结果了 —— 让它在后台跑完等于
-   * 白计费；而结果真回来也没地方显示，只会变成串台隐患。
+   * 离开这条内容（换条目、关弹窗、卸载）时，把还在飞的请求取消掉。两条理由：
+   * 用户已经不打算看这次结果了 —— 让它在后台跑完等于白计费；而结果真回来
+   * 也没地方显示，只会变成串台隐患。
    *
-   * 先清 ref 再发取消：清理函数可能因为 item 切换而再次进入，ref 空了就不会
+   * 依赖同样是 `item?.id`（理由见上面的状态重置 effect）：**同一条目的列表刷新
+   * 不是"离开"**，绝不能因此取消在途请求 —— 那会在审计里留下假的 ai_cancelled。
+   *
+   * 先清 ref 再发取消：清理函数可能因为 id 切换而再次进入，ref 空了就不会
    * 重复发一轮取消。
    */
   useEffect(() => {
@@ -122,7 +130,7 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
       // 取消失败不致命：请求会自然结束，过期响应守卫会挡住它的结果。
       void commands.cancelAgentAction(requestId).catch(() => {});
     };
-  }, [item]);
+  }, [item?.id]);
 
   const meta = useMemo(() => {
     if (!item) return null;

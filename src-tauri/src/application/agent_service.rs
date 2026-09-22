@@ -573,7 +573,7 @@ impl AgentService {
             None => uuid::Uuid::new_v4().to_string(),
         };
 
-        // 闸门在创建 RunAudit / request_id 之前：被拦下的连点不留审计。
+        // 闸门在创建 RunAudit 之前：被拦下的连点不留审计。
         // 这里只**检查**冷却，登记要等真正发出请求时（见 run_inner）——
         // 本地门禁拦下的请求什么都没发出去，不该消耗冷却。
         let _permit = {

@@ -164,7 +164,7 @@ pub struct AgentResult {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AgentError {
-    #[error("尚未配置 DeepSeek API Key，请到「设置 → AI 助手」填入。")]
+    #[error("尚未配置 API Key，请到「设置 → AI 助手」填入。")]
     NotConfigured,
     /// 带上位置：一次选了多条时，"有一条含密钥"和"是第 3 条含密钥"对用户
     /// 是完全不同的信息量 —— 后者让他知道把哪条去掉就能继续。
@@ -178,16 +178,19 @@ pub enum AgentError {
     BatchUnsupportedAction,
     #[error("内容过长（最多 {} 个字符），请先裁剪后再运行 AI Action。", TOTAL_BUDGET_CHARS)]
     InputTooLong,
-    #[error("DeepSeek 拒绝了这次请求（API Key 可能无效或已被撤销），请到「设置 → AI 助手」检查。")]
-    Unauthorized,
-    #[error("DeepSeek 账户余额不足，请充值后重试。")]
-    InsufficientBalance,
-    #[error("DeepSeek 请求过于频繁，请稍后重试。")]
-    RateLimited,
-    #[error("DeepSeek 服务暂时不可用，请稍后重试。")]
-    ProviderUnavailable,
-    #[error("DeepSeek 返回了无法识别的结果，请稍后重试。")]
-    InvalidResponse,
+    /// 下面五个变体都带上 `provider` 而不是写死 "DeepSeek"：用户可以把地址换成
+    /// OpenAI / Ollama / 中转站，报错却写着 DeepSeek 会把排查方向带偏。
+    /// 服务名由 `provider_label(&config.base_url)` 在调用点算好传进来。
+    #[error("{provider} 拒绝了这次请求（API Key 可能无效或已被撤销），请到「设置 → AI 助手」检查。")]
+    Unauthorized { provider: String },
+    #[error("{provider} 账户余额不足，请充值后重试。")]
+    InsufficientBalance { provider: String },
+    #[error("{provider} 请求过于频繁，请稍后重试。")]
+    RateLimited { provider: String },
+    #[error("{provider} 服务暂时不可用，请稍后重试。")]
+    ProviderUnavailable { provider: String },
+    #[error("{provider} 返回了无法识别的结果，请稍后重试。")]
+    InvalidResponse { provider: String },
     #[error("无法读取这条剪贴板记录。")]
     ItemUnavailable,
     #[error("API Key 校验失败：{0}")]
@@ -225,11 +228,11 @@ impl AgentError {
             Self::TooManyItems { .. } => "ai_too_many_items",
             Self::BatchUnsupportedAction => "ai_batch_unsupported_action",
             Self::InputTooLong => "ai_input_too_long",
-            Self::Unauthorized => "ai_unauthorized",
-            Self::InsufficientBalance => "ai_insufficient_balance",
-            Self::RateLimited => "ai_rate_limited",
-            Self::ProviderUnavailable => "ai_provider_unavailable",
-            Self::InvalidResponse => "ai_invalid_response",
+            Self::Unauthorized { .. } => "ai_unauthorized",
+            Self::InsufficientBalance { .. } => "ai_insufficient_balance",
+            Self::RateLimited { .. } => "ai_rate_limited",
+            Self::ProviderUnavailable { .. } => "ai_provider_unavailable",
+            Self::InvalidResponse { .. } => "ai_invalid_response",
             Self::ItemUnavailable => "ai_item_unavailable",
             Self::InvalidApiKey(_) => "ai_invalid_api_key",
             Self::InvalidBaseUrl(_) => "ai_invalid_base_url",
@@ -249,9 +252,9 @@ impl AgentError {
     pub fn retryable(&self) -> bool {
         matches!(
             self,
-            Self::ProviderUnavailable
-                | Self::InvalidResponse
-                | Self::RateLimited
+            Self::ProviderUnavailable { .. }
+                | Self::InvalidResponse { .. }
+                | Self::RateLimited { .. }
                 | Self::Busy
                 | Self::Cooldown
         )
@@ -596,17 +599,19 @@ impl AgentService {
     pub async fn test_connection(&self) -> Result<(), AgentError> {
         let config = self.config().await?;
         let api_key = config.api_key.ok_or(AgentError::NotConfigured)?;
+        // 服务名先算好：连不上和状态码报错都要用它，文案里不能写死某个厂商。
+        let label = provider_label(&config.base_url);
         let response = self
             .client
             .get(format!("{}/models", config.base_url))
             .bearer_auth(api_key)
             .send()
             .await
-            .map_err(|_| AgentError::ProviderUnavailable)?;
+            .map_err(|_| AgentError::ProviderUnavailable { provider: label.clone() })?;
         if response.status().is_success() {
             return Ok(());
         }
-        Err(map_status_error(response.status()))
+        Err(map_status_error(response.status(), &label))
     }
 
     /// 单条内容的 AI 动作（Phase 0 契约，行为不变）。
@@ -823,9 +828,13 @@ impl AgentService {
         audit.dropped_item_ids = prepared.dropped.clone();
 
         let config = self.config().await?;
+        // 服务名先算好：审计、错误文案、结果卡片三处必须是同一个值。
+        // 名字不叫 `label` 是刻意的 —— 函数末尾还有一个 `action.label()`，
+        // 两个 "label" 含义完全不同，撞名只会让后来人读错。
+        let provider = provider_label(&config.base_url);
         // 配置解出来就记下目标服务：即使后面因为没配 Key 或网络失败没读成，
         // 审计里也能看出"这次本来要发往哪里"。
-        audit.target = Some((provider_label(&config.base_url), config.model.clone()));
+        audit.target = Some((provider.clone(), config.model.clone()));
         let api_key = config.api_key.ok_or(AgentError::NotConfigured)?;
 
         // 走到这里才登记启动时刻：冷却保护的是**真正发出去的计费请求**，
@@ -848,18 +857,18 @@ impl AgentService {
             }))
             .send()
             .await
-            .map_err(|_| AgentError::ProviderUnavailable)?;
+            .map_err(|_| AgentError::ProviderUnavailable { provider: provider.clone() })?;
 
         if !response.status().is_success() {
             let status = response.status();
             // 只记状态码和主机名：地址由用户配置，正文里可能有敏感内容。
             tracing::warn!(status = %status, host = %host_of(&config.base_url), "模型请求失败");
-            return Err(map_status_error(status));
+            return Err(map_status_error(status, &provider));
         }
         let body: ChatCompletion = response
             .json()
             .await
-            .map_err(|_| AgentError::InvalidResponse)?;
+            .map_err(|_| AgentError::InvalidResponse { provider: provider.clone() })?;
         let content = body
             .choices
             .into_iter()
@@ -867,7 +876,7 @@ impl AgentService {
             .and_then(|choice| choice.message.content)
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty())
-            .ok_or(AgentError::InvalidResponse)?;
+            .ok_or(AgentError::InvalidResponse { provider: provider.clone() })?;
 
         let label = action.label();
         Ok(AgentResult {
@@ -882,7 +891,7 @@ impl AgentService {
                 format!("AI {label}")
             },
             content,
-            provider: provider_label(&config.base_url),
+            provider,
             model: config.model,
             source_item_ids: prepared.used.iter().map(|used| used.item_id.clone()).collect(),
             inputs: prepared
@@ -984,12 +993,16 @@ impl AgentService {
 ///
 /// 401/402/429 各自有明确的自救动作（换 Key / 充值 / 等一会儿），
 /// 全都压成「服务暂时不可用」等于把所有情况都推给"稍后重试"。
-fn map_status_error(status: reqwest::StatusCode) -> AgentError {
+///
+/// `provider` 是界面上显示的服务名（见 `provider_label`）：接的是中转站就报中转站的
+/// 域名，不然"DeepSeek 欠费了"这句提示会把人引去查一个根本没在用的账户。
+fn map_status_error(status: reqwest::StatusCode, provider: &str) -> AgentError {
+    let provider = provider.to_string();
     match status.as_u16() {
-        401 | 403 => AgentError::Unauthorized,
-        402 => AgentError::InsufficientBalance,
-        429 => AgentError::RateLimited,
-        _ => AgentError::ProviderUnavailable,
+        401 | 403 => AgentError::Unauthorized { provider },
+        402 => AgentError::InsufficientBalance { provider },
+        429 => AgentError::RateLimited { provider },
+        _ => AgentError::ProviderUnavailable { provider },
     }
 }
 
@@ -1274,21 +1287,55 @@ mod tests {
     #[test]
     fn status_mapping_separates_user_fixable_failures() {
         assert!(matches!(
-            map_status_error(reqwest::StatusCode::UNAUTHORIZED),
-            AgentError::Unauthorized
+            map_status_error(reqwest::StatusCode::UNAUTHORIZED, "DeepSeek"),
+            AgentError::Unauthorized { .. }
         ));
         assert!(matches!(
-            map_status_error(reqwest::StatusCode::PAYMENT_REQUIRED),
-            AgentError::InsufficientBalance
+            map_status_error(reqwest::StatusCode::PAYMENT_REQUIRED, "DeepSeek"),
+            AgentError::InsufficientBalance { .. }
         ));
         assert!(matches!(
-            map_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS),
-            AgentError::RateLimited
+            map_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "DeepSeek"),
+            AgentError::RateLimited { .. }
         ));
         assert!(matches!(
-            map_status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR),
-            AgentError::ProviderUnavailable
+            map_status_error(reqwest::StatusCode::INTERNAL_SERVER_ERROR, "DeepSeek"),
+            AgentError::ProviderUnavailable { .. }
         ));
+    }
+
+    #[test]
+    fn provider_errors_name_the_real_endpoint_not_deepseek() {
+        let err = map_status_error(reqwest::StatusCode::UNAUTHORIZED, "my-proxy.example.com");
+        let msg = err.to_string();
+        assert!(msg.contains("my-proxy.example.com"), "自定义端点的错误必须报真实主机名：{msg}");
+        assert!(!msg.contains("DeepSeek"), "接了中转站还报 DeepSeek 就是误导：{msg}");
+
+        let err = map_status_error(reqwest::StatusCode::TOO_MANY_REQUESTS, "DeepSeek");
+        assert!(err.to_string().contains("DeepSeek"), "默认地址照旧报 DeepSeek");
+
+        let msg = AgentError::NotConfigured.to_string();
+        assert!(!msg.contains("DeepSeek"), "未配置提示不应绑定具体厂商：{msg}");
+    }
+
+    /// 五个模板逐个过：只要有一个漏了 `{provider}`（比如后来改文案时手滑写回
+    /// 厂商名），用户就会在中转站上看到一句指向别家的错误提示。上面那个用例
+    /// 只走 401/429 两条分支，这里把 402/5xx/解析失败也一起锁上。
+    #[test]
+    fn every_provider_error_template_names_the_given_provider() {
+        let provider = "ollama.local:11434";
+        let errors = [
+            AgentError::Unauthorized { provider: provider.to_string() },
+            AgentError::InsufficientBalance { provider: provider.to_string() },
+            AgentError::RateLimited { provider: provider.to_string() },
+            AgentError::ProviderUnavailable { provider: provider.to_string() },
+            AgentError::InvalidResponse { provider: provider.to_string() },
+        ];
+        for err in errors {
+            let msg = err.to_string();
+            assert!(msg.contains(provider), "每条服务类错误都要报真实服务名：{msg}");
+            assert!(!msg.contains("DeepSeek"), "错误文案里不得写死厂商：{msg}");
+        }
     }
 
     #[test]
@@ -1366,17 +1413,29 @@ mod tests {
     fn error_codes_are_stable_and_retryable_flags_match() {
         // 前端按 code 分派引导文案，改动这里等于改 API 契约。
         assert_eq!(AgentError::NotConfigured.code(), "ai_not_configured");
-        assert_eq!(AgentError::Unauthorized.code(), "ai_unauthorized");
-        assert_eq!(AgentError::InsufficientBalance.code(), "ai_insufficient_balance");
-        assert_eq!(AgentError::RateLimited.code(), "ai_rate_limited");
+        assert_eq!(
+            AgentError::Unauthorized { provider: "DeepSeek".to_string() }.code(),
+            "ai_unauthorized"
+        );
+        assert_eq!(
+            AgentError::InsufficientBalance { provider: "DeepSeek".to_string() }.code(),
+            "ai_insufficient_balance"
+        );
+        assert_eq!(
+            AgentError::RateLimited { provider: "DeepSeek".to_string() }.code(),
+            "ai_rate_limited"
+        );
         assert_eq!(
             AgentError::InvalidRequestId("bad".to_string()).code(),
             "ai_invalid_request_id"
         );
 
-        assert!(AgentError::RateLimited.retryable());
-        assert!(!AgentError::Unauthorized.retryable(), "Key 无效重试多少次都没用");
-        assert!(!AgentError::InsufficientBalance.retryable());
+        assert!(AgentError::RateLimited { provider: "DeepSeek".to_string() }.retryable());
+        assert!(
+            !AgentError::Unauthorized { provider: "DeepSeek".to_string() }.retryable(),
+            "Key 无效重试多少次都没用"
+        );
+        assert!(!AgentError::InsufficientBalance { provider: "DeepSeek".to_string() }.retryable());
         assert!(
             !AgentError::InvalidRequestId("bad".to_string()).retryable(),
             "号不合法是调用方 bug，重试不会变好"

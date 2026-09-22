@@ -247,8 +247,13 @@ impl AgentSessionStore for SqliteSessionStore {
             let conn = conn.lock().expect("sqlite mutex poisoned");
 
             // 成员计数走相关子查询：`PRIMARY KEY(session_id, item_id)` 的前缀索引
-            // 直接覆盖，比 JOIN + GROUP BY 少一趟聚合。会话表本身有上界
-            // （MAX_SESSIONS），所以这里不做分页。
+            // 直接覆盖，比 JOIN + GROUP BY 少一趟聚合。
+            // **不做分页**的真实前提：agent 行受 `trim_agent_sessions` 裁到
+            // MAX_SESSIONS，而 `source='user'` 行不受任何裁剪（计划决策 5），
+            // 所以这里没有「表有上界」那种保证 —— `LIMIT` 只限制这次读多少条，
+            // 不保证库里所有会话都能被看到。user 行超过 limit 时，较旧的那些
+            // 在列表里不可见（数据仍在表里、`find` 取得到）。「user 会话超限后
+            // 不可达」的列表口径待定，属已知开放问题。
             // ORDER BY 与 idx_agent_sessions_updated_at 同序，rowid DESC 让同一
             // 时刻写入的多条有稳定序（照 agent_run_store 的列表写法）。
             let mut stmt = conn

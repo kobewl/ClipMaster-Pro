@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+pub const CURRENT_SCHEMA_VERSION: i64 = 7;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -152,6 +152,66 @@ const MIGRATIONS: &[(i64, &str)] = &[
     END;
     "#,
     ),
+    // -----------------------------------------------------------------------
+    // Migration 7: Flow 会话派生层（Phase 1 第 3 步）
+    //
+    // 会话是**派生数据**：不存 prompt、不存模型输出，全部由本地的
+    // last_copied_at / source_app / 内容词推出（见 docs/agent/PHASE1_PLAN.md 主题 3）。
+    //
+    // 为什么 summary 是 NOT NULL：摘要是本地拼接的（时段 / 条数 / 来源 / 共享词），
+    // 打开工作台即得，不存在「还没归纳所以为空」的中间状态 —— 允许 NULL 只会让
+    // 界面多一条「为什么这里是空的」的猜谜。
+    //
+    // 为什么 source 落在两张表上：会话与成员各一行（将来「把某条手动塞进另一个
+    // 会话」时成员来源可独立），写入时由 store 统一赋同一个值。
+    //
+    // 为什么 reason 用条件 CHECK：只有 agent 源必须「说得清为什么成群」（不做
+    // 聪明的自动关联，凡自动成组必须有理由）；用户亲手保存的会话不需要理由 ——
+    // 他自己知道为什么。条件写在 CHECK 里而不是分两个列，是为了让「agent 源
+    // 理由非空」成为数据库不变量，应用层漏判也写不进脏数据。
+    // -----------------------------------------------------------------------
+    (
+        7,
+        r#"
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+        id         TEXT PRIMARY KEY,
+        source     TEXT NOT NULL CHECK(source IN ('user','agent')),
+        title      TEXT NOT NULL,
+        summary    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_updated_at
+        ON agent_sessions(updated_at DESC);
+
+    -- 一次会话用了哪些条目。单独建表而不是在 agent_sessions 里塞 JSON 数组，
+    -- 就是为了让 FOREIGN KEY 真正生效：条目被删时成员行自动消失。
+    -- position 从 1 开始：界面上的编号就是库里的编号，省掉所有 +1/-1 换算。
+    CREATE TABLE IF NOT EXISTS agent_session_items (
+        session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+        item_id    TEXT NOT NULL REFERENCES clipboard_items(id) ON DELETE CASCADE,
+        position   INTEGER NOT NULL,
+        source     TEXT NOT NULL CHECK(source IN ('user','agent')),
+        reason     TEXT CHECK (source <> 'agent' OR (reason IS NOT NULL AND length(trim(reason)) > 0)),
+        added_at   TEXT NOT NULL,
+        PRIMARY KEY (session_id, item_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_session_items_item
+        ON agent_session_items(item_id);
+
+    -- 最后一个成员也没了，这个会话就无从解释、也没有价值，一并删掉。做成触发器
+    -- 而不是在各处手写清理：删除条目的路径有四条（用户删除 / 清空 / 按条数淘汰 /
+    -- 按天过期），其中两条是自动跑的，用户看不见 —— 触发器让「会话不悬空」成为
+    -- 数据库不变量，将来新增删除路径也不会漏（照 trg_agent_runs_drop_orphans 同形）。
+    CREATE TRIGGER IF NOT EXISTS trg_agent_sessions_drop_orphans
+    AFTER DELETE ON agent_session_items
+    BEGIN
+        DELETE FROM agent_sessions
+        WHERE id = OLD.session_id
+          AND NOT EXISTS (SELECT 1 FROM agent_session_items WHERE session_id = OLD.session_id);
+    END;
+    "#,
+    ),
 ];
 
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<()> {
@@ -187,4 +247,47 @@ pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<()> {
     }
     tx.commit()?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 版本号必须严格递增且以 `CURRENT_SCHEMA_VERSION` 收尾。
+    ///
+    /// 写重复的版本号会让 `run_migrations` 静默跳过后面那一条（`schema_migrations`
+    /// 一行一个版本），建表语句就此永远不执行，而库里的版本号看着一切正常 ——
+    /// 这种错在真机上升级时才炸，所以在这里钉住。`MIGRATIONS` 是私有的，
+    /// 只能在模块内断言。
+    #[test]
+    fn migrations_are_strictly_increasing_and_cover_the_declared_version() {
+        for pair in MIGRATIONS.windows(2) {
+            assert!(
+                pair[0].0 < pair[1].0,
+                "迁移版本必须严格递增：{} 后面又出现了 {}",
+                pair[0].0,
+                pair[1].0
+            );
+        }
+        assert_eq!(
+            MIGRATIONS.last().map(|(version, _)| *version),
+            Some(CURRENT_SCHEMA_VERSION),
+            "最后一条迁移的版本号必须等于 CURRENT_SCHEMA_VERSION，否则全新的库拿不到最新 schema"
+        );
+    }
+
+    /// `CURRENT_SCHEMA_VERSION` 必须有真实的读取点：空库跑完迁移后，
+    /// 库里的版本号就该等于这个常量。
+    #[test]
+    fn fresh_database_reaches_the_declared_version() {
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        run_migrations(&mut conn).expect("跑迁移");
+
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .expect("读版本号");
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
 }

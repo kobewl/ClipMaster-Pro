@@ -1,7 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
-import type { AgentConfigInfo, AppSettings, UpdateStatus } from "@/types/clipboard";
+import type {
+  AgentConfigInfo,
+  AppSettings,
+  ClearDerivedDataResult,
+  UpdateStatus,
+} from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
 import {
@@ -83,9 +88,9 @@ export function SettingsPanel({
   const [agentSaving, setAgentSaving] = useState(false);
   const [agentEndpointSaving, setAgentEndpointSaving] = useState(false);
   const [agentTesting, setAgentTesting] = useState(false);
-  const [agentRunsClearing, setAgentRunsClearing] = useState(false);
-  /** 上一次清除删掉的条数（用于给出「真的删了」的反馈）。 */
-  const [agentRunsCleared, setAgentRunsCleared] = useState<number | null>(null);
+  const [agentDerivedClearing, setAgentDerivedClearing] = useState(false);
+  /** 上一次清除删掉的会话 / 使用记录条数（用于给出「真的删了」的反馈）。 */
+  const [agentDerivedCleared, setAgentDerivedCleared] = useState<ClearDerivedDataResult | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
   const [agentEndpointError, setAgentEndpointError] = useState<string | null>(null);
   const [agentNotice, setAgentNotice] = useState<string | null>(null);
@@ -134,7 +139,7 @@ export function SettingsPanel({
     setAgentEndpointError(null);
     setAgentNotice(null);
     setAgentEndpointOpen(false);
-    setAgentRunsCleared(null);
+    setAgentDerivedCleared(null);
     commands
       .getAgentConfig()
       .then((info) => {
@@ -369,25 +374,28 @@ export function SettingsPanel({
   }
 
   /**
-   * 清除 AI 使用记录。
+   * 清除所有 AI 派生数据（Flow 会话 + 使用记录）。
    *
-   * 审计表里只有元数据（哪条记录、哪个服务、花了多久），但「我用 AI 处理过哪些
-   * 内容」本身也是隐私，用户该能一键抹掉。剪贴板历史不受影响。
+   * 会话由本地记录算出、使用记录只有元数据，但「我用 AI 处理过哪些内容」「我最近
+   * 在忙什么」都是隐私，用户该能一键抹掉。两个数分别来自会话与审计各自的事务
+   * （关键判断 11），所以如实分报 —— 原始剪贴板记录一条不动。
    */
-  async function handleAgentRunsClear() {
+  async function handleAgentDerivedClear() {
     setAgentError(null);
     setAgentNotice(null);
-    setAgentRunsClearing(true);
+    setAgentDerivedClearing(true);
     try {
-      const removed = await commands.clearAgentRuns();
-      setAgentRunsCleared(removed);
+      const removed = await commands.clearAgentDerivedData();
+      setAgentDerivedCleared(removed);
       setAgentNotice(
-        removed > 0 ? `已清除 ${removed} 条使用记录 ✓` : "没有使用记录需要清除。",
+        removed.sessions > 0 || removed.runs > 0
+          ? `已清除 ${removed.sessions} 个会话、${removed.runs} 条使用记录 ✓`
+          : "没有 AI 派生数据需要清除。",
       );
     } catch (err: unknown) {
-      setAgentError(isCommandError(err) ? err.message : "清除使用记录失败");
+      setAgentError(isCommandError(err) ? err.message : "清除 AI 派生数据失败");
     } finally {
-      setAgentRunsClearing(false);
+      setAgentDerivedClearing(false);
     }
   }
 
@@ -665,20 +673,22 @@ export function SettingsPanel({
             Key 只存进 macOS 钥匙串，不写进本应用的数据库、日志或崩溃报告；AI 动作发送的是你选中的那一条内容本身。
           </p>
 
-          {/* 使用记录：只存元数据，但"我用 AI 处理过哪些内容"也是隐私，可一键抹掉。 */}
+          {/* AI 派生数据：会话 + 使用记录。只存元数据，但"我用 AI 处理过哪些内容"
+              也是隐私，可以一键全抹掉；原始剪贴板记录不受影响。 */}
           <div className="mt-2 flex items-center gap-1.5">
             <button
               type="button"
-              onClick={handleAgentRunsClear}
-              disabled={agentRunsClearing}
+              onClick={handleAgentDerivedClear}
+              disabled={agentDerivedClearing}
               className="button button--secondary button--compact"
             >
-              {agentRunsClearing ? "清除中…" : "清除 AI 使用记录"}
+              {agentDerivedClearing ? "清除中…" : "清除所有 AI 派生数据"}
             </button>
             <span className="text-[10px] text-[var(--cm-fg-faint)]">
-              {agentRunsCleared !== null && agentRunsCleared > 0
-                ? `上次清除了 ${agentRunsCleared} 条`
-                : "只记录用了哪条、哪个模型、耗时；不存内容本身"}
+              {agentDerivedCleared !== null &&
+              (agentDerivedCleared.sessions > 0 || agentDerivedCleared.runs > 0)
+                ? `上次清除了 ${agentDerivedCleared.sessions} 个会话、${agentDerivedCleared.runs} 条使用记录`
+                : "清空会话与使用记录；不删任何剪贴板历史，也不存内容本身"}
             </span>
           </div>
 

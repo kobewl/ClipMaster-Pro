@@ -9,6 +9,7 @@ import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PreviewDialog } from "@/components/PreviewDialog";
 import { AgentBatchDialog } from "@/components/AgentBatchDialog";
+import { AgentFlowDialog } from "@/components/AgentFlowDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -37,6 +38,8 @@ export default function App() {
   const [multiSelect, setMultiSelect] = useState(false);
   /** 多条目 AI 工作台是否打开。 */
   const [agentBatchOpen, setAgentBatchOpen] = useState(false);
+  /** Flow 会话工作台是否打开。 */
+  const [agentFlowOpen, setAgentFlowOpen] = useState(false);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const toastTimerRef = useRef<number | null>(null);
@@ -237,7 +240,25 @@ export default function App() {
     }
   }, [canMerge, merged.text, exitMultiSelect, recoverFromPasteFailure]);
 
-  // Esc 的优先级：预览弹窗 → 多选 → 设置面板 → 清空确认 → 清空搜索词。
+  /**
+   * 把当前勾选的这批记录手动存成一个会话（Flow）。
+   *
+   * 存完**不打开工作台**：用户还在多选流程里，跳走等于把他打断。提示里告诉他
+   * 去哪儿看（状态栏「会话」），他自己决定什么时候去。
+   */
+  const handleSaveAgentSession = useCallback(async () => {
+    if (selectedIds.size < 2) return;
+    try {
+      await commands.createAgentSession([...selectedIds]);
+      exitMultiSelect();
+      showToast("已保存为会话（在状态栏「会话」里查看）");
+    } catch (error) {
+      showToast(isCommandError(error) ? error.message : "保存会话失败");
+    }
+  }, [selectedIds, exitMultiSelect, showToast]);
+
+  // Esc 的优先级：预览弹窗 → AI 归纳 → 会话工作台 → 多选 → 设置面板 →
+  // 清空确认 → 清空搜索词。走完一档就停，不会一次把好几层都关掉。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
@@ -245,6 +266,8 @@ export default function App() {
         setPreviewId(null);
       } else if (agentBatchOpen) {
         setAgentBatchOpen(false);
+      } else if (agentFlowOpen) {
+        setAgentFlowOpen(false);
       } else if (multiSelect) {
         exitMultiSelect();
       } else if (settingsOpen) {
@@ -257,7 +280,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen]);
+  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen, agentFlowOpen]);
 
   // 列表刷新（删除、换分组）后把已不存在的 id 从选择集里摘掉，
   // 否则底部会显示「已选 3 条」而列表里只有 2 条被勾上。
@@ -432,6 +455,8 @@ export default function App() {
           onCopyMerged={handleCopyMerged}
           onPasteMerged={handlePasteMerged}
           onRunAgentBatch={() => setAgentBatchOpen(true)}
+          onSaveAgentSession={() => void handleSaveAgentSession()}
+          onOpenAgentFlow={() => setAgentFlowOpen(true)}
         />
       </section>
 
@@ -477,6 +502,9 @@ export default function App() {
           setSettingsOpen(true);
         }}
       />
+
+      {/* 会话工作台：打开那一次会触发服务端重算（关键判断 10）。 */}
+      <AgentFlowDialog open={agentFlowOpen} onClose={() => setAgentFlowOpen(false)} />
 
       <PreviewDialog
         item={previewItem}

@@ -5,7 +5,10 @@ import type {
   AgentConfigInfo,
   AgentResult,
   AgentRun,
+  AgentSessionDetail,
+  AgentSessionSummary,
   ClipGroup,
+  ClearDerivedDataResult,
   ClipboardItem,
   ListQuery,
   ListResult,
@@ -156,6 +159,34 @@ export const commands = {
   /** 清空使用记录，返回删掉的条数。 */
   clearAgentRuns(): Promise<number> {
     return invoke("clear_agent_runs");
+  },
+
+  // Flow 会话（Phase 1 第 3 步）：纯本地派生数据，不调模型、不发网络请求。
+  /**
+   * 会话列表，新的在前。
+   *
+   * **带重算副作用**（关键判断 10）：打开工作台的那一次调用会在服务端先按
+   * 「最近 3 天 ∩ 最近 200 条」重算一遍再返回。这是「会话只在用户打开工作台时
+   * 计算」的落地点 —— 不是刷新缓存，而是这次调用本身会写派生表（幂等）。
+   */
+  listAgentSessions(): Promise<AgentSessionSummary[]> {
+    return invoke("list_agent_sessions");
+  },
+  /** 会话详情；会话已随它最后一条成员被删掉时返回 `null`（不是错误）。 */
+  getAgentSession(id: string): Promise<AgentSessionDetail | null> {
+    return invoke("get_agent_session", { id });
+  },
+  /** 用户显式保存一次会话（多选 ≥2 条 →「存为会话」）。不重算，不覆盖他的选择。 */
+  createAgentSession(itemIds: string[]): Promise<AgentSessionDetail> {
+    return invoke("create_agent_session", { request: { item_ids: itemIds } });
+  },
+  /** 删一条会话，返回是否真的删掉了（`false` = 已经不在了，同样不是错误）。 */
+  deleteAgentSession(id: string): Promise<boolean> {
+    return invoke("delete_agent_session", { id });
+  },
+  /** 一键清除所有 AI 派生数据（会话 + 使用记录）；原始剪贴板记录不受影响。 */
+  clearAgentDerivedData(): Promise<ClearDerivedDataResult> {
+    return invoke("clear_agent_derived_data");
   },
 };
 

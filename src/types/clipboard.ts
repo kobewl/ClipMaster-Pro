@@ -166,6 +166,68 @@ export function formatRunDuration(ms: number): string {
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`;
 }
 
+// ---------------------------------------------------------------------------
+//  Flow 会话（Phase 1 第 3 步）
+// ---------------------------------------------------------------------------
+
+/** 会话来源：`user` 是用户亲手存的，`agent` 是本地按时间/来源/词算出来的。 */
+export type AgentSessionSource = "user" | "agent";
+
+/** 列表里的一条会话（没有成员，只有概览）。 */
+export interface AgentSessionSummary {
+  id: string;
+  source: AgentSessionSource;
+  title: string;
+  /** 一句话摘要：本地拼接的时段 / 来源 / 共享词，不含模型产出。 */
+  summary: string;
+  created_at: string;
+  updated_at: string;
+  item_count: number;
+}
+
+/** 详情里的一条成员。 */
+export interface AgentSessionMember {
+  item: ClipboardItem;
+  /** 会话内编号，从 1 开始 —— 界面上的编号就是库里的编号（关键判断 12）。 */
+  position: number;
+  /**
+   * 这条为什么在会话里。`null` = 用户手动保存（他为什么把它们放在一起，
+   * 不需要机器解释），**不是**「理由缺失」—— 三态里 null 是有意义的一态。
+   */
+  reason: string | null;
+}
+
+/**
+ * 会话详情。
+ *
+ * **没有 `item_count`**：详情的条数就是 `members.length`，多一个字段就多一处
+ * 可能与成员列表对不上的地方（与后端 DTO 的形状一致）。
+ */
+export interface AgentSessionDetail {
+  id: string;
+  source: AgentSessionSource;
+  title: string;
+  summary: string;
+  created_at: string;
+  updated_at: string;
+  members: AgentSessionMember[];
+}
+
+/** 一键清除 AI 派生数据的结果：会话与使用记录各自删掉了多少条。 */
+export interface ClearDerivedDataResult {
+  sessions: number;
+  runs: number;
+}
+
+/**
+ * 一个会话最多多少条（与后端 `SESSION_MAX_ITEMS` 保持一致）。
+ *
+ * **同源风险**：这里与 `session_build::SESSION_MAX_ITEMS` 是两份值，改一边必须
+ * 改另一边 —— 后端那个 20 直接引用 `MAX_AGENT_INPUT_ITEMS`（同一次批量归纳的
+ * 上限），所以这个数也只能跟着它一起动。照 `MAX_AGENT_INPUT_ITEMS` 的先例。
+ */
+export const MAX_SESSION_ITEMS = 20;
+
 export function isCommandError(value: unknown): value is CommandError {
   return (
     typeof value === "object" &&

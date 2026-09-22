@@ -24,6 +24,10 @@ interface StatusBarProps {
   onPasteMerged: () => void;
   /** 打开多条目 AI 工作台（把选中的这一批交给模型归纳）。 */
   onRunAgentBatch: () => void;
+  /** 把这批选中的记录手动存成一个会话（Flow）。 */
+  onSaveAgentSession: () => void;
+  /** 打开 Flow 会话工作台。 */
+  onOpenAgentFlow: () => void;
 }
 
 import { Icon } from "./Icon";
@@ -52,6 +56,8 @@ export function StatusBar({
   onCopyMerged,
   onPasteMerged,
   onRunAgentBatch,
+  onSaveAgentSession,
+  onOpenAgentFlow,
 }: StatusBarProps) {
   if (multiSelect) {
     return (
@@ -75,6 +81,19 @@ export function StatusBar({
         <div className="batch-actions">
           <button type="button" onClick={onCancelMultiSelect} className="batch-ghost">
             取消
+          </button>
+          <button
+            type="button"
+            onClick={onSaveAgentSession}
+            disabled={selectedCount < 2}
+            title={
+              selectedCount < 2
+                ? "会话至少要 2 条记录"
+                : "把这批记录手动存成一个会话"
+            }
+            className="button button--secondary button--compact"
+          >
+            存为会话
           </button>
           <button
             type="button"
@@ -149,6 +168,15 @@ export function StatusBar({
             多选
           </button>
         )}
+        <button
+          type="button"
+          onClick={onOpenAgentFlow}
+          title="查看按时间与来源归组的会话"
+          className="status-action"
+        >
+          <Icon name="clock" className="h-3 w-3" />
+          会话
+        </button>
         <button
           type="button"
           onClick={onClearHistory}

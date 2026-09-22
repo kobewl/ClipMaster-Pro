@@ -691,6 +691,15 @@ button {
 .agent-batch__preview-more { padding: 3px 0; color: var(--cm-fg-faint); font-size: 10px; }
 
 /* ---------------------------------------------------------------------------
+   Flow 会话工作台（Phase 1 第 3 步）：单栏两级（列表 → 详情）
+--------------------------------------------------------------------------- */
+
+.flow-card { width: min(520px, calc(100vw - 32px)); }
+.flow-list { margin: 6px 0 0; padding: 0; list-style: none; }
+.flow-member { display: flex; gap: 8px; border-top: 1px solid var(--cm-line); padding: 8px 0; }
+.flow-reason { margin: 3px 0 0; color: var(--cm-fg-muted); font-size: 10px; line-height: 15px; }
+
+/* ---------------------------------------------------------------------------
    图片缩放（规范 8.5）
 --------------------------------------------------------------------------- */
 

@@ -175,6 +175,10 @@ impl From<AppSettingsDto> for AppSettings {
 pub struct RunAgentActionDto {
     pub item_id: String,
     pub action: AgentAction,
+    /// 前端预置的请求号（`crypto.randomUUID()`）。缺省时后端自己生成 ——
+    /// 老版本前端与测试不必跟着改。有号才能定向取消，见 agent_service。
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 /// 多条内容一起跑一个动作（跨记录归纳）。
@@ -187,6 +191,9 @@ pub struct RunAgentActionDto {
 pub struct RunAgentActionBatchDto {
     pub item_ids: Vec<String>,
     pub action: AgentAction,
+    /// 同 `RunAgentActionDto::request_id`。
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

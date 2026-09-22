@@ -95,16 +95,32 @@ export const commands = {
   },
 
   // Agent：后端按 item ID 读取内容并执行本地安全检查，前端不直接请求模型。
-  runAgentAction(itemId: string, action: AgentAction): Promise<AgentResult> {
-    return invoke("run_agent_action", { request: { item_id: itemId, action } });
+  /**
+   * requestId 由前端生成（crypto.randomUUID）而不是后端：invoke 要等请求结束
+   * 才返回，后端在请求开始时才生成的号前端在取消时拿不到。前端在发起那一刻
+   * 就握着它 —— 取消、关窗清理、过期响应守卫用的都是同一个号。
+   */
+  runAgentAction(itemId: string, action: AgentAction, requestId: string): Promise<AgentResult> {
+    return invoke("run_agent_action", {
+      request: { item_id: itemId, action, request_id: requestId },
+    });
   },
   /** 多条内容一次归纳。内容同样只能由已保存的条目 ID 提供。 */
-  runAgentActionBatch(itemIds: string[], action: AgentAction): Promise<AgentResult> {
-    return invoke("run_agent_action_batch", { request: { item_ids: itemIds, action } });
+  runAgentActionBatch(
+    itemIds: string[],
+    action: AgentAction,
+    requestId: string,
+  ): Promise<AgentResult> {
+    return invoke("run_agent_action_batch", {
+      request: { item_ids: itemIds, action, request_id: requestId },
+    });
   },
-  /** 取消进行中的 AI 请求；返回是否确有请求被取消。 */
-  cancelAgentAction(): Promise<boolean> {
-    return invoke("cancel_agent_action");
+  /**
+   * 按号取消进行中的 AI 请求；返回是否确有请求被取消。
+   * 号不匹配时后端返回 false 且不打断任何请求 —— 不会取消错对象。
+   */
+  cancelAgentAction(requestId: string): Promise<boolean> {
+    return invoke("cancel_agent_action", { requestId });
   },
   /** 读取模型配置快照（掩码，不含密钥本体）。 */
   getAgentConfig(): Promise<AgentConfigInfo> {

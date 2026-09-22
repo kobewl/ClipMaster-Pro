@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AgentAction, AgentResult, ClipboardItem } from "@/types/clipboard";
 import { MAX_AGENT_INPUT_ITEMS, isCommandError, supportsBatch } from "@/types/clipboard";
 import { commands } from "@/lib/commands";
@@ -28,6 +28,11 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
   const [errorCode, setErrorCode] = useState<string | null>(null);
   const [running, setRunning] = useState<AgentAction | null>(null);
   const [copied, setCopied] = useState(false);
+  /**
+   * 在途请求的号（没有在途请求时为 null）。与 PreviewDialog 同一套模式：
+   * 取消按号定向，过期响应守卫挡住关窗后迟到的结果。
+   */
+  const activeRunRef = useRef<string | null>(null);
 
   // 每次打开都从干净状态开始；关掉再打开不该看到上一次的结果。
   useEffect(() => {
@@ -37,6 +42,22 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
     setErrorCode(null);
     setRunning(null);
     setCopied(false);
+  }, [open]);
+
+  /**
+   * 面板关掉（open 变 false）或卸载时，取消还在飞的请求：用户已经不看结果了，
+   * 让它在后台跑完等于白花一次钱。`if (!open) return;` 放在 effect 体开头 ——
+   * 这样清理函数只在面板**曾经打开**过的那一轮注册，关窗和卸载两条路径都能走到。
+   */
+  useEffect(() => {
+    if (!open) return;
+    return () => {
+      const requestId = activeRunRef.current;
+      if (!requestId) return;
+      activeRunRef.current = null;
+      // 取消失败不致命：请求会自然结束，过期响应守卫会挡住它的结果。
+      void commands.cancelAgentAction(requestId).catch(() => {});
+    };
   }, [open]);
 
   if (!open) return null;
@@ -51,6 +72,8 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
 
   async function handleRun(action: AgentAction) {
     if (running) return;
+    const requestId = crypto.randomUUID();
+    activeRunRef.current = requestId;
     setRunning(action);
     setError(null);
     setErrorCode(null);
@@ -60,8 +83,12 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
     setResult(null);
     try {
       const ids = items.map((item) => item.id);
-      setResult(await commands.runAgentActionBatch(ids, action));
+      const result = await commands.runAgentActionBatch(ids, action, requestId);
+      // 过期响应守卫：面板已经关掉（或已经取消）之后回来的结果不许渲染。
+      if (activeRunRef.current !== requestId) return;
+      setResult(result);
     } catch (err: unknown) {
+      if (activeRunRef.current !== requestId) return;
       if (isCommandError(err)) {
         setError(err.message);
         setErrorCode(err.code);
@@ -69,7 +96,11 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
         setError("AI 操作失败，请稍后重试。");
       }
     } finally {
-      setRunning(null);
+      // 只有"还是这次请求"才收尾；过期的请求由关窗那一轮负责清状态。
+      if (activeRunRef.current === requestId) {
+        activeRunRef.current = null;
+        setRunning(null);
+      }
     }
   }
 
@@ -84,12 +115,15 @@ export function AgentBatchDialog({ open, items, onClose, onOpenSettings }: Props
   }
 
   /**
-   * 取消进行中的请求。取消后后端让那次请求以 `ai_cancelled` 结束，
-   * 「已取消本次请求。」会走正常错误路径显示出来。
+   * 取消进行中的请求。带号取消：后端只取消号匹配的那一次。
+   * 取消后后端让那次请求以 `ai_cancelled` 结束，「已取消本次请求。」
+   * 会走正常错误路径显示出来。
    */
   async function handleCancel() {
+    const requestId = activeRunRef.current;
+    if (!requestId) return;
     try {
-      await commands.cancelAgentAction();
+      await commands.cancelAgentAction(requestId);
     } catch {
       // 取消失败不致命：请求会自然结束，错误路径会正常显示
     }

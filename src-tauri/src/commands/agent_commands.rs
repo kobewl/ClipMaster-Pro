@@ -99,11 +99,15 @@ pub async fn get_agent_run(
 }
 
 /// 取消进行中的 AI 请求；返回是否确有请求被取消。
+///
+/// **必须带号**：只取消号匹配的那个请求，号对不上返回 false 且不打断任何东西。
+/// 这样即便将来多个请求并存，用户按的「取消」也只会落在自己发起的那一次上。
 #[tauri::command]
 pub async fn cancel_agent_action(
     runtime: State<'_, AppRuntime>,
+    request_id: String,
 ) -> Result<bool, CommandError> {
-    Ok(runtime.agent.cancel())
+    Ok(runtime.agent.cancel(&request_id))
 }
 
 impl From<AgentRunRecord> for AgentRunDto {

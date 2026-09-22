@@ -23,9 +23,12 @@ pub async fn run_agent_action(
     runtime: State<'_, AppRuntime>,
     request: RunAgentActionDto,
 ) -> Result<crate::application::agent_service::AgentResult, CommandError> {
-    runtime.agent.run(&request.item_id, request.action).await.map_err(|err| {
-        CommandError::new(err.code(), err.to_string(), err.retryable())
-    })
+    runtime
+        .agent
+        // 号由前端预置：它要在取消、关窗清理、过期响应守卫三处用的是同一个号。
+        .run_with_request_id(&request.item_id, request.action, request.request_id)
+        .await
+        .map_err(|err| CommandError::new(err.code(), err.to_string(), err.retryable()))
 }
 
 /// 多条内容一起跑一个动作（跨记录归纳）。
@@ -36,7 +39,7 @@ pub async fn run_agent_action_batch(
 ) -> Result<crate::application::agent_service::AgentResult, CommandError> {
     runtime
         .agent
-        .run_many(&request.item_ids, request.action)
+        .run_many_with_request_id(&request.item_ids, request.action, request.request_id)
         .await
         .map_err(|err| CommandError::new(err.code(), err.to_string(), err.retryable()))
 }

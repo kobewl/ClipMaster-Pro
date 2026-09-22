@@ -206,6 +206,10 @@ pub enum AgentError {
     Busy,
     #[error("上一次请求刚刚发出，请间隔一小会儿再试。")]
     Cooldown,
+    /// 请求号不合法。这是**调用方的 bug**（号由前端生成、只允许
+    /// `[A-Za-z0-9_-]`），不是用户能修的问题，所以不引导重试。
+    #[error("请求号不合法：{0}")]
+    InvalidRequestId(String),
     /// 用户主动取消。与其它错误不同：这不是故障，是用户的选择，
     /// 所以界面不该引导他"重试"，也不该把它当成需要排查的问题。
     #[error("已取消本次请求。")]
@@ -235,6 +239,7 @@ impl AgentError {
             Self::RunStoreUnavailable(_) => "ai_run_store_unavailable",
             Self::Busy => "ai_busy",
             Self::Cooldown => "ai_cooldown",
+            Self::InvalidRequestId(_) => "ai_invalid_request_id",
             Self::Cancelled => "ai_cancelled",
         }
     }
@@ -319,7 +324,10 @@ pub struct AgentService {
     last_started: std::sync::Mutex<Option<std::time::Instant>>,
     /// 进行中请求的取消通道。单飞闸门保证同一时刻最多一个请求，
     /// 所以一个槽位就够 —— 第二个槽位没有意义，还会让"取消谁"变得含糊。
-    cancel: std::sync::Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    ///
+    /// 槽位里存的是 `(request_id, sender)`：取消必须**报号**，号对不上就
+    /// 什么都不做。将来即便允许多个请求并存，按号定向取消也不会取消错对象。
+    cancel: std::sync::Mutex<Option<(String, tokio::sync::oneshot::Sender<()>)>>,
 }
 
 impl AgentService {
@@ -352,18 +360,22 @@ impl AgentService {
         self
     }
 
-    /// 取消进行中的模型请求。返回是否确有请求被取消（空闲时为 false，无害）。
+    /// 按请求号取消进行中的模型请求，返回是否确有请求被取消。
     ///
-    /// 取消通道只存一个槽位：单飞闸门保证同一时刻最多一个请求，
-    /// 第二个槽位没有意义。
-    pub fn cancel(&self) -> bool {
-        match self.cancel.lock().expect("取消锁").take() {
-            Some(tx) => {
-                let _ = tx.send(());
-                true
-            }
-            None => false,
+    /// **号不匹配一律返回 false 且不动槽位**：取消是破坏性动作，宁可少取消一次，
+    /// 也不能把另一个请求打断 —— 用户按的是"取消这次"，不是"取消随便哪个"。
+    /// 号由前端在发起时生成并握在手里（见 `run_with_request_id` 的说明）。
+    pub fn cancel(&self, request_id: &str) -> bool {
+        let mut slot = self.cancel.lock().expect("取消锁");
+        // 先只看不动：号不匹配时槽位必须原封不动（否则下一个请求会没了取消通道）。
+        let matched = matches!(slot.as_ref(), Some((id, _)) if id == request_id);
+        if !matched {
+            return false;
         }
+        let (_, tx) = slot.take().expect("刚刚匹配过");
+        // send 失败 = 接收端已随请求结束而丢弃，此时没有「进行中的请求」，
+        // 按契约返回 false。
+        tx.send(()).is_ok()
     }
 
     /// 生效配置：用户设置 → 环境变量 → 内置默认值。
@@ -508,7 +520,22 @@ impl AgentService {
 
     /// 单条内容的 AI 动作（Phase 0 契约，行为不变）。
     pub async fn run(&self, item_id: &str, action: AgentAction) -> Result<AgentResult, AgentError> {
-        self.run_items(&[item_id.to_string()], action, InputMode::Single)
+        self.run_with_request_id(item_id, action, None).await
+    }
+
+    /// 单条内容的 AI 动作，允许调用方（命令层）预置请求号。
+    ///
+    /// 号由**前端生成**而不是后端：invoke 要等请求结束才返回，后端在请求开始时
+    /// 才生成的号前端在取消时根本拿不到。前端在发起的那一刻就握着它，取消、
+    /// 关窗清理、过期响应守卫才能用同一个号；后端把这个号用作审计主键，
+    /// 「界面手里的号 == 审计行的主键」这条不变量因此继续成立。
+    pub async fn run_with_request_id(
+        &self,
+        item_id: &str,
+        action: AgentAction,
+        request_id: Option<String>,
+    ) -> Result<AgentResult, AgentError> {
+        self.run_items(&[item_id.to_string()], action, InputMode::Single, request_id)
             .await
     }
 
@@ -518,7 +545,18 @@ impl AgentService {
         item_ids: &[String],
         action: AgentAction,
     ) -> Result<AgentResult, AgentError> {
-        self.run_items(item_ids, action, InputMode::Batch).await
+        self.run_many_with_request_id(item_ids, action, None).await
+    }
+
+    /// 多条内容的 AI 动作，允许调用方预置请求号（理由同 `run_with_request_id`）。
+    pub async fn run_many_with_request_id(
+        &self,
+        item_ids: &[String],
+        action: AgentAction,
+        request_id: Option<String>,
+    ) -> Result<AgentResult, AgentError> {
+        self.run_items(item_ids, action, InputMode::Batch, request_id)
+            .await
     }
 
     async fn run_items(
@@ -526,7 +564,15 @@ impl AgentService {
         item_ids: &[String],
         action: AgentAction,
         mode: InputMode,
+        request_id: Option<String>,
     ) -> Result<AgentResult, AgentError> {
+        // 校验放在闸门之前：号不合法是调用方 bug，不该占用单飞闸门，
+        // 也不该留下审计（审计行只有合法号才写得进去）。
+        let request_id = match request_id {
+            Some(raw) => validate_request_id(&raw).map_err(AgentError::InvalidRequestId)?,
+            None => uuid::Uuid::new_v4().to_string(),
+        };
+
         // 闸门在创建 RunAudit / request_id 之前：被拦下的连点不留审计。
         // 这里只**检查**冷却，登记要等真正发出请求时（见 run_inner）——
         // 本地门禁拦下的请求什么都没发出去，不该消耗冷却。
@@ -543,13 +589,18 @@ impl AgentService {
         let started = std::time::Instant::now();
         let mut audit = RunAudit {
             // 先定号：结果卡片要显示它，审计也要用它当主键。
-            request_id: Some(uuid::Uuid::new_v4().to_string()),
+            request_id: Some(request_id.clone()),
+            // 预填用户选中的条目。run_inner 稍后会用**实际送进 prompt** 的那批
+            // 覆盖它，但取消可能落在「槽位已挂、run_inner 还没被 poll」的窗口 ——
+            // 那时若不预填，审计行会因为一个条目都没有而被 store 丢掉，
+            // 「取消总有审计」就不成立了。
+            input_item_ids: item_ids.to_vec(),
             ..Default::default()
         };
         // 挂上取消通道再进 select：用户点取消时，run_inner 会**被真的丢掉**
         // （不是等它自己超时），request_id 已经定好，取消这件事才有号可查。
         let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
-        *self.cancel.lock().expect("取消锁") = Some(cancel_tx);
+        *self.cancel.lock().expect("取消锁") = Some((request_id, cancel_tx));
         let result = tokio::select! {
             res = self.run_inner(item_ids, &action, mode, &mut audit) => res,
             _ = cancel_rx => Err(AgentError::Cancelled),
@@ -834,6 +885,30 @@ fn env_model() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+/// 请求号的格式门禁。号由前端生成（`crypto.randomUUID()`），后端只做形状校验：
+/// trim 后非空、不超过 64 字符、只含 `[A-Za-z0-9_-]`。
+///
+/// 之所以要卡一道：这个号会成为审计表的主键，也是"取消哪一个请求"的凭据。
+/// 放开任意字符串等于把主键交给调用方随意涂抹 —— 中文、空格、超长串进到库里，
+/// 排查问题时连肉眼比对都做不了。校验同样**不做 trim 之外的规范化**：
+/// 界面手里的号必须原样等于审计行的主键，多一步改写就破坏了这条不变量。
+fn validate_request_id(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("请求号不能为空。".to_string());
+    }
+    if trimmed.chars().count() > 64 {
+        return Err("请求号最长 64 个字符。".to_string());
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err("请求号只能包含字母、数字、下划线和连字符。".to_string());
+    }
+    Ok(trimmed.to_string())
 }
 
 /// 校验并规范化服务地址。地址决定剪贴板内容发往哪里，必须严把关。
@@ -1128,15 +1203,42 @@ mod tests {
     }
 
     #[test]
+    fn request_id_validation_accepts_uuid_like_ids() {
+        // 前端用 crypto.randomUUID() 生成，形如 550e8400-e29b-41d4-a716-446655440000。
+        let uuid = "550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(validate_request_id(uuid).unwrap(), uuid);
+        assert_eq!(validate_request_id("  req-test-abc_123  ").unwrap(), "req-test-abc_123");
+        assert!(validate_request_id(&"x".repeat(64)).is_ok(), "正好 64 字符应当放行");
+    }
+
+    #[test]
+    fn request_id_validation_rejects_obvious_mistakes() {
+        assert!(validate_request_id("").is_err(), "空值");
+        assert!(validate_request_id("   ").is_err(), "全空白");
+        assert!(validate_request_id("含中文号").is_err(), "非 ASCII");
+        assert!(validate_request_id("space id").is_err(), "含空格");
+        assert!(validate_request_id("semi;colon").is_err(), "含标点");
+        assert!(validate_request_id(&"x".repeat(65)).is_err(), "超过 64 字符");
+    }
+
+    #[test]
     fn error_codes_are_stable_and_retryable_flags_match() {
         // 前端按 code 分派引导文案，改动这里等于改 API 契约。
         assert_eq!(AgentError::NotConfigured.code(), "ai_not_configured");
         assert_eq!(AgentError::Unauthorized.code(), "ai_unauthorized");
         assert_eq!(AgentError::InsufficientBalance.code(), "ai_insufficient_balance");
         assert_eq!(AgentError::RateLimited.code(), "ai_rate_limited");
+        assert_eq!(
+            AgentError::InvalidRequestId("bad".to_string()).code(),
+            "ai_invalid_request_id"
+        );
 
         assert!(AgentError::RateLimited.retryable());
         assert!(!AgentError::Unauthorized.retryable(), "Key 无效重试多少次都没用");
         assert!(!AgentError::InsufficientBalance.retryable());
+        assert!(
+            !AgentError::InvalidRequestId("bad".to_string()).retryable(),
+            "号不合法是调用方 bug，重试不会变好"
+        );
     }
 }

@@ -73,6 +73,15 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
   const [runningAction, setRunningAction] = useState<AgentAction | null>(null);
   const [copiedResult, setCopiedResult] = useState(false);
   /**
+   * 在途请求的号（没有在途请求时为 null）。
+   *
+   * 两个用途，都依赖"号在发起时就已经在前端手里"这一点：
+   * 1. 取消：按号定向取消，号对不上后端不会打断任何请求。
+   * 2. 过期响应守卫：换了条目/关了弹窗之后，迟到回来的结果不能再渲染 ——
+   *    否则上一条内容的结果会挂在新条目上，用户看到的是张冠李戴。
+   */
+  const activeRunRef = useRef<string | null>(null);
+  /**
    * 当前配的服务名。面板标题原来硬编码 "DeepSeek"，用户把地址改成中转站
    * 或本地 Ollama 之后就成了假信息 —— 内容发去了哪里必须如实显示。
    */
@@ -95,6 +104,24 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     setAgentErrorCode(null);
     setRunningAction(null);
     setCopiedResult(false);
+  }, [item]);
+
+  /**
+   * 换条目（以及卸载：关弹窗时 App.tsx 把 item 置空/摘掉组件）时，把还在飞的
+   * 请求取消掉。两条理由：用户已经不打算看这次结果了 —— 让它在后台跑完等于
+   * 白计费；而结果真回来也没地方显示，只会变成串台隐患。
+   *
+   * 先清 ref 再发取消：清理函数可能因为 item 切换而再次进入，ref 空了就不会
+   * 重复发一轮取消。
+   */
+  useEffect(() => {
+    return () => {
+      const requestId = activeRunRef.current;
+      if (!requestId) return;
+      activeRunRef.current = null;
+      // 取消失败不致命：请求会自然结束，过期响应守卫会挡住它的结果。
+      void commands.cancelAgentAction(requestId).catch(() => {});
+    };
   }, [item]);
 
   const meta = useMemo(() => {
@@ -145,13 +172,20 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
 
   async function handleAgentAction(action: AgentAction) {
     if (!item || runningAction) return;
+    const requestId = crypto.randomUUID();
+    activeRunRef.current = requestId;
     setRunningAction(action);
     setAgentError(null);
     setAgentErrorCode(null);
     setCopiedResult(false);
     try {
-      setAgentResult(await commands.runAgentAction(item.id, action));
+      const result = await commands.runAgentAction(item.id, action, requestId);
+      // 过期响应守卫：换了条目（或已经取消）之后回来的结果不许渲染。
+      if (activeRunRef.current !== requestId) return;
+      setAgentResult(result);
     } catch (error) {
+      // 失败路径同样要守卫：否则上一条内容的报错会挂在新条目上。
+      if (activeRunRef.current !== requestId) return;
       if (isCommandError(error)) {
         setAgentError(error.message);
         setAgentErrorCode(error.code);
@@ -159,7 +193,11 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
         setAgentError("AI 操作失败，请稍后重试。");
       }
     } finally {
-      setRunningAction(null);
+      // 只有"还是这次请求"才收尾；否则说明它已经过期，状态归零由新条目负责。
+      if (activeRunRef.current === requestId) {
+        activeRunRef.current = null;
+        setRunningAction(null);
+      }
     }
   }
 
@@ -174,12 +212,16 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
   }
 
   /**
-   * 取消进行中的请求。后端会把那次请求以 `ai_cancelled` 结束，
-   * 所以这里不用自己造错误文案 —— 正常错误路径会把「已取消本次请求。」显示出来。
+   * 取消进行中的请求。带上在途请求的号 —— 后端只取消号匹配的那一次。
+   * 后端会把那次请求以 `ai_cancelled` 结束，所以这里不用自己造错误文案：
+   * 正常错误路径会把「已取消本次请求。」显示出来（ref 里仍是这个号，
+   * 守卫不会把它挡掉）。
    */
   async function handleCancelAction() {
+    const requestId = activeRunRef.current;
+    if (!requestId) return;
     try {
-      await commands.cancelAgentAction();
+      await commands.cancelAgentAction(requestId);
     } catch {
       // 取消失败不致命：请求会自然结束，错误路径会正常显示
     }

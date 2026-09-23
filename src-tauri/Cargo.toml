@@ -1,6 +1,6 @@
 [package]
 name = "clipmaster-pro"
-version = "1.1.0"
+version = "1.2.0"
 description = "ClipMaster Pro 0.01 Beta - 轻量级本地优先剪贴板助手"
 authors = ["ClipMaster Pro"]
 license = "MIT"

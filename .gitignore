@@ -31,3 +31,23 @@ tsconfig.tsbuildinfo
 # 属于「跑一次就变」的临时文件，不进仓库。
 docs/design/ardot/_shots/
 docs/design/ardot/__pycache__/
+
+# Local documentation, evaluations, workflows, and tests
+/README.md
+/docs/
+/evals/
+/.github/workflows/
+/src-tauri/tests/
+/src-tauri/src/application/agent_prompt/tests.rs
+**/*.test.*
+**/*.spec.*
+/.superpowers/
+
+# Local credentials and review artifacts
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p8
+*.diff

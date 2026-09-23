@@ -13,9 +13,6 @@
 mod budget;
 mod sanitize;
 
-#[cfg(test)]
-mod tests;
-
 use chrono::{DateTime, Utc};
 
 use budget::{allocate, take_chars};

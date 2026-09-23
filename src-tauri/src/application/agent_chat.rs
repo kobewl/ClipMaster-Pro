@@ -300,11 +300,13 @@ async fn run_tool_loop(
             agent,
             app,
             request_id,
-            &config.base_url,
-            &config.model,
-            &api_key,
-            &provider,
-            &messages,
+            CompletionCall {
+                base_url: &config.base_url,
+                model: &config.model,
+                api_key: &api_key,
+                provider: &provider,
+                messages: &messages,
+            },
         )
         .await?;
         if tools.is_empty() {
@@ -377,38 +379,43 @@ fn tool_detail(name: &str, arguments: &str) -> String {
         .unwrap_or_default()
 }
 
+/// 一次流式补全所需的端点与报文。单独成结构，避免 `stream_completion` 参数超过 clippy 上限。
+struct CompletionCall<'a> {
+    base_url: &'a str,
+    model: &'a str,
+    api_key: &'a str,
+    provider: &'a str,
+    messages: &'a [Value],
+}
+
 async fn stream_completion(
     agent: &AgentService,
     app: &AppHandle,
     request_id: &str,
-    base_url: &str,
-    model: &str,
-    api_key: &str,
-    provider: &str,
-    messages: &[Value],
+    call: CompletionCall<'_>,
 ) -> Result<(String, Vec<ToolAccumulator>), AgentError> {
     let response = agent
         .http()
-        .post(format!("{base_url}/chat/completions"))
+        .post(format!("{}/chat/completions", call.base_url))
         .timeout(std::time::Duration::from_secs(90))
-        .bearer_auth(api_key)
+        .bearer_auth(call.api_key)
         .json(&json!({
-            "model": model,
+            "model": call.model,
             "temperature": 0.2,
             "stream": true,
-            "messages": messages,
+            "messages": call.messages,
             "tools": agent_tools::tool_schemas(),
         }))
         .send()
         .await
         .map_err(|_| AgentError::ProviderUnavailable {
-            provider: provider.to_string(),
+            provider: call.provider.to_string(),
         })?;
 
     if !response.status().is_success() {
         let status = response.status();
         tracing::warn!(status = %status, "对话模型请求失败");
-        return Err(map_status_error(status, provider));
+        return Err(map_status_error(status, call.provider));
     }
 
     let mut content = String::new();
@@ -419,13 +426,13 @@ async fn stream_completion(
         .chunk()
         .await
         .map_err(|_| AgentError::ProviderUnavailable {
-            provider: provider.to_string(),
+            provider: call.provider.to_string(),
         })?
     {
         buffer.push_str(&String::from_utf8_lossy(&chunk));
         if buffer.len() > SSE_BUFFER_CAP {
             return Err(AgentError::InvalidResponse {
-                provider: provider.to_string(),
+                provider: call.provider.to_string(),
             });
         }
         while let Some(index) = buffer.find('\n') {

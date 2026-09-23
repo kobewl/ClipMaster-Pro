@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 7;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -210,6 +210,33 @@ const MIGRATIONS: &[(i64, &str)] = &[
         WHERE id = OLD.session_id
           AND NOT EXISTS (SELECT 1 FROM agent_session_items WHERE session_id = OLD.session_id);
     END;
+    "#,
+    ),
+    (
+        8,
+        r#"
+    -- 对话是用户看得见的派生数据（和 Flow 会话同类），不是审计。
+    -- 审计仍然不存 prompt / 响应正文；对话正文只活在这两张表里，
+    -- 可被「清除所有 AI 派生数据」一键抹掉。
+    --
+    -- 表有硬上限（应用层写入时裁到 30 段 / 每段 40 条），避免越用磁盘越大。
+    CREATE TABLE IF NOT EXISTS agent_chats (
+        id         TEXT PRIMARY KEY,
+        title      TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_agent_chats_updated_at
+        ON agent_chats(updated_at DESC);
+
+    CREATE TABLE IF NOT EXISTS agent_chat_messages (
+        chat_id    TEXT NOT NULL REFERENCES agent_chats(id) ON DELETE CASCADE,
+        position   INTEGER NOT NULL,
+        role       TEXT NOT NULL CHECK(role IN ('user','assistant')),
+        content    TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        PRIMARY KEY (chat_id, position)
+    );
     "#,
     ),
 ];

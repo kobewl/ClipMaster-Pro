@@ -10,6 +10,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { PreviewDialog } from "@/components/PreviewDialog";
 import { AgentBatchDialog } from "@/components/AgentBatchDialog";
 import { AgentFlowDialog } from "@/components/AgentFlowDialog";
+import { AgentChatDialog, type AgentChatSeed } from "@/components/AgentChatDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -40,6 +41,8 @@ export default function App() {
   const [agentBatchOpen, setAgentBatchOpen] = useState(false);
   /** Flow 会话工作台是否打开。 */
   const [agentFlowOpen, setAgentFlowOpen] = useState(false);
+  const [agentChatOpen, setAgentChatOpen] = useState(false);
+  const [agentChatSeed, setAgentChatSeed] = useState<AgentChatSeed | null>(null);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const toastTimerRef = useRef<number | null>(null);
@@ -257,7 +260,12 @@ export default function App() {
     }
   }, [selectedIds, exitMultiSelect, showToast]);
 
-  // Esc 的优先级：预览弹窗 → AI 归纳 → 会话工作台 → 多选 → 设置面板 →
+  function openAgentChat(seed: AgentChatSeed | null) {
+    setAgentChatSeed(seed);
+    setAgentChatOpen(true);
+  }
+
+  // Esc 的优先级：预览弹窗 → AI 归纳 → 问 AI → 会话工作台 → 多选 → 设置面板 →
   // 清空确认 → 清空搜索词。走完一档就停，不会一次把好几层都关掉。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -266,6 +274,8 @@ export default function App() {
         setPreviewId(null);
       } else if (agentBatchOpen) {
         setAgentBatchOpen(false);
+      } else if (agentChatOpen) {
+        setAgentChatOpen(false);
       } else if (agentFlowOpen) {
         setAgentFlowOpen(false);
       } else if (multiSelect) {
@@ -280,7 +290,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen, agentFlowOpen]);
+  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen, agentChatOpen, agentFlowOpen]);
 
   // 列表刷新（删除、换分组）后把已不存在的 id 从选择集里摘掉，
   // 否则底部会显示「已选 3 条」而列表里只有 2 条被勾上。
@@ -457,6 +467,18 @@ export default function App() {
           onRunAgentBatch={() => setAgentBatchOpen(true)}
           onSaveAgentSession={() => void handleSaveAgentSession()}
           onOpenAgentFlow={() => setAgentFlowOpen(true)}
+          onOpenAgentChat={() => {
+            if (multiSelect) {
+              openAgentChat({
+                itemIds: [...selectedIds],
+                startFresh: true,
+              });
+              return;
+            }
+            openAgentChat({
+              searchHint: debouncedSearch.trim() || undefined,
+            });
+          }}
         />
       </section>
 
@@ -515,6 +537,16 @@ export default function App() {
         }}
       />
 
+      <AgentChatDialog
+        open={agentChatOpen}
+        seed={agentChatSeed}
+        onClose={() => setAgentChatOpen(false)}
+        onOpenSettings={() => {
+          setAgentChatOpen(false);
+          setSettingsOpen(true);
+        }}
+      />
+
       <PreviewDialog
         item={previewItem}
         iconSrc={getSourceIconPath(previewItem?.source_app ?? null)}
@@ -533,6 +565,10 @@ export default function App() {
         }}
         onClose={() => setPreviewId(null)}
         onOpenSettings={() => setSettingsOpen(true)}
+        onAskAi={(item) => {
+          setPreviewId(null);
+          openAgentChat({ itemIds: [item.id], startFresh: true });
+        }}
       />
     </main>
   );

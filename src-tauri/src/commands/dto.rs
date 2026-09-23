@@ -4,8 +4,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::application::agent_service::AgentAction;
 use crate::domain::model::{
-    build_preview, AgentSessionDetail, AgentSessionMember, AgentSessionSummary, ClipGroup,
-    ClipboardItem, PlannerSuggestion, PlannerSuggestionSet, PlannerTarget,
+    build_preview, AgentChatDetail, AgentChatMessage, AgentChatSummary, AgentSessionDetail,
+    AgentSessionMember, AgentSessionSummary, ClipGroup, ClipboardItem, PlannerSuggestion,
+    PlannerSuggestionSet, PlannerTarget,
 };
 use crate::domain::normalize::strip_html_tags;
 use crate::domain::settings::AppSettings;
@@ -365,13 +366,94 @@ pub struct CreateAgentSessionDto {
 
 /// 一键清除 AI 派生数据的结果。
 ///
-/// 两个数分别来自两个 store（会话 / 审计）各自的事务，见关键判断 11：
-/// 不做跨表事务，所以如实报出两边各清了多少。
+/// 三个数分别来自三个 store（会话 / 对话 / 审计）各自的事务：
+/// 不做跨表事务，所以如实报出各清了多少。
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub struct ClearDerivedDataDto {
     pub sessions: u64,
+    pub chats: u64,
     pub runs: u64,
+}
+
+// ---------------------------------------------------------------------------
+//  Chat DTO（自然语言对话）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentChatSummaryDto {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub message_count: u64,
+}
+
+impl From<AgentChatSummary> for AgentChatSummaryDto {
+    fn from(chat: AgentChatSummary) -> Self {
+        Self {
+            id: chat.id,
+            title: chat.title,
+            created_at: chat.created_at.to_rfc3339(),
+            updated_at: chat.updated_at.to_rfc3339(),
+            message_count: chat.message_count,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentChatMessageDto {
+    pub role: String,
+    pub content: String,
+    pub created_at: String,
+}
+
+impl From<AgentChatMessage> for AgentChatMessageDto {
+    fn from(message: AgentChatMessage) -> Self {
+        Self {
+            role: message.role,
+            content: message.content,
+            created_at: message.created_at.to_rfc3339(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AgentChatDetailDto {
+    pub id: String,
+    pub title: String,
+    pub created_at: String,
+    pub updated_at: String,
+    pub messages: Vec<AgentChatMessageDto>,
+}
+
+impl From<AgentChatDetail> for AgentChatDetailDto {
+    fn from(chat: AgentChatDetail) -> Self {
+        Self {
+            id: chat.id,
+            title: chat.title,
+            created_at: chat.created_at.to_rfc3339(),
+            updated_at: chat.updated_at.to_rfc3339(),
+            messages: chat.messages.into_iter().map(AgentChatMessageDto::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SendAgentChatDto {
+    #[serde(default)]
+    pub conversation_id: Option<String>,
+    pub message: String,
+    #[serde(default)]
+    pub item_ids: Vec<String>,
+    #[serde(default)]
+    pub search_hint: Option<String>,
+    #[serde(default)]
+    pub request_id: Option<String>,
 }
 
 // ---------------------------------------------------------------------------

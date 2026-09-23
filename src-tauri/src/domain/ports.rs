@@ -2,8 +2,8 @@
 
 use crate::domain::error::{ClipboardSourceError, RepositoryError, SecretError};
 use crate::domain::model::{
-    AgentSessionDetail, AgentSessionDraft, AgentSessionSummary, ClipGroup, ClipboardItem,
-    ClipboardItemId, ContentType, NewClipboardItem,
+    AgentChatDetail, AgentChatSummary, AgentSessionDetail, AgentSessionDraft,
+    AgentSessionSummary, ClipGroup, ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem,
 };
 use crate::domain::settings::AppSettings;
 use async_trait::async_trait;
@@ -248,6 +248,41 @@ pub trait AgentSessionStore: Send + Sync {
     ///
     /// **含 `source='user'`**：这是用户显式要求的「清除所有 AI 派生数据」，
     /// 用户手动保存的会话同样是派生数据（原始剪贴板记录不受影响）。
+    async fn clear(&self) -> Result<u64, RepositoryError>;
+}
+
+// ---------------------------------------------------------------------------
+//  AgentChatStore（对话派生数据）
+// ---------------------------------------------------------------------------
+
+/// 对话的读写端口。正文只存在这里，审计表仍然不存 prompt / 响应。
+#[async_trait]
+pub trait AgentChatStore: Send + Sync {
+    async fn insert(
+        &self,
+        id: &str,
+        title: &str,
+        created_at: &str,
+        updated_at: &str,
+    ) -> Result<(), RepositoryError>;
+
+    async fn append_message(
+        &self,
+        chat_id: &str,
+        role: &str,
+        content: &str,
+        created_at: &str,
+    ) -> Result<(), RepositoryError>;
+
+    async fn touch(&self, chat_id: &str, title: Option<&str>, updated_at: &str)
+        -> Result<(), RepositoryError>;
+
+    async fn list(&self, limit: u32) -> Result<Vec<AgentChatSummary>, RepositoryError>;
+
+    async fn find(&self, id: &str) -> Result<Option<AgentChatDetail>, RepositoryError>;
+
+    async fn delete(&self, id: &str) -> Result<bool, RepositoryError>;
+
     async fn clear(&self) -> Result<u64, RepositoryError>;
 }
 

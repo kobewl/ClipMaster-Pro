@@ -7,15 +7,16 @@
 //! 任务书写的是 `list_sessions`，落地统一带 `agent_` 前缀，与既有
 //! `list_agent_runs` / `get_agent_run` 一致。
 
-use tauri::State;
+use tauri::{AppHandle, State};
 
+use crate::application::agent_chat::ChatSendRequest;
 use crate::application::agent_service::{AgentAction, AgentConfigInfo};
 use crate::application::planner_service::PlannerError;
 use crate::application::session_service::SessionError;
 use crate::commands::dto::{
-    AgentRunDto, AgentSessionDetailDto, AgentSessionSummaryDto, ClearDerivedDataDto,
-    CreateAgentSessionDto, PlannerSuggestionSetDto, SaveAgentEndpointDto, SaveAgentKeyDto,
-    SuggestSessionActionsDto,
+    AgentChatDetailDto, AgentChatSummaryDto, AgentRunDto, AgentSessionDetailDto,
+    AgentSessionSummaryDto, ClearDerivedDataDto, CreateAgentSessionDto, PlannerSuggestionSetDto,
+    SaveAgentEndpointDto, SaveAgentKeyDto, SendAgentChatDto, SuggestSessionActionsDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::ports::AgentRunRecord;
@@ -199,8 +200,65 @@ pub async fn clear_agent_derived_data(
     runtime: State<'_, AppRuntime>,
 ) -> Result<ClearDerivedDataDto, CommandError> {
     let sessions = runtime.sessions.clear().await.map_err(session_error)?;
+    let chats = runtime.chats.clear().await.map_err(agent_error)?;
     let runs = runtime.agent.clear_runs().await.map_err(agent_error)?;
-    Ok(ClearDerivedDataDto { sessions, runs })
+    Ok(ClearDerivedDataDto {
+        sessions,
+        chats,
+        runs,
+    })
+}
+
+// ---------------------------------------------------------------------------
+//  对话 Agent
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_agent_chats(
+    runtime: State<'_, AppRuntime>,
+) -> Result<Vec<AgentChatSummaryDto>, CommandError> {
+    let chats = runtime.chats.list(30).await.map_err(agent_error)?;
+    Ok(chats.into_iter().map(AgentChatSummaryDto::from).collect())
+}
+
+#[tauri::command]
+pub async fn get_agent_chat(
+    runtime: State<'_, AppRuntime>,
+    id: String,
+) -> Result<Option<AgentChatDetailDto>, CommandError> {
+    let chat = runtime.chats.get(&id).await.map_err(agent_error)?;
+    Ok(chat.map(AgentChatDetailDto::from))
+}
+
+#[tauri::command]
+pub async fn send_agent_chat(
+    app: AppHandle,
+    runtime: State<'_, AppRuntime>,
+    request: SendAgentChatDto,
+) -> Result<AgentChatDetailDto, CommandError> {
+    let chat = runtime
+        .chats
+        .send(
+            ChatSendRequest {
+                conversation_id: request.conversation_id,
+                message: request.message,
+                item_ids: request.item_ids,
+                search_hint: request.search_hint,
+                request_id: request.request_id,
+            },
+            app,
+        )
+        .await
+        .map_err(agent_error)?;
+    Ok(AgentChatDetailDto::from(chat))
+}
+
+#[tauri::command]
+pub async fn delete_agent_chat(
+    runtime: State<'_, AppRuntime>,
+    id: String,
+) -> Result<bool, CommandError> {
+    runtime.chats.delete(&id).await.map_err(agent_error)
 }
 
 /// 在一条会话上产出「下一步建议」—— 全链只有这一条产建议的命令。
@@ -238,6 +296,8 @@ impl From<AgentRunRecord> for AgentRunDto {
         // 不补这条映射，用户会在「使用记录」里看到一个英文串。
         let action_label = if record.action == "suggest_actions" {
             "下一步建议".to_string()
+        } else if record.action == "chat" {
+            "对话".to_string()
         } else {
             AgentAction::from_key(&record.action)
                 .map(|action| action.label().to_string())
@@ -378,6 +438,10 @@ mod tests {
         let planner = AgentRunDto::from(record("suggest_actions"));
         assert_eq!(planner.action, "suggest_actions", "机器可读名不改");
         assert_eq!(planner.action_label, "下一步建议", "界面文案给一句人话");
+
+        let chat = AgentRunDto::from(record("chat"));
+        assert_eq!(chat.action, "chat");
+        assert_eq!(chat.action_label, "对话");
 
         // 既有动作的标签走 `AgentAction::label()`，一个字不变。
         let summarize = AgentRunDto::from(record("summarize"));

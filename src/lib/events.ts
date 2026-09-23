@@ -68,3 +68,41 @@ export function onUpdateProgress(
 export function onUpdateInstalling(handler: () => void): Promise<UnlistenFn> {
   return listen("update-installing", () => handler());
 }
+
+export interface AgentChatStartedPayload {
+  request_id: string;
+  conversation_id: string;
+}
+
+export interface AgentChatDeltaPayload {
+  request_id: string;
+  text: string;
+}
+
+export interface AgentChatToolPayload {
+  request_id: string;
+  name: string;
+  phase: "start" | "done";
+  detail: string;
+}
+
+/** 问句已落库：失败后重试也能接着同一段对话。 */
+export function onAgentChatStarted(
+  handler: (payload: AgentChatStartedPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<AgentChatStartedPayload>("agent-chat://started", (event) => handler(event.payload));
+}
+
+/** 对话 Agent 的流式增量。迟到的号由界面自己丢掉。 */
+export function onAgentChatDelta(
+  handler: (payload: AgentChatDeltaPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<AgentChatDeltaPayload>("agent-chat://delta", (event) => handler(event.payload));
+}
+
+/** 对话 Agent 正在调用只读工具（搜索 / 阅读）。 */
+export function onAgentChatTool(
+  handler: (payload: AgentChatToolPayload) => void,
+): Promise<UnlistenFn> {
+  return listen<AgentChatToolPayload>("agent-chat://tool", (event) => handler(event.payload));
+}

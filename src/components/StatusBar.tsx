@@ -28,6 +28,8 @@ interface StatusBarProps {
   onSaveAgentSession: () => void;
   /** 打开 Flow 会话工作台。 */
   onOpenAgentFlow: () => void;
+  /** 打开自然语言对话（主入口）。 */
+  onOpenAgentChat: () => void;
 }
 
 import { Icon } from "./Icon";
@@ -58,6 +60,7 @@ export function StatusBar({
   onRunAgentBatch,
   onSaveAgentSession,
   onOpenAgentFlow,
+  onOpenAgentChat,
 }: StatusBarProps) {
   if (multiSelect) {
     return (
@@ -94,6 +97,19 @@ export function StatusBar({
             className="button button--secondary button--compact"
           >
             存为会话
+          </button>
+          <button
+            type="button"
+            onClick={onOpenAgentChat}
+            disabled={selectedCount === 0}
+            title={
+              selectedCount === 0
+                ? "先勾选要问的记录"
+                : "就这几条问 AI"
+            }
+            className="button button--secondary button--compact"
+          >
+            问 AI
           </button>
           <button
             type="button"
@@ -168,6 +184,15 @@ export function StatusBar({
             多选
           </button>
         )}
+        <button
+          type="button"
+          onClick={onOpenAgentChat}
+          title="用自然语言问剪贴板里的内容"
+          className="status-action"
+        >
+          <Icon name="sparkles" className="h-3 w-3" />
+          问 AI
+        </button>
         <button
           type="button"
           onClick={onOpenAgentFlow}

@@ -314,3 +314,31 @@ pub struct PlannerSuggestionSet {
     /// 模型给了但不符合协议、被丢弃的行数（不静默吞掉，如实告知用户）。
     pub dropped: u64,
 }
+
+/// 一段对话（用户看得见的派生数据，不是审计）。
+#[derive(Debug, Clone)]
+pub struct AgentChatSummary {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub message_count: u64,
+}
+
+/// 对话里的一条可见消息。工具调用不落库，只在当次请求里回灌模型。
+#[derive(Debug, Clone)]
+pub struct AgentChatMessage {
+    pub role: String,
+    pub content: String,
+    pub created_at: DateTime<Utc>,
+}
+
+/// 一段对话的详情。
+#[derive(Debug, Clone)]
+pub struct AgentChatDetail {
+    pub id: String,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub messages: Vec<AgentChatMessage>,
+}

@@ -1,4 +1,5 @@
 pub mod agent_run_store;
+pub mod chat_store;
 pub mod group_repository;
 pub mod migrations;
 pub mod repository;

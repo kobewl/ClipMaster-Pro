@@ -243,10 +243,33 @@ export interface AgentSessionDetail {
   members: AgentSessionMember[];
 }
 
-/** 一键清除 AI 派生数据的结果：会话与使用记录各自删掉了多少条。 */
+/** 一键清除 AI 派生数据的结果：会话、对话与使用记录各自删掉了多少条。 */
 export interface ClearDerivedDataResult {
   sessions: number;
+  chats: number;
   runs: number;
+}
+
+export interface AgentChatSummary {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  message_count: number;
+}
+
+export interface AgentChatMessage {
+  role: "user" | "assistant" | string;
+  content: string;
+  created_at: string;
+}
+
+export interface AgentChatDetail {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: AgentChatMessage[];
 }
 
 /**

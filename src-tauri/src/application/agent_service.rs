@@ -227,6 +227,12 @@ pub enum AgentError {
     /// 所以界面不该引导他"重试"，也不该把它当成需要排查的问题。
     #[error("已取消本次请求。")]
     Cancelled,
+    #[error("请先写一句要问的话。")]
+    EmptyMessage,
+    #[error("这段对话已经不在了。")]
+    ChatUnavailable,
+    #[error("输入里检测到可能的 Token、密码或私钥，已阻止发送到云端。")]
+    SensitivePrompt,
 }
 
 impl AgentError {
@@ -254,6 +260,9 @@ impl AgentError {
             Self::Cooldown => "ai_cooldown",
             Self::InvalidRequestId(_) => "ai_invalid_request_id",
             Self::Cancelled => "ai_cancelled",
+            Self::EmptyMessage => "ai_empty_message",
+            Self::ChatUnavailable => "ai_chat_unavailable",
+            Self::SensitivePrompt => "ai_sensitive_content",
         }
     }
 
@@ -296,7 +305,7 @@ impl AgentConfig {
     ///
     /// 另两种情况维持原行为（回退默认地址照常发）：Key 来自环境变量 —— 那是开发期
     /// 自己设的，自担风险；没有 Key —— 轮不到这条闸门，`NotConfigured` 更准确。
-    fn ensure_key_not_sent_astray(&self) -> Result<(), AgentError> {
+    pub(crate) fn ensure_key_not_sent_astray(&self) -> Result<(), AgentError> {
         if self.endpoint_rejected && !self.api_key_from_env && self.api_key.is_some() {
             return Err(AgentError::InvalidBaseUrl(
                 "保存的服务地址未通过安全校验，已阻止本次请求，以免钥匙串里的 API Key \
@@ -1162,6 +1171,130 @@ impl AgentService {
             .await
             .map_err(|err| AgentError::RunStoreUnavailable(err.to_string()))
     }
+
+    pub(crate) fn history(&self) -> &HistoryService {
+        &self.history
+    }
+
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.client
+    }
+
+    pub(crate) fn mark_request_started(&self) {
+        *self.last_started.lock().expect("闸门锁中毒") = Some(std::time::Instant::now());
+    }
+
+    /// 对话与四类动作共用单飞闸门 / 冷却 / 按号取消 / 审计。
+    ///
+    /// `work` 在拿到许可之后才启动；用户取消会直接丢掉这个 Future（HTTP 连接断开）。
+    pub async fn with_shared_gate<T, F, Fut>(
+        &self,
+        request_id: Option<String>,
+        action: &str,
+        input_item_ids: Vec<String>,
+        work: F,
+    ) -> Result<T, AgentError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<(T, SharedGateAudit), AgentError>>,
+    {
+        let request_id = match request_id {
+            Some(raw) => validate_request_id(&raw).map_err(AgentError::InvalidRequestId)?,
+            None => uuid::Uuid::new_v4().to_string(),
+        };
+        let _permit = {
+            let seen = self.last_started.lock().expect("闸门锁中毒");
+            if let Some(prev) = *seen {
+                if prev.elapsed() < self.cooldown {
+                    return Err(AgentError::Cooldown);
+                }
+            }
+            self.gate.try_acquire().map_err(|_| AgentError::Busy)?
+        };
+        let started = std::time::Instant::now();
+        let audit = RunAudit {
+            request_id: Some(request_id.clone()),
+            input_item_ids,
+            ..Default::default()
+        };
+        let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel::<()>();
+        let pre_hit = {
+            let mut state = self.state.lock().expect("运行状态锁");
+            let hit = take_from(&mut state.pre_cancelled, &request_id);
+            if !hit {
+                state.slot = Some((request_id, cancel_tx));
+            }
+            hit
+        };
+        if pre_hit {
+            let result: Result<T, AgentError> = Err(AgentError::Cancelled);
+            self.audit_shared(action, &result, audit, started.elapsed(), None)
+                .await;
+            return result;
+        }
+        let result = tokio::select! {
+            res = work() => res,
+            _ = cancel_rx => Err(AgentError::Cancelled),
+        };
+        self.state.lock().expect("运行状态锁").slot = None;
+        let hint = result.as_ref().ok().map(|(_, hint)| hint.clone());
+        let mapped = result.map(|(value, _)| value);
+        self.audit_shared(action, &mapped, audit, started.elapsed(), hint.as_ref())
+            .await;
+        mapped
+    }
+
+    async fn audit_shared<T>(
+        &self,
+        action: &str,
+        result: &Result<T, AgentError>,
+        mut audit: RunAudit,
+        elapsed: std::time::Duration,
+        hint: Option<&SharedGateAudit>,
+    ) {
+        if let Some(hint) = hint {
+            audit.input_chars = hint.input_chars;
+            audit.input_item_ids = hint.input_item_ids.clone();
+            audit.target = hint.target.clone();
+        }
+        let (status, error_code, output_chars) = match (result, hint) {
+            (Ok(_), Some(hint)) => ("ok", None, Some(hint.output_chars)),
+            (Ok(_), None) => ("ok", None, None),
+            (Err(err), _) => ("error", Some(err.code().to_string()), None),
+        };
+        let (provider, model) = match audit.target {
+            Some((provider, model)) => (Some(provider), Some(model)),
+            None => (None, None),
+        };
+        let record = crate::domain::ports::AgentRunRecord {
+            id: audit
+                .request_id
+                .clone()
+                .expect("run 入口已经把 request_id 放进 audit"),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            action: action.to_string(),
+            provider,
+            model,
+            input_item_ids: audit.input_item_ids,
+            input_chars: audit.input_chars,
+            status: status.to_string(),
+            error_code,
+            duration_ms: elapsed.as_millis() as u64,
+            output_chars,
+        };
+        if let Err(err) = self.runs.record(record).await {
+            tracing::warn!(error = %err, "写入 AI 调用审计失败");
+        }
+    }
+}
+
+/// 对话路径回写审计用的摘要。不含正文。
+#[derive(Debug, Clone, Default)]
+pub struct SharedGateAudit {
+    pub input_chars: u64,
+    pub output_chars: u64,
+    pub input_item_ids: Vec<String>,
+    pub target: Option<(String, String)>,
 }
 
 /// 把 HTTP 状态映射成前端能分头处理的错误。
@@ -1171,7 +1304,7 @@ impl AgentService {
 ///
 /// `provider` 是界面上显示的服务名（见 `provider_label`）：接的是中转站就报中转站的
 /// 域名，不然"DeepSeek 欠费了"这句提示会把人引去查一个根本没在用的账户。
-fn map_status_error(status: reqwest::StatusCode, provider: &str) -> AgentError {
+pub(crate) fn map_status_error(status: reqwest::StatusCode, provider: &str) -> AgentError {
     let provider = provider.to_string();
     match status.as_u16() {
         401 | 403 => AgentError::Unauthorized { provider },
@@ -1313,7 +1446,7 @@ fn migrate_legacy_deepseek_model(config: AgentProviderConfig) -> AgentProviderCo
 }
 
 /// 结果卡片上显示"内容发到了哪"。自定义地址一律报真实主机名，不能糊弄成 "AI"。
-fn provider_label(base_url: &str) -> String {
+pub(crate) fn provider_label(base_url: &str) -> String {
     if base_url == DEFAULT_BASE_URL {
         return "DeepSeek".to_string();
     }
@@ -1393,7 +1526,7 @@ struct ChatMessage {
 
 /// 这是“宁可多拦”的本地第一道门，而不是完整 DLP。Phase 1 会将它独立为
 /// Policy Engine 并增加用户可配置规则。当前实现刻意不用内容进日志。
-fn contains_sensitive_content(text: &str) -> bool {
+pub(crate) fn contains_sensitive_content(text: &str) -> bool {
     let lower = text.to_ascii_lowercase();
     if lower.contains("-----begin") && lower.contains("private key-----") {
         return true;
@@ -1722,6 +1855,11 @@ mod tests {
             !AgentError::InvalidRequestId("bad".to_string()).retryable(),
             "号不合法是调用方 bug，重试不会变好"
         );
+        assert_eq!(AgentError::EmptyMessage.code(), "ai_empty_message");
+        assert_eq!(AgentError::ChatUnavailable.code(), "ai_chat_unavailable");
+        assert_eq!(AgentError::SensitivePrompt.code(), "ai_sensitive_content");
+        assert!(!AgentError::EmptyMessage.retryable());
+        assert!(!AgentError::SensitivePrompt.retryable());
     }
 
     // -----------------------------------------------------------------------

@@ -23,7 +23,20 @@ import {
   type ThemePreference,
 } from "@/lib/theme";
 import { ShortcutInput } from "./ShortcutInput";
+import { ConfirmDialog } from "./ConfirmDialog";
 import { Icon } from "./Icon";
+
+/**
+ * 设置里展示的更新说明：去掉首尾空白，但**保留全部行**。
+ *
+ * 旧实现只取第一行非空行，GitHub release 的标题之后整段正文都会被丢掉。
+ * 空字符串或只含空白时返回 null，调用方据此决定要不要画这块。
+ */
+export function visibleReleaseNotes(notes: string | null | undefined): string | null {
+  if (!notes) return null;
+  const text = notes.replace(/\r\n/g, "\n").trim();
+  return text.length > 0 ? text : null;
+}
 
 /** 发现新版本时跳去这里下载（更新通道就绪前，「检查更新」也会提示这条路径）。 */
 const RELEASES_URL = "https://github.com/kobewl/ClipMaster-Pro/releases/latest";
@@ -86,6 +99,9 @@ export function SettingsPanel({
   /** 端点区是否展开。默认收起，避免把设置面板撑得太长。 */
   const [agentEndpointOpen, setAgentEndpointOpen] = useState(false);
   const [agentSaving, setAgentSaving] = useState(false);
+  /** 删除钥匙串 Key 与保存共用网络，但按钮文案不能混成「保存中…」。 */
+  const [agentKeyClearing, setAgentKeyClearing] = useState(false);
+  const [agentKeyClearConfirmOpen, setAgentKeyClearConfirmOpen] = useState(false);
   const [agentEndpointSaving, setAgentEndpointSaving] = useState(false);
   const [agentTesting, setAgentTesting] = useState(false);
   const [agentDerivedClearing, setAgentDerivedClearing] = useState(false);
@@ -140,6 +156,7 @@ export function SettingsPanel({
     setAgentNotice(null);
     setAgentEndpointOpen(false);
     setAgentDerivedCleared(null);
+    setAgentKeyClearConfirmOpen(false);
     commands
       .getAgentConfig()
       .then((info) => {
@@ -301,19 +318,21 @@ export function SettingsPanel({
     }
   }
 
-  /** 清除钥匙串里的 Key。开发期环境变量注入的那份不归应用管，会继续生效。 */
+  /** 删除钥匙串里的 Key。开发期环境变量那份不归应用管，删完若它还在会继续生效。 */
   async function handleAgentKeyClear() {
+    setAgentKeyClearConfirmOpen(false);
     setAgentError(null);
     setAgentNotice(null);
-    setAgentSaving(true);
+    setAgentKeyClearing(true);
     try {
       const info = await commands.clearAgentKey();
       setAgentConfig(info);
-      setAgentNotice(info.configured ? "已清除钥匙串中的 Key（仍在用环境变量）。" : "已清除 API Key。");
+      setAgentKeyInput("");
+      setAgentNotice(info.configured ? "已删除钥匙串中的 Key（仍在用环境变量）。" : "已删除 API Key。");
     } catch (err: unknown) {
-      setAgentError(isCommandError(err) ? err.message : "清除 API Key 失败");
+      setAgentError(isCommandError(err) ? err.message : "删除 API Key 失败");
     } finally {
-      setAgentSaving(false);
+      setAgentKeyClearing(false);
     }
   }
 
@@ -374,11 +393,11 @@ export function SettingsPanel({
   }
 
   /**
-   * 清除所有 AI 派生数据（Flow 会话 + 使用记录）。
+   * 清除所有 AI 派生数据（Flow 会话 + 对话 + 使用记录）。
    *
-   * 会话由本地记录算出、使用记录只有元数据，但「我用 AI 处理过哪些内容」「我最近
-   * 在忙什么」都是隐私，用户该能一键抹掉。两个数分别来自会话与审计各自的事务
-   * （关键判断 11），所以如实分报 —— 原始剪贴板记录一条不动。
+   * 会话由本地记录算出、对话正文是用户看得见的派生数据、使用记录只有元数据，
+   * 但「我用 AI 处理过哪些内容」「我最近在忙什么」都是隐私，用户该能一键抹掉。
+   * 三个数分别来自各自的事务，所以如实分报 —— 原始剪贴板记录一条不动。
    */
   async function handleAgentDerivedClear() {
     setAgentError(null);
@@ -387,9 +406,10 @@ export function SettingsPanel({
     try {
       const removed = await commands.clearAgentDerivedData();
       setAgentDerivedCleared(removed);
+      const total = removed.sessions + removed.chats + removed.runs;
       setAgentNotice(
-        removed.sessions > 0 || removed.runs > 0
-          ? `已清除 ${removed.sessions} 个会话、${removed.runs} 条使用记录 ✓`
+        total > 0
+          ? `已清除 ${removed.sessions} 个会话、${removed.chats} 段对话、${removed.runs} 条使用记录 ✓`
           : "没有 AI 派生数据需要清除。",
       );
     } catch (err: unknown) {
@@ -418,6 +438,8 @@ export function SettingsPanel({
       setAutostartSaving(false);
     }
   }
+
+  const releaseNotes = visibleReleaseNotes(updateStatus?.notes);
 
   return (
     <div
@@ -542,7 +564,7 @@ export function SettingsPanel({
                 ? `当前使用 ${agentConfig.key_hint} · ${
                     agentConfig.key_source === "env" ? "来自开发环境变量" : "已存入系统钥匙串"
                   }`
-                : "填入 API Key 后，预览弹窗里的总结 / 翻译 / 解释等动作才会生效。"}
+                : "填入 API Key 后，状态栏的「问 AI」和预览里的总结 / 翻译才会生效。"}
             </p>
           )}
 
@@ -561,22 +583,27 @@ export function SettingsPanel({
             <button
               type="button"
               onClick={handleAgentKeySave}
-              disabled={agentSaving || agentKeyInput.trim().length === 0}
+              disabled={agentSaving || agentKeyClearing || agentKeyInput.trim().length === 0}
               className="button button--primary button--compact"
             >
               {agentSaving ? "保存中…" : "保存"}
             </button>
-            {agentConfig?.configured && agentConfig.key_source === "keychain" && (
+          </div>
+          {agentConfig?.configured && agentConfig.key_source === "keychain" && (
+            <div className="mt-2 flex items-center gap-1.5">
               <button
                 type="button"
-                onClick={handleAgentKeyClear}
-                disabled={agentSaving}
-                className="button button--secondary button--compact"
+                onClick={() => setAgentKeyClearConfirmOpen(true)}
+                disabled={agentSaving || agentKeyClearing}
+                className="button button--danger button--compact"
               >
-                清除
+                {agentKeyClearing ? "删除中…" : "删除 Key"}
               </button>
-            )}
-          </div>
+              <span className="text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
+                删掉后「问 AI」和总结 / 翻译会停用，剪贴板历史不受影响
+              </span>
+            </div>
+          )}
 
           {/* 服务地址：默认收起。展开后可以接到任何 OpenAI 兼容服务。 */}
           <button
@@ -673,8 +700,8 @@ export function SettingsPanel({
             Key 只存进 macOS 钥匙串，不写进本应用的数据库、日志或崩溃报告；AI 动作发送的是你选中的那一条内容本身。
           </p>
 
-          {/* AI 派生数据：会话 + 使用记录。只存元数据，但"我用 AI 处理过哪些内容"
-              也是隐私，可以一键全抹掉；原始剪贴板记录不受影响。 */}
+          {/* AI 派生数据：会话 + 对话 + 使用记录。对话正文是用户看得见的派生数据，
+              可以一键全抹掉；原始剪贴板记录不受影响。 */}
           <div className="mt-2 flex items-center gap-1.5">
             <button
               type="button"
@@ -686,9 +713,9 @@ export function SettingsPanel({
             </button>
             <span className="text-[10px] text-[var(--cm-fg-faint)]">
               {agentDerivedCleared !== null &&
-              (agentDerivedCleared.sessions > 0 || agentDerivedCleared.runs > 0)
-                ? `上次清除了 ${agentDerivedCleared.sessions} 个会话、${agentDerivedCleared.runs} 条使用记录`
-                : "清空会话与使用记录；不删任何剪贴板历史，也不存内容本身"}
+              agentDerivedCleared.sessions + agentDerivedCleared.chats + agentDerivedCleared.runs > 0
+                ? `上次清除了 ${agentDerivedCleared.sessions} 个会话、${agentDerivedCleared.chats} 段对话、${agentDerivedCleared.runs} 条使用记录`
+                : "清空会话、对话与使用记录；不删任何剪贴板历史"}
             </span>
           </div>
 
@@ -809,10 +836,10 @@ export function SettingsPanel({
                   />
                 </div>
               )}
-              {updateStatus.notes && (
-                <p className="line-clamp-2 text-[10px] leading-relaxed text-[var(--cm-fg-faint)]">
-                  {updateStatus.notes.split("\n").find((line) => line.trim())?.trim()}
-                </p>
+              {releaseNotes && (
+                <pre className="update-notes" aria-label="本版本更新说明">
+                  {releaseNotes}
+                </pre>
               )}
             </div>
           )}
@@ -822,6 +849,17 @@ export function SettingsPanel({
         </fieldset>
 
         {error && <p className="mt-2 text-xs text-[var(--cm-danger)]">⚠ {error}</p>}
+
+        <ConfirmDialog
+          open={agentKeyClearConfirmOpen}
+          title="删除 API Key？"
+          description="会从系统钥匙串里删掉这把 Key。删完「问 AI」和预览里的总结 / 翻译会停用，剪贴板历史不受影响。"
+          confirmLabel="删除 Key"
+          onConfirm={() => {
+            void handleAgentKeyClear();
+          }}
+          onCancel={() => setAgentKeyClearConfirmOpen(false)}
+        />
 
         <div className="modal-footer">
           <button

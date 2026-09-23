@@ -20,6 +20,8 @@ interface Props {
   onClose: () => void;
   /** AI 未配置时，从结果区直接跳到设置面板里的 AI 助手。 */
   onOpenSettings: () => void;
+  /** 就这一条打开自然语言对话。 */
+  onAskAi?: (item: ClipboardItem) => void;
 }
 
 function formatFullTime(iso: string): string {
@@ -65,7 +67,7 @@ function htmlPlainLength(html: string): number {
  * 完整的 `content_text` 其实一直是传到前端的，只是界面里没地方显示它。
  * 这个弹窗就是那个地方 —— 顺带也解决了「图片只能看缩略图」的问题。
  */
-export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenSettings }: Props) {
+export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenSettings, onAskAi }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
   const [agentError, setAgentError] = useState<string | null>(null);
@@ -340,6 +342,16 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
           </div>
           {supportsAgent ? (
             <div className="agent-panel__actions">
+              {onAskAi && (
+                <button
+                  type="button"
+                  className="agent-action agent-action--primary"
+                  disabled={runningAction !== null}
+                  onClick={() => onAskAi(item)}
+                >
+                  问 AI
+                </button>
+              )}
               {agentActions.map(({ action, label }) => (
                 <button
                   type="button"

@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   AppSettings,
   AgentAction,
+  AgentChatDetail,
+  AgentChatSummary,
   AgentConfigInfo,
   AgentResult,
   AgentRun,
@@ -185,9 +187,40 @@ export const commands = {
   deleteAgentSession(id: string): Promise<boolean> {
     return invoke("delete_agent_session", { id });
   },
-  /** 一键清除所有 AI 派生数据（会话 + 使用记录）；原始剪贴板记录不受影响。 */
+  /** 一键清除所有 AI 派生数据（会话 + 对话 + 使用记录）；原始剪贴板记录不受影响。 */
   clearAgentDerivedData(): Promise<ClearDerivedDataResult> {
     return invoke("clear_agent_derived_data");
+  },
+
+  listAgentChats(): Promise<AgentChatSummary[]> {
+    return invoke("list_agent_chats");
+  },
+  getAgentChat(id: string): Promise<AgentChatDetail | null> {
+    return invoke("get_agent_chat", { id });
+  },
+  /**
+   * 发一句对话。requestId 由前端预置，理由同 `runAgentAction`：
+   * 界面要能按号取消、迟到的流式增量要做守卫。
+   */
+  sendAgentChat(request: {
+    conversationId?: string | null;
+    message: string;
+    itemIds?: string[];
+    searchHint?: string | null;
+    requestId: string;
+  }): Promise<AgentChatDetail> {
+    return invoke("send_agent_chat", {
+      request: {
+        conversation_id: request.conversationId ?? null,
+        message: request.message,
+        item_ids: request.itemIds ?? [],
+        search_hint: request.searchHint ?? null,
+        request_id: request.requestId,
+      },
+    });
+  },
+  deleteAgentChat(id: string): Promise<boolean> {
+    return invoke("delete_agent_chat", { id });
   },
 
   // Planner（Phase 1 第 5 步）：只在用户显式点「下一步建议」时调用 ——

@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
 
+use crate::application::agent_chat::AgentChatService;
 use crate::application::agent_service::{AgentService, REQUEST_COOLDOWN};
 use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::group_service::GroupService;
@@ -15,6 +16,7 @@ use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
 use crate::infrastructure::sqlite::agent_run_store::SqliteAgentRunStore;
+use crate::infrastructure::sqlite::chat_store::SqliteChatStore;
 use crate::infrastructure::sqlite::group_repository::SqliteGroupRepository;
 use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
 use crate::infrastructure::sqlite::session_store::SqliteSessionStore;
@@ -44,6 +46,8 @@ pub struct AppRuntime {
     /// Planner 建议。与 `agent` 共用**同一个** `AgentService` 实例：单飞闸门、
     /// 启动冷却、按号取消、审计因此都是同一份状态（不新起 service、不新起并发）。
     pub planner: Arc<PlannerService>,
+    /// 对话 Agent。与 `agent` 共用同一道单飞闸门，正文落在派生表。
+    pub chats: Arc<AgentChatService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
     settings_store: Arc<dyn SettingsStore>,
 }
@@ -154,6 +158,9 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     // Planner 与 sessions 共用同一个 store（clone 出去），agent 也复用上面那一个
     // 实例 —— 「复用同一道闸门」在接线上一眼可见，没有第二个构造点。
     let planner = Arc::new(PlannerService::new(session_store, agent.clone()));
+    let chat_store: Arc<dyn crate::domain::ports::AgentChatStore> =
+        Arc::new(SqliteChatStore::new(conn.clone()));
+    let chats = Arc::new(AgentChatService::new(agent.clone(), chat_store));
 
     spawn_retention_cleanup_timer(history.clone(), settings_store.clone());
 
@@ -184,6 +191,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         groups,
         sessions,
         planner,
+        chats,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),
         settings_store,
     })

@@ -1,0 +1,37 @@
+# ClipMaster-Pro 编译缓存治理
+#
+# 背景：src-tauri/target/ 曾膨胀到 26~28 GB，而项目源码（src/ + tests/）仅 744 KB。
+# 本文件会被本目录下的所有 cargo 调用自动读取 —— 包括 IntelliJ 与 AI 编码助手发起的
+# 构建，因此无需依赖各人 shell 里的环境变量，也不受 IDE 启动方式影响。
+#
+# 实测数据（2026-09-23，Rust 1.97.0，用 objc2-app-kit 0.3.2 复现本项目的重依赖场景）：
+#
+#                          默认      本配置    完全关闭
+#   objc2_app_kit.rlib    171 MB    154 MB    135 MB
+#   target/ 总占用         448 MB    403 MB    348 MB
+#   压缩效果                  —       ↓10%      ↓22%
+#   incremental 会话目录     1 个      0 个      0 个
+#
+# 本配置对应中间那一列。
+
+# ── 成因一：增量编译缓存无限累积（本项目最大的浪费项）────────────────
+# Cargo 每次编译配置发生变化就新开一个 incremental 会话目录，旧目录永不回收。
+# 本项目实测累积过 76 个 app_lib 会话目录、合计 8.4 GB，约占整个 target 的三分之一。
+# 关闭后不再产生这类目录。
+# 代价：改动少量代码后需重新编译该 crate 而非增量补丁，单次编译略慢。
+[profile.dev]
+incremental = false
+
+# ── 成因二：调试符号撑大中间产物 ──────────────────────────────────
+# 默认 debug = 2（完整符号），本项目单个 libapp_lib.a 曾达 615 MB。
+# debug = 1 只保留行号表 + 函数名：体积降 10%，且 panic backtrace 仍能显示 文件:行号。
+# 若想再省（总降幅 22%）且完全不需要原生调试，可改为 debug = false —— 代价是
+# backtrace 不再显示行号。
+debug = 1
+
+# ── 成因三：外部环境可能覆盖 ──────────────────────────────────────
+# 与上面等效的环境变量形式；force 保证不被外层已设置的 CARGO_INCREMENTAL 覆盖
+# （例如 IDE 或 CI 传入了 CARGO_INCREMENTAL=1）。
+# 已用构建脚本实测：cargo 内部可见 CARGO_INCREMENTAL=0。
+[env]
+CARGO_INCREMENTAL = { value = "0", force = true }

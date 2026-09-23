@@ -503,8 +503,17 @@ export default function App() {
         }}
       />
 
-      {/* 会话工作台：打开那一次会触发服务端重算（关键判断 10）。 */}
-      <AgentFlowDialog open={agentFlowOpen} onClose={() => setAgentFlowOpen(false)} />
+      {/* 会话工作台：打开那一次会触发服务端重算（关键判断 10）。
+          `onOpenSettings` 照批量入口（:500-503）的写法：先关掉工作台再打开设置 ——
+          用户是从建议面板里那条「去设置」过来的，回来时不该还挂着那个面板。 */}
+      <AgentFlowDialog
+        open={agentFlowOpen}
+        onClose={() => setAgentFlowOpen(false)}
+        onOpenSettings={() => {
+          setAgentFlowOpen(false);
+          setSettingsOpen(true);
+        }}
+      />
 
       <PreviewDialog
         item={previewItem}

@@ -1,0 +1,105 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Build and publish macOS package
+    runs-on: macos-latest
+    steps:
+      - name: Validate release tag
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Release tag must be vMAJOR.MINOR.PATCH"
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref }}
+          persist-credentials: false
+
+      - name: Scan tracked files for credentials
+        run: python3 scripts/check-secrets.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      # 稳定代码签名：让 TCC「辅助功能」授权绑在证书指纹上，而不是每次构建都变的 CDHash。
+      # 缺少 Secret 时直接失败，避免再次发出「更新后必须删掉重加授权」的 ad-hoc 包。
+      - name: Import stable macOS signing identity
+        env:
+          MACOS_CODESIGN_P12: ${{ secrets.MACOS_CODESIGN_P12 }}
+          MACOS_CODESIGN_P12_PASSWORD: ${{ secrets.MACOS_CODESIGN_P12_PASSWORD }}
+          MACOS_CODESIGN_IDENTITY: ${{ secrets.MACOS_CODESIGN_IDENTITY }}
+        run: |
+          if [ -z "${MACOS_CODESIGN_P12}" ]; then
+            echo "::error::Missing MACOS_CODESIGN_P12. On a Mac run:"
+            echo "  bash scripts/create-stable-signing-cert.sh"
+            echo "  bash scripts/export-signing-cert-for-ci.sh --set-github-secrets"
+            echo "Or use Apple Developer ID per docs/release/RELEASE.md"
+            exit 1
+          fi
+          bash scripts/import-ci-signing-cert.sh
+
+      - name: Build draft GitHub Release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          APPLE_SIGNING_IDENTITY: ${{ env.APPLE_SIGNING_IDENTITY }}
+          # Tauri 更新器 minisign 密钥，与 Apple/自签名代码签名无关。
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: ClipMaster Pro ${{ github.ref_name }}
+          releaseBody: |
+            macOS 安装包与更新包。请使用本 Release 中的 `.dmg` / `.app.tar.gz` 安装。
+          releaseDraft: true
+          prerelease: false
+
+      - name: Verify release app is not cdhash-pinned
+        run: |
+          set -euo pipefail
+          APP="$(find src-tauri/target/release/bundle -type d -name 'ClipMaster Pro.app' | head -n1 || true)"
+          if [ -z "${APP}" ] || [ ! -d "${APP}" ]; then
+            echo "::error::ClipMaster Pro.app not found under target/release/bundle"
+            exit 1
+          fi
+          echo "Verifying: ${APP}"
+          codesign --verify --deep --strict --verbose=2 "${APP}"
+          DR="$(codesign -d -r- "${APP}" 2>&1)"
+          echo "${DR}"
+          if echo "${DR}" | grep -Fq 'certificate leaf'; then
+            echo "OK: Designated Requirement is certificate-anchored (TCC grant can survive updates)."
+            exit 0
+          fi
+          if echo "${DR}" | grep -Fq 'cdhash H"'; then
+            echo "::error::Designated Requirement is still cdhash-pinned. APPLE_SIGNING_IDENTITY did not take effect."
+            exit 1
+          fi
+          echo "::error::Unexpected designated requirement; refusing to ship."
+          exit 1
+
+      - name: Publish verified release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: gh release edit "$RELEASE_TAG" --draft=false

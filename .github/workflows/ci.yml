@@ -1,0 +1,66 @@
+# ClipMaster Pro CI
+#
+# 两条并行流水线：
+#  - frontend：类型检查 + 构建（纯 Node，跑得快）
+#  - backend：cargo test + clippy。必须用 macOS runner —— 剪贴板采集、
+#    AppKit 图标、CGEvent 粘贴都是 macOS 专属依赖，Linux 上编不出来。
+#
+# 触发：push 到 main、所有 PR。
+
+name: CI
+
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend（类型检查 / 构建）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 检查受追踪文件中的凭据
+        run: python3 scripts/check-secrets.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 类型检查 + 构建
+        run: npm run build
+
+  backend:
+    name: Backend（cargo test / clippy）
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: 缓存 Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: cargo test
+        working-directory: src-tauri
+        run: cargo test
+
+      - name: cargo clippy（警告视为错误）
+        working-directory: src-tauri
+        run: cargo clippy --all-targets -- -D warnings

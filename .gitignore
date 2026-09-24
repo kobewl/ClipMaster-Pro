@@ -32,11 +32,10 @@ tsconfig.tsbuildinfo
 docs/design/ardot/_shots/
 docs/design/ardot/__pycache__/
 
-# Local documentation, evaluations, workflows, and tests
+# Local documentation, evaluations, and tests
 /README.md
 /docs/
 /evals/
-/.github/workflows/
 /src-tauri/tests/
 /src-tauri/src/application/agent_prompt/tests.rs
 **/*.test.*

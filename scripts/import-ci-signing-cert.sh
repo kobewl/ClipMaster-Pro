@@ -3,6 +3,7 @@
 # 供 .github/workflows/release.yml 在 tauri build 之前调用。
 
 set -euo pipefail
+umask 077
 
 fail() {
   printf 'import-ci-signing-cert aborted: %s\n' "$*" >&2
@@ -16,6 +17,7 @@ IDENTITY="${MACOS_CODESIGN_IDENTITY:-ClipMaster Pro Code Signing}"
 KEYCHAIN="${RUNNER_TEMP:-/tmp}/clipmaster-signing.keychain-db"
 KEYCHAIN_PW="$(openssl rand -hex 16)"
 P12_PATH="${RUNNER_TEMP:-/tmp}/clipmaster-signing.p12"
+trap 'test ! -f "$P12_PATH" || unlink "$P12_PATH"' EXIT
 
 printf '%s' "$MACOS_CODESIGN_P12" | base64 --decode > "$P12_PATH"
 
@@ -23,8 +25,14 @@ security create-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
 security set-keychain-settings -lut 21600 "$KEYCHAIN"
 security unlock-keychain -p "$KEYCHAIN_PW" "$KEYCHAIN"
 security import "$P12_PATH" -k "$KEYCHAIN" -P "$MACOS_CODESIGN_P12_PASSWORD" \
-  -A -T /usr/bin/codesign -T /usr/bin/security
-security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | sed 's/"//g')
+  -T /usr/bin/codesign -T /usr/bin/security
+EXISTING_KEYCHAINS=()
+while IFS= read -r listed_keychain; do
+  listed_keychain="${listed_keychain#\"}"
+  listed_keychain="${listed_keychain%\"}"
+  EXISTING_KEYCHAINS+=("$listed_keychain")
+done < <(security list-keychains -d user)
+security list-keychains -d user -s "$KEYCHAIN" "${EXISTING_KEYCHAINS[@]}"
 security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PW" "$KEYCHAIN"
 
 if ! security find-identity -p codesigning "$KEYCHAIN" | grep -qF "$IDENTITY"; then
@@ -35,8 +43,6 @@ fi
 if [[ -n "${GITHUB_ENV:-}" ]]; then
   {
     echo "APPLE_SIGNING_IDENTITY=$IDENTITY"
-    echo "KEYCHAIN_PATH=$KEYCHAIN"
-    echo "KEYCHAIN_PASSWORD=$KEYCHAIN_PW"
   } >> "$GITHUB_ENV"
 fi
 

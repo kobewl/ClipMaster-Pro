@@ -89,7 +89,8 @@ function reconcileItems(prev: ClipboardItem[], next: ClipboardItem[]): Clipboard
  * 2. 每次重置查询都会让 generation（代数）自增，过期响应直接丢弃 —— 快速输入时
  *    先发的慢请求不会覆盖后发的快请求；
  * 3. `clipboard://deleted` 走本地摘除（后端已经删过了），其余事件才回查数据库；
- *    窗口不可见时这些事件只记 dirty，重新显示 / 获得焦点时再刷新一次；
+ *    窗口不可见时 captured / updated 只拉第一页并拼到列表头部（见 fetchFirstPage 的
+ *    headOnly），同时记 dirty，重新显示 / 获得焦点时再补一次完整窗口的刷新；
  * 4. 事件触发的刷新（`reload`）保留"已加载这么多条"的窗口，只有查询条件变化
  *    才真正回到第一页 —— 否则用户刚往下滚动，一次系统复制就把他弹回顶部。
  *    已加载超过 500 条（后端单次上限）时按 500 一批顺序拉，不截断；
@@ -136,8 +137,10 @@ export function useClipboardHistory(options: Options) {
   const itemsRef = useRef<ClipboardItem[]>([]);
   /** `loadMoreStopped` 的 ref 镜像：`loadMore` 是稳定引用，读不到最新的 state。 */
   const loadMoreStoppedRef = useRef(false);
-  /** 窗口不可见期间收到过 captured / updated / cleared，重新显示时要补刷一次。 */
+  /** 窗口不可见期间收到过 captured / updated / cleared，重新显示时要补一次完整窗口的刷新。 */
   const dirtyRef = useRef(false);
+  /** 防抖窗口里有没有「要完整窗口」的请求；全是隐藏期间的请求时只拉第一页。 */
+  const pendingFullRefreshRef = useRef(false);
 
   // 渲染期同步查询条件与已加载数量：effect 与事件回调都晚于本次渲染，写进来的必定是最新值。
   const queryRef = useRef({ groupId, search, contentType, timeRange });
@@ -162,9 +165,14 @@ export function useClipboardHistory(options: Options) {
   /**
    * 重新查询。
    * @param reset 为 true 时回到第一页（查询条件变了）；为 false 时保留已加载窗口（后台数据变了）。
+   * @param headOnly 只在 `reset=false` 时有意义：只拉第一页（PAGE_SIZE 条），结果放到
+   *   列表头部，旧列表里不在这一页的条目原样接在后面。窗口隐藏时用：用户呼出窗口后
+   *   最常见的操作是直接回车粘贴第一条，第一条必须已经是刚复制的内容，不能等显示后
+   *   再刷新（那样回车可能把旧的第一条粘到别的应用里）。完整窗口的对齐留给显示后
+   *   那一次刷新，隐藏期间连续复制也只是每次一页的开销。
    */
   const fetchFirstPage = useCallback(
-    (reset: boolean) => {
+    (reset: boolean, headOnly = false) => {
       const generation = ++generationRef.current;
       loadingMoreRef.current = false;
       setLoadingMore(false);
@@ -179,7 +187,8 @@ export function useClipboardHistory(options: Options) {
       // 新查询只拉第一页；后台刷新要拉回"已加载这么多条"。后端单次最多给
       // MAX_PAGE_SIZE 条，超过时按批顺序拉（offset 0、500、1000…），否则刷新一次
       // 列表就被截回 500 条，用户滚动位置也会被夹回去。
-      const target = reset ? PAGE_SIZE : Math.max(PAGE_SIZE, loadedCountRef.current);
+      const target =
+        reset || headOnly ? PAGE_SIZE : Math.max(PAGE_SIZE, loadedCountRef.current);
       // 本次请求实际用的查询串（与 buildQuery 的 trim 口径一致），
       // 响应落地时按它算 chip 分母。
       const requestTermCount = parseQueryTerms(queryRef.current.search).length;
@@ -201,7 +210,11 @@ export function useClipboardHistory(options: Options) {
         }
         if (last === null) return;
         const result = last;
-        setItems((prev) => reconcileItems(prev, collected));
+        // headOnly：第一页在前，旧列表里不在第一页的接在后面（被顶上来的条目
+        // 已经在第一页里，appendUnique 不会再留一份在原位置）。
+        setItems((prev) =>
+          reconcileItems(prev, headOnly ? appendUnique(collected, prev) : collected),
+        );
         setTotal(result.total);
         // 宽松路径的证据随本次响应更新；严格路径/空查询时是 undefined → null。
         setRelaxedDropped(result.relaxed_dropped ?? null);
@@ -222,13 +235,23 @@ export function useClipboardHistory(options: Options) {
 
   const reload = useCallback(() => fetchFirstPage(false), [fetchFirstPage]);
 
-  const scheduleReload = useCallback(() => {
-    if (refreshTimerRef.current !== null) return;
-    refreshTimerRef.current = window.setTimeout(() => {
-      refreshTimerRef.current = null;
-      fetchFirstPage(false);
-    }, EVENT_REFRESH_DELAY_MS);
-  }, [fetchFirstPage]);
+  /**
+   * 防抖刷新。同一个防抖窗口里只要有一次请求要完整窗口，就按完整窗口刷；
+   * 全部来自隐藏期间时只拉第一页（headOnly）。
+   */
+  const scheduleReload = useCallback(
+    (headOnly: boolean) => {
+      if (!headOnly) pendingFullRefreshRef.current = true;
+      if (refreshTimerRef.current !== null) return;
+      refreshTimerRef.current = window.setTimeout(() => {
+        refreshTimerRef.current = null;
+        const full = pendingFullRefreshRef.current;
+        pendingFullRefreshRef.current = false;
+        fetchFirstPage(false, !full);
+      }, EVENT_REFRESH_DELAY_MS);
+    },
+    [fetchFirstPage],
+  );
 
   // 分组 / 关键词 / 筛选条件变化 → 回到第一页。
   useEffect(() => {
@@ -270,23 +293,31 @@ export function useClipboardHistory(options: Options) {
 
   useEffect(() => {
     let disposed = false;
-    // 窗口不可见时只记 dirty：用户看不到列表，刷新了也白刷，回来时由 onWindowShown 补一次。
-    const requestRefresh = () => {
+    // 窗口不可见时省掉完整窗口的刷新（用户看不到，回来时由 onWindowShown 补一次），
+    // 但 captured / updated 仍要把第一页刷好：呼出后直接回车粘贴的是 items[0]，
+    // 它必须是刚复制 / 刚粘贴过的那条，不能和显示后的刷新赛跑。
+    const requestRefresh = (headWhileHidden: boolean) => {
       void isWindowHidden().then((hidden) => {
         if (disposed) return;
-        if (hidden) dirtyRef.current = true;
-        else scheduleReload();
+        if (!hidden) {
+          scheduleReload(false);
+          return;
+        }
+        dirtyRef.current = true;
+        if (headWhileHidden) scheduleReload(true);
       });
     };
     const unsubscribers = [
       onClipboardCaptured(() => {
-        if (!disposed) requestRefresh();
+        if (!disposed) requestRefresh(true);
       }),
       onClipboardUpdated(() => {
-        if (!disposed) requestRefresh();
+        if (!disposed) requestRefresh(true);
       }),
+      // 清空会删掉列表中段的条目，只拉第一页拼不出正确结果（旧条目会留在尾部），
+      // 隐藏时只记 dirty。清空只由窗口里的按钮触发，隐藏时基本收不到。
       onClipboardCleared(() => {
-        if (!disposed) requestRefresh();
+        if (!disposed) requestRefresh(false);
       }),
       onClipboardDeleted((id) => {
         if (disposed) return;
@@ -305,13 +336,20 @@ export function useClipboardHistory(options: Options) {
     };
   }, [scheduleReload]);
 
-  // 重新显示 / 获得焦点：隐藏期间错过了变更就立即刷新一次（不等防抖）。
+  // 重新显示 / 获得焦点：隐藏期间错过了变更就立即补一次完整窗口的刷新（不等防抖）。
   // 两个触发源可能对同一次显示都触发，dirty 已经清掉，第二次是空操作。
   useEffect(
     () =>
       onWindowShown(() => {
         if (!dirtyRef.current) return;
         dirtyRef.current = false;
+        // 还没发出的防抖刷新（隐藏时排的第一页）被这次完整刷新覆盖：留着它的话，
+        // 它晚 120ms 发起、代数更新，会把这次完整刷新的结果丢掉。
+        if (refreshTimerRef.current !== null) {
+          window.clearTimeout(refreshTimerRef.current);
+          refreshTimerRef.current = null;
+        }
+        pendingFullRefreshRef.current = false;
         fetchFirstPage(false);
       }),
     [fetchFirstPage],

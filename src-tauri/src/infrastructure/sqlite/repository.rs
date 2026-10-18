@@ -259,9 +259,17 @@ impl ClipboardRepository for SqliteClipboardRepository {
     ///   刷新，需要专门做一次批量重建（目前现存行与当前算法一致：HTML 去标签与
     ///   HTML 类型是同一个提交引入的）。
     /// - 两个分支都不再 `SELECT *` 读回整行，返回值由「入参 + 元数据列」拼出。
-    ///   因此命中旧行时，返回值的 `content_text` 是**调用方传入的文本**，与库里
-    ///   原文只可能在 CRLF / NFC 规范化上不同；目前没有调用方读这个字段
-    ///   （采集管线只取 id 发事件，`copy_to_clipboard` 丢弃返回值）。
+    ///   因此命中旧行时，返回值的 `content_text` 是**调用方这次传入的值**，不保证
+    ///   等于库里那一行：
+    ///   - 文本 / HTML / 文件列表：与库里原文只可能在 CRLF / NFC 规范化上不同；
+    ///   - 图片：指纹是 PNG 字节的哈希，`content_text` 是 watcher 这次算出的
+    ///     绝对路径（`<image_dir>/<指纹前 32 位>.png`），库里那一行存的是第一次
+    ///     复制时的路径。文件名由指纹决定，通常两者相同；但旧版本导入的行、
+    ///     或数据目录变过之后，库里的路径可能不同 —— 所以**不要**拿返回值的
+    ///     路径去清理重复图片，也不要把它当作库里的整条记录推给前端。
+    ///
+    ///   目前没有调用方读这个字段（采集管线只取 id 发事件，`copy_to_clipboard`
+    ///   丢弃返回值）；需要库内原文的调用方请再 `get_by_id`。
     async fn insert_or_touch(
         &self,
         item: NewClipboardItem,

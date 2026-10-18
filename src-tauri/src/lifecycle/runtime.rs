@@ -190,7 +190,11 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
 
     let app_handle_for_events = app_handle.clone();
     if let Err(err) = capture_pipeline.start(history.clone(), move |item| {
-        if let Err(emit_err) = app_handle_for_events.emit("clipboard://captured", &item) {
+        // 只发 id：前端拿它当刷新信号，不读全文（见 ClipboardItemIdPayload）。
+        let payload = crate::commands::dto::ClipboardItemIdPayload {
+            id: item.id.to_string(),
+        };
+        if let Err(emit_err) = app_handle_for_events.emit("clipboard://captured", payload) {
             tracing::warn!(error = %emit_err, "发送 clipboard://captured 事件失败");
         }
     }) {

@@ -32,7 +32,7 @@ impl CapturePipeline {
     }
 
     /// 启动采集。`on_captured` 会在每次成功入库后被调用，用于向前端发送
-    /// `clipboard://captured` 事件。
+    /// 只带 id 的 `clipboard://captured` 事件（前端据此回查列表，不经事件搬运全文）。
     pub fn start(
         &mut self,
         history_service: Arc<HistoryService>,

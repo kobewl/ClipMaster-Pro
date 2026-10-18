@@ -1,8 +1,9 @@
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::dto::{
-    AppSettingsDto, ClipGroupDto, ClipboardItemDto, CreateGroupDto, ListQueryDto, ListResultDto,
-    RunAgentActionBatchDto, RunAgentActionDto, SourceAppDto, SourceIconRequestDto, UpdateGroupDto,
+    AppSettingsDto, ClipGroupDto, ClipboardItemDto, ClipboardItemIdPayload, CreateGroupDto,
+    ListQueryDto, ListResultDto, RunAgentActionBatchDto, RunAgentActionDto, SourceAppDto,
+    SourceIconRequestDto, UpdateGroupDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::model::ContentType;
@@ -140,9 +141,8 @@ pub async fn set_item_group(
         .set_group(&id, group_id)
         .await
         .map_err(CommandError::from)?;
-    if let Ok(item) = runtime.history.get(&id).await {
-        emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
-    }
+    // 只发 id：前端回查列表，不必为了发事件再把全文读一遍。
+    emit_or_warn(&app, "clipboard://updated", ClipboardItemIdPayload { id });
     Ok(())
 }
 
@@ -157,9 +157,7 @@ pub async fn copy_clipboard_item(
         .copy_to_clipboard(&id)
         .await
         .map_err(CommandError::from)?;
-    if let Ok(item) = runtime.history.get(&id).await {
-        emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
-    }
+    emit_or_warn(&app, "clipboard://updated", ClipboardItemIdPayload { id });
     Ok(())
 }
 
@@ -174,9 +172,7 @@ pub async fn paste_clipboard_item(
         .copy_to_clipboard(&id)
         .await
         .map_err(CommandError::from)?;
-    if let Ok(item) = runtime.history.get(&id).await {
-        emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
-    }
+    emit_or_warn(&app, "clipboard://updated", ClipboardItemIdPayload { id });
     hide_window_and_simulate_paste(&app).await
 }
 

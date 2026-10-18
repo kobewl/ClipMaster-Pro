@@ -56,6 +56,17 @@ impl From<ClipboardItem> for ClipboardItemDto {
     }
 }
 
+/// `clipboard://captured` / `clipboard://updated` 事件的 payload：只告诉前端
+/// 「哪条变了」，前端收到后自己回查列表。
+///
+/// 不再推整条 `ClipboardItemDto`：那会带上 `content_text` 全文（最大 5MB），
+/// 而唯一的消费者（前端历史列表）根本不读 payload，只拿它当刷新信号 ——
+/// 每次复制都把全文序列化一遍、过一次 IPC，是纯开销。
+#[derive(Debug, Clone, Serialize)]
+pub struct ClipboardItemIdPayload {
+    pub id: String,
+}
+
 /// 预览规则（列表行与 Planner 确认卡片**共用同一份**）。
 ///
 /// 从上面的 `From` 里提出来不是为了复用几行代码，而是为了让两处只有一份规则：
@@ -672,6 +683,14 @@ mod tests {
             object.get("source_app_path").is_some_and(|v| v.is_null()),
             "{value}"
         );
+    }
+
+    /// captured / updated 事件的形状钉死为 `{ "id": … }`：不带全文，也不多带字段。
+    #[test]
+    fn clipboard_item_id_payload_serializes_only_id() {
+        let value =
+            serde_json::to_value(ClipboardItemIdPayload { id: "x".into() }).expect("序列化");
+        assert_eq!(value, serde_json::json!({ "id": "x" }));
     }
 
     /// 前端可能只给部分字段（旧记录只有应用名），缺的字段落成 None。

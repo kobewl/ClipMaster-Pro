@@ -219,7 +219,8 @@ fn collect_image_paths_with_sql(
 ///
 /// 这是 enforce_max_count / enforce_retention_days 共用的唯一淘汰机制：
 /// 每个被删行用删除**前**读出的 search_text 精确删除它的索引项
-/// （与 delete / insert_or_touch 路径同一机制，索引与主表列始终同步更新），
+/// （与 delete / insert_or_touch 插入分支同一机制，索引与主表列始终同步更新；
+/// touch 分支不改 search_text，也就不动索引），
 /// 单行 O(log N)。
 ///
 /// **不要**在这里用 `fts_rebuild` —— rebuild 是 O(N) 的全索引重建，
@@ -248,6 +249,18 @@ fn evict_rows(
 
 #[async_trait]
 impl ClipboardRepository for SqliteClipboardRepository {
+    /// 按指纹去重：命中旧行只「touch」，未命中才插入。
+    ///
+    /// - touch 路径只更新时间与四个来源字段，**不重算 search_text、不碰 FTS**：
+    ///   指纹相同 = 规范化后的内容相同，`searchable_text` 的结果也就相同，
+    ///   重建索引是纯开销（大文本每次复制都要重新小写 / 去标签一遍）。
+    ///   代价：如果将来 `searchable_text` 的算法升级，现存行不会在 touch 时被顺手
+    ///   刷新，需要专门做一次批量重建（目前现存行与当前算法一致：HTML 去标签与
+    ///   HTML 类型是同一个提交引入的）。
+    /// - 两个分支都不再 `SELECT *` 读回整行，返回值由「入参 + 元数据列」拼出。
+    ///   因此命中旧行时，返回值的 `content_text` 是**调用方传入的文本**，与库里
+    ///   原文只可能在 CRLF / NFC 规范化上不同；目前没有调用方读这个字段
+    ///   （采集管线只取 id 发事件，`copy_to_clipboard` 丢弃返回值）。
     async fn insert_or_touch(
         &self,
         item: NewClipboardItem,
@@ -256,28 +269,34 @@ impl ClipboardRepository for SqliteClipboardRepository {
         tokio::task::spawn_blocking(move || {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");
             let now = Utc::now().to_rfc3339();
-            // 搜索文本与「命中证据」的重算口径必须一致：统一走 `searchable_text`
-            // （HTML 去标签 + 小写），应用层装配证据时用的是同一个函数。
-            let search_text = searchable_text(item.content_type, &item.content_text);
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
-            let existing: Option<(String, String)> = tx
+            // 只取拼返回值要用的元数据列：search_text / content_text 可能是几 MB。
+            let existing: Option<(String, String, Option<String>, String, Option<String>)> = tx
                 .query_row(
-                    "SELECT id, search_text FROM clipboard_items WHERE fingerprint = ?1",
+                    "SELECT id, content_type, group_id, created_at, legacy_id \
+                     FROM clipboard_items WHERE fingerprint = ?1",
                     params![item.fingerprint],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
+                    |row| {
+                        Ok((
+                            row.get(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                            row.get(4)?,
+                        ))
+                    },
                 )
                 .optional()
                 .map_err(Self::map_db_err)?;
 
-            if let Some((existing_id, old_search_text)) = existing {
+            if let Some((existing_id, stored_type, group_id, created_at, legacy_id)) = existing {
                 tx.execute(
                     "UPDATE clipboard_items
                      SET updated_at = ?1, last_copied_at = ?1,
                          source_app = ?2, source_url = ?3,
-                         source_bundle_id = ?4, source_app_path = ?5,
-                         search_text = ?6
-                     WHERE id = ?7",
+                         source_bundle_id = ?4, source_app_path = ?5
+                     WHERE id = ?6",
                     // 四个来源字段描述的是同一次（最近一次）复制，必须一起覆盖：
                     // 只换名字不换 bundle，会把 B 应用的名字配上 A 应用的图标。
                     params![
@@ -286,27 +305,35 @@ impl ClipboardRepository for SqliteClipboardRepository {
                         item.source_url,
                         item.source_bundle_id,
                         item.source_app_path,
-                        search_text,
                         existing_id
                     ],
                 )
                 .map_err(Self::map_db_err)?;
-
-                let rowid = get_rowid(&tx, &existing_id)?;
-                sync_fts_delete(&tx, rowid, &old_search_text)?;
-                sync_fts_insert(&tx, rowid, &search_text)?;
-
-                let result = tx
-                    .query_row(
-                        "SELECT * FROM clipboard_items WHERE id = ?1",
-                        params![existing_id],
-                        Self::row_to_item,
-                    )
-                    .map_err(Self::map_db_err)?;
                 tx.commit().map_err(Self::map_db_err)?;
-                return Ok(result);
+
+                let touched_at = parse_datetime(&now);
+                // id / content_type 的解析退路与 `row_to_item` 相同。
+                return Ok(ClipboardItem {
+                    id: ClipboardItemId::from_str(&existing_id).unwrap_or_default(),
+                    content_type: ContentType::from_str(&stored_type).unwrap_or(ContentType::Text),
+                    content_text: item.content_text,
+                    fingerprint: item.fingerprint,
+                    group_id,
+                    created_at: parse_datetime(&created_at),
+                    updated_at: touched_at,
+                    last_copied_at: touched_at,
+                    source_app: item.source_app,
+                    source_url: item.source_url,
+                    source_bundle_id: item.source_bundle_id,
+                    source_app_path: item.source_app_path,
+                    legacy_id,
+                });
             }
 
+            // 搜索文本与「命中证据」的重算口径必须一致：统一走 `searchable_text`
+            // （HTML 去标签 + 小写），应用层装配证据时用的是同一个函数。
+            // 只有新行才需要算（touch 路径见函数注释）。
+            let search_text = searchable_text(item.content_type, &item.content_text);
             let new_id = ClipboardItemId::new();
             tx.execute(
                 "INSERT INTO clipboard_items
@@ -331,16 +358,25 @@ impl ClipboardRepository for SqliteClipboardRepository {
 
             let rowid = get_rowid(&tx, &new_id.to_string())?;
             sync_fts_insert(&tx, rowid, &search_text)?;
-
-            let result = tx
-                .query_row(
-                    "SELECT * FROM clipboard_items WHERE id = ?1",
-                    params![new_id.to_string()],
-                    Self::row_to_item,
-                )
-                .map_err(Self::map_db_err)?;
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(result)
+
+            // 刚插入的行就是这些值，不必再 SELECT * 读回全文。
+            let inserted_at = parse_datetime(&now);
+            Ok(ClipboardItem {
+                id: new_id,
+                content_type: item.content_type,
+                content_text: item.content_text,
+                fingerprint: item.fingerprint,
+                group_id: None,
+                created_at: inserted_at,
+                updated_at: inserted_at,
+                last_copied_at: inserted_at,
+                source_app: item.source_app,
+                source_url: item.source_url,
+                source_bundle_id: item.source_bundle_id,
+                source_app_path: item.source_app_path,
+                legacy_id: None,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
@@ -919,6 +955,146 @@ mod tests {
 
         let unfiltered = repo.search(query_all()).await.unwrap();
         assert_eq!(unfiltered.total, 2, "不限时间时两条都在");
+    }
+
+    fn search_text_of(conn: &Arc<Mutex<Connection>>, id: &str) -> String {
+        conn.lock()
+            .unwrap()
+            .query_row(
+                "SELECT search_text FROM clipboard_items WHERE id = ?1",
+                params![id],
+                |row| row.get(0),
+            )
+            .unwrap()
+    }
+
+    /// touch 不再改写 search_text：先把它改成哨兵值，再复制同一内容，
+    /// 哨兵值必须原样留着（改写过就会变回 `hello world`）。
+    #[tokio::test]
+    async fn touch_does_not_rewrite_search_text() {
+        let (repo, conn) = repo_with_conn();
+        let first = repo
+            .insert_or_touch(text_item("hello world"))
+            .await
+            .unwrap();
+        let id = first.id.to_string();
+        // 作用域块：锁在这里就释放，不跨后面的 `.await`（clippy::await_holding_lock）。
+        {
+            conn.lock()
+                .unwrap()
+                .execute(
+                    "UPDATE clipboard_items SET search_text = 'sentinel-xyz' WHERE id = ?1",
+                    params![id],
+                )
+                .unwrap();
+        }
+
+        let touched = repo
+            .insert_or_touch(text_item("hello world"))
+            .await
+            .unwrap();
+
+        assert_eq!(touched.id, first.id, "同指纹命中旧行");
+        assert_eq!(search_text_of(&conn, &id), "sentinel-xyz");
+        assert!(touched.last_copied_at >= first.last_copied_at);
+        let stored = repo.get_by_id(first.id).await.unwrap();
+        assert!(
+            stored.last_copied_at >= first.last_copied_at,
+            "库里的复制时间也前移了"
+        );
+    }
+
+    /// 插入一次 + touch 两次：FTS 里仍只有一条索引项，搜索照常命中。
+    #[tokio::test]
+    async fn touch_keeps_single_fts_entry() {
+        let (repo, conn) = repo_with_conn();
+        for _ in 0..3 {
+            repo.insert_or_touch(text_item("hello world"))
+                .await
+                .unwrap();
+        }
+
+        let fts_hits: i64 = conn
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT count(*) FROM clipboard_items_fts \
+                 WHERE clipboard_items_fts MATCH '\"hello\"'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(fts_hits, 1);
+        assert_eq!(repo.search(query_all()).await.unwrap().total, 1);
+
+        let found = repo
+            .search(SearchQuery {
+                search_text: Some("hello".into()),
+                ..query_all()
+            })
+            .await
+            .unwrap();
+        assert_eq!(found.total, 1, "FTS 搜索仍能命中");
+    }
+
+    /// touch 的返回值由「入参 + 元数据列」拼出：id / created_at / group_id 来自库，
+    /// 来源字段来自这次入参。
+    #[tokio::test]
+    async fn touch_returns_metadata_without_reading_text() {
+        let (repo, conn) = repo_with_conn();
+        let first = repo
+            .insert_or_touch(text_item("hello world"))
+            .await
+            .unwrap();
+        let group_id = "22222222-2222-2222-2222-222222222222".to_string();
+        {
+            let now = Utc::now().to_rfc3339();
+            conn.lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO clip_groups (id, name, color, sort_order, created_at, updated_at)
+                     VALUES (?1, '测试', '#FF0000', 0, ?2, ?2)",
+                    params![group_id, now],
+                )
+                .unwrap();
+        }
+        repo.set_group(first.id, Some(group_id.clone()))
+            .await
+            .unwrap();
+
+        let touched = repo
+            .insert_or_touch(NewClipboardItem {
+                source_app: Some("Safari".into()),
+                source_url: Some("https://example.com".into()),
+                source_bundle_id: Some("com.apple.Safari".into()),
+                source_app_path: Some("/Applications/Safari.app".into()),
+                ..text_item("hello world")
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(touched.id, first.id);
+        assert_eq!(touched.created_at, first.created_at);
+        assert_eq!(touched.group_id.as_deref(), Some(group_id.as_str()));
+        assert_eq!(touched.content_type, ContentType::Text);
+        assert_eq!(touched.source_app.as_deref(), Some("Safari"));
+        assert_eq!(touched.source_url.as_deref(), Some("https://example.com"));
+        assert_eq!(
+            touched.source_bundle_id.as_deref(),
+            Some("com.apple.Safari")
+        );
+        assert_eq!(
+            touched.source_app_path.as_deref(),
+            Some("/Applications/Safari.app")
+        );
+
+        // 拼出来的返回值与库里读回的整行一致（content_text 未规范化差异时）。
+        let stored = repo.get_by_id(first.id).await.unwrap();
+        assert_eq!(stored.group_id, touched.group_id);
+        assert_eq!(stored.created_at, touched.created_at);
+        assert_eq!(stored.last_copied_at, touched.last_copied_at);
+        assert_eq!(stored.source_app, touched.source_app);
+        assert_eq!(stored.content_text, touched.content_text);
     }
 
     #[tokio::test]

@@ -1,10 +1,19 @@
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type { ClipboardItem } from "@/types/clipboard";
+
+/**
+ * `clipboard://captured` / `clipboard://updated` 的载荷：后端只告诉「哪条变了」。
+ *
+ * 不再推整条记录（可能是几 MB 的全文）：前端收到事件后本来就会回查列表，
+ * 推全文只是白白走一遍序列化和 IPC。
+ */
+export interface ClipboardItemIdPayload {
+  id: string;
+}
 
 export function onClipboardCaptured(
-  handler: (item: ClipboardItem) => void,
+  handler: (payload: ClipboardItemIdPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<ClipboardItem>("clipboard://captured", (e) => handler(e.payload));
+  return listen<ClipboardItemIdPayload>("clipboard://captured", (e) => handler(e.payload));
 }
 
 export function onClipboardDeleted(
@@ -14,9 +23,9 @@ export function onClipboardDeleted(
 }
 
 export function onClipboardUpdated(
-  handler: (item: ClipboardItem) => void,
+  handler: (payload: ClipboardItemIdPayload) => void,
 ): Promise<UnlistenFn> {
-  return listen<ClipboardItem>("clipboard://updated", (e) => handler(e.payload));
+  return listen<ClipboardItemIdPayload>("clipboard://updated", (e) => handler(e.payload));
 }
 
 export function onClipboardCleared(

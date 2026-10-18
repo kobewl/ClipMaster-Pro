@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
@@ -26,7 +26,12 @@ import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { ExcludedAppsSection } from "./ExcludedAppsSection";
 import { Icon } from "./Icon";
-import { ReleaseNotes } from "./ReleaseNotes";
+
+// 更新说明用 react-markdown + remark-gfm 渲染，只有检查到新版本时才用得上，
+// 单独拆一个 chunk，打开设置面板本身不必加载 markdown 栈。
+const ReleaseNotes = lazy(() =>
+  import("./ReleaseNotes").then((m) => ({ default: m.ReleaseNotes })),
+);
 
 /**
  * 设置里展示的更新说明：去掉首尾空白，但**保留全部行**。
@@ -870,7 +875,11 @@ export function SettingsPanel({
                   />
                 </div>
               )}
-              {releaseNotes && <ReleaseNotes markdown={releaseNotes} />}
+              {releaseNotes && (
+                <Suspense fallback={null}>
+                  <ReleaseNotes markdown={releaseNotes} />
+                </Suspense>
+              )}
             </div>
           )}
           {updateError && (

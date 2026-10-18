@@ -6,7 +6,8 @@ import {
   onClipboardDeleted,
   onClipboardUpdated,
 } from "@/lib/events";
-import type { ClipboardItem, ListQuery } from "@/types/clipboard";
+import { isWindowHidden, onWindowShown } from "@/lib/windowVisibility";
+import type { ClipboardItem, ListQuery, ListResult } from "@/types/clipboard";
 import { isCommandError, parseQueryTerms } from "@/types/clipboard";
 
 /** 每页条数。滚动到底部时按这个粒度继续向数据库拉取。 */
@@ -39,6 +40,46 @@ function appendUnique(prev: ClipboardItem[], incoming: ClipboardItem[]): Clipboa
   return fresh.length === 0 ? prev : [...prev, ...fresh];
 }
 
+/** 浅比较单个字段：数组（如 `matched_terms`）按长度与元素逐一比，其余用 Object.is。 */
+function sameFieldValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true;
+  if (Array.isArray(a) && Array.isArray(b)) {
+    return a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
+  }
+  return false;
+}
+
+/** 两条记录逐字段浅比较（取两边 key 的并集，缺失的 key 视为 undefined）。 */
+function sameItem(a: ClipboardItem, b: ClipboardItem): boolean {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const key of keys) {
+    const field = key as keyof ClipboardItem;
+    if (!sameFieldValue(a[field], b[field])) return false;
+  }
+  return true;
+}
+
+/**
+ * 刷新结果与旧列表对齐：按 id 找旧对象，字段全同就复用旧引用；
+ * 如果结果与 prev 长度相同且每个位置都是同一个引用，直接返回 prev 本身。
+ *
+ * 为什么：后台刷新每次都会拿到一份全新的对象数组，直接替换会让 HistoryItemRow 的
+ * memo 全部失效（每行都重渲），HistoryList 里依赖 items 的 prefetchSourceIcons
+ * effect 也会重跑。复用引用后，只有真正变了的行才重渲；什么都没变时 setItems
+ * 拿到的是同一个数组，React 直接跳过这次更新。
+ */
+function reconcileItems(prev: ClipboardItem[], next: ClipboardItem[]): ClipboardItem[] {
+  const known = new Map(prev.map((item) => [item.id, item]));
+  let unchanged = prev.length === next.length;
+  const merged = next.map((item, index) => {
+    const old = known.get(item.id);
+    const reused = old !== undefined && sameItem(old, item) ? old : item;
+    if (reused !== prev[index]) unchanged = false;
+    return reused;
+  });
+  return unchanged ? prev : merged;
+}
+
 /**
  * 剪贴板历史列表数据源。
  *
@@ -48,8 +89,11 @@ function appendUnique(prev: ClipboardItem[], incoming: ClipboardItem[]): Clipboa
  * 2. 每次重置查询都会让 generation（代数）自增，过期响应直接丢弃 —— 快速输入时
  *    先发的慢请求不会覆盖后发的快请求；
  * 3. `clipboard://deleted` 走本地摘除（后端已经删过了），其余事件才回查数据库；
+ *    窗口不可见时这些事件只记 dirty，重新显示 / 获得焦点时再刷新一次；
  * 4. 事件触发的刷新（`reload`）保留"已加载这么多条"的窗口，只有查询条件变化
  *    才真正回到第一页 —— 否则用户刚往下滚动，一次系统复制就把他弹回顶部。
+ *    已加载超过 500 条（后端单次上限）时按 500 一批顺序拉，不截断；
+ *    结果按 id 与旧列表对齐、复用没变的行对象（见 reconcileItems）。
  */
 export function useClipboardHistory(options: Options) {
   const { groupId, search, contentType, timeRange } = options;
@@ -92,6 +136,8 @@ export function useClipboardHistory(options: Options) {
   const itemsRef = useRef<ClipboardItem[]>([]);
   /** `loadMoreStopped` 的 ref 镜像：`loadMore` 是稳定引用，读不到最新的 state。 */
   const loadMoreStoppedRef = useRef(false);
+  /** 窗口不可见期间收到过 captured / updated / cleared，重新显示时要补刷一次。 */
+  const dirtyRef = useRef(false);
 
   // 渲染期同步查询条件与已加载数量：effect 与事件回调都晚于本次渲染，写进来的必定是最新值。
   const queryRef = useRef({ groupId, search, contentType, timeRange });
@@ -130,24 +176,40 @@ export function useClipboardHistory(options: Options) {
         setRelaxedDropped(null);
       }
 
-      const limit = reset
-        ? PAGE_SIZE
-        : Math.min(MAX_PAGE_SIZE, Math.max(PAGE_SIZE, loadedCountRef.current));
+      // 新查询只拉第一页；后台刷新要拉回"已加载这么多条"。后端单次最多给
+      // MAX_PAGE_SIZE 条，超过时按批顺序拉（offset 0、500、1000…），否则刷新一次
+      // 列表就被截回 500 条，用户滚动位置也会被夹回去。
+      const target = reset ? PAGE_SIZE : Math.max(PAGE_SIZE, loadedCountRef.current);
       // 本次请求实际用的查询串（与 buildQuery 的 trim 口径一致），
       // 响应落地时按它算 chip 分母。
       const requestTermCount = parseQueryTerms(queryRef.current.search).length;
 
-      commands
-        .listClipboardItems(buildQuery(limit, 0))
-        .then((result) => {
+      const run = async () => {
+        let collected: ClipboardItem[] = [];
+        let last: ListResult | null = null;
+        let offset = 0;
+        while (offset < target) {
+          const limit = Math.min(MAX_PAGE_SIZE, target - offset);
+          const batch = await commands.listClipboardItems(buildQuery(limit, offset));
+          // 每批都检查代数：中途换了查询或又触发了刷新，后面的批次不必再拉。
           if (generation !== generationRef.current) return;
-          setItems(result.items);
-          setTotal(result.total);
-          // 宽松路径的证据随本次响应更新；严格路径/空查询时是 undefined → null。
-          setRelaxedDropped(result.relaxed_dropped ?? null);
-          setQueryTermCount(requestTermCount);
-          setLoadState("idle");
-        })
+          last = batch;
+          // 批次边界上可能因为新采集而重复一条，按 id 去重。
+          collected = appendUnique(collected, batch.items);
+          if (batch.items.length < limit) break;
+          offset += limit;
+        }
+        if (last === null) return;
+        const result = last;
+        setItems((prev) => reconcileItems(prev, collected));
+        setTotal(result.total);
+        // 宽松路径的证据随本次响应更新；严格路径/空查询时是 undefined → null。
+        setRelaxedDropped(result.relaxed_dropped ?? null);
+        setQueryTermCount(requestTermCount);
+        setLoadState("idle");
+      };
+
+      run()
         .catch((error: unknown) => {
           if (generation !== generationRef.current) return;
           // 后台刷新失败时保留旧数据，只提示错误，不要把列表清空。
@@ -208,15 +270,23 @@ export function useClipboardHistory(options: Options) {
 
   useEffect(() => {
     let disposed = false;
+    // 窗口不可见时只记 dirty：用户看不到列表，刷新了也白刷，回来时由 onWindowShown 补一次。
+    const requestRefresh = () => {
+      void isWindowHidden().then((hidden) => {
+        if (disposed) return;
+        if (hidden) dirtyRef.current = true;
+        else scheduleReload();
+      });
+    };
     const unsubscribers = [
       onClipboardCaptured(() => {
-        if (!disposed) scheduleReload();
+        if (!disposed) requestRefresh();
       }),
       onClipboardUpdated(() => {
-        if (!disposed) scheduleReload();
+        if (!disposed) requestRefresh();
       }),
       onClipboardCleared(() => {
-        if (!disposed) scheduleReload();
+        if (!disposed) requestRefresh();
       }),
       onClipboardDeleted((id) => {
         if (disposed) return;
@@ -235,11 +305,24 @@ export function useClipboardHistory(options: Options) {
     };
   }, [scheduleReload]);
 
+  // 重新显示 / 获得焦点：隐藏期间错过了变更就立即刷新一次（不等防抖）。
+  // 两个触发源可能对同一次显示都触发，dirty 已经清掉，第二次是空操作。
+  useEffect(
+    () =>
+      onWindowShown(() => {
+        if (!dirtyRef.current) return;
+        dirtyRef.current = false;
+        fetchFirstPage(false);
+      }),
+    [fetchFirstPage],
+  );
+
   const clearError = useCallback(() => setErrorMessage(null), []);
 
   const setItemGroup = useCallback(
     async (id: string, nextGroupId: string | null) => {
-      // 先乐观更新，界面立刻有反馈；后端随后广播 clipboard://updated 触发重排。
+      // 先乐观更新，界面立刻有反馈；后端随后广播只带 id 的 clipboard://updated，
+      // 前端据此回查列表完成重排（事件本身不带新数据）。
       setItems((prev) =>
         prev.map((item) => (item.id === id ? { ...item, group_id: nextGroupId } : item)),
       );

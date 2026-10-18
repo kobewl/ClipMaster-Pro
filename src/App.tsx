@@ -1,16 +1,12 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { SearchBar } from "@/components/SearchBar";
 import { Toolbar } from "@/components/Toolbar";
 import { HistoryList } from "@/components/HistoryList";
 import { Icon } from "@/components/Icon";
 import { StatusBar } from "@/components/StatusBar";
-import { SettingsPanel } from "@/components/SettingsPanel";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import { PreviewDialog } from "@/components/PreviewDialog";
-import { AgentBatchDialog } from "@/components/AgentBatchDialog";
-import { AgentFlowDialog } from "@/components/AgentFlowDialog";
-import { AgentChatDialog, type AgentChatSeed } from "@/components/AgentChatDialog";
+import type { AgentChatSeed } from "@/components/AgentChatDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -21,6 +17,38 @@ import { getSourceIconPath } from "@/lib/sourceIcons";
 import type { AppSettings } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 import { applyTheme, isThemePreference } from "@/lib/theme";
+
+// 弹窗按需拆包：首屏只需要列表，设置 / 预览（含 DOMPurify）/ Agent 工作台
+// 等第一次打开时才加载各自的 chunk。ConfirmDialog 很小，保持静态 import。
+const SettingsPanel = lazy(() =>
+  import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })),
+);
+const PreviewDialog = lazy(() =>
+  import("@/components/PreviewDialog").then((m) => ({ default: m.PreviewDialog })),
+);
+const AgentBatchDialog = lazy(() =>
+  import("@/components/AgentBatchDialog").then((m) => ({ default: m.AgentBatchDialog })),
+);
+const AgentFlowDialog = lazy(() =>
+  import("@/components/AgentFlowDialog").then((m) => ({ default: m.AgentFlowDialog })),
+);
+const AgentChatDialog = lazy(() =>
+  import("@/components/AgentChatDialog").then((m) => ({ default: m.AgentChatDialog })),
+);
+
+/**
+ * 首次打开后常驻：`open` 第一次为真之后一直返回 true。
+ *
+ * 这些弹窗原来就是常驻挂载、关着时 `return null`，状态跨开关保留（例如设置面板的
+ * 更新检查结果、下载进度和 `onUpdateProgress` 监听）。如果关闭即卸载，关掉设置再
+ * 打开，进行中的下载进度会归零 —— 所以只把挂载推迟到第一次打开（chunk 也在那时
+ * 才加载），之后不卸载，保持原来的语义。
+ */
+function useOpenedOnce(open: boolean): boolean {
+  const ref = useRef(false);
+  if (open) ref.current = true;
+  return ref.current;
+}
 
 export default function App() {
   const [searchInput, setSearchInput] = useState("");
@@ -168,17 +196,23 @@ export default function App() {
    * 十有八九是要一段连续区间（几段相邻的调研结论），逐个点太费事。
    */
   const lastPickedRef = useRef<string | null>(null);
+  // togglePick 读 ref 而不是闭包里的 items：依赖 [] 让它保持稳定引用，
+  // 列表每次刷新时所有行的 onTogglePick 不变，HistoryItemRow 的 memo 才能生效。
+  // updater 执行时读到的是最近一次提交的列表，与原来闭包里的 items 等价。
+  const itemsRef = useRef(items);
+  itemsRef.current = items;
   const togglePick = useCallback(
     (id: string, shiftKey: boolean) => {
       setSelectedIds((prev) => {
         const next = new Set(prev);
         const anchor = lastPickedRef.current;
+        const list = itemsRef.current;
 
-        if (shiftKey && anchor && anchor !== id && items.some((it) => it.id === anchor)) {
-          const from = items.findIndex((it) => it.id === anchor);
-          const to = items.findIndex((it) => it.id === id);
+        if (shiftKey && anchor && anchor !== id && list.some((it) => it.id === anchor)) {
+          const from = list.findIndex((it) => it.id === anchor);
+          const to = list.findIndex((it) => it.id === id);
           const [start, end] = from < to ? [from, to] : [to, from];
-          for (let i = start; i <= end; i += 1) next.add(items[i].id);
+          for (let i = start; i <= end; i += 1) next.add(list[i].id);
         } else if (next.has(id)) {
           next.delete(id);
         } else {
@@ -189,7 +223,7 @@ export default function App() {
       });
       lastPickedRef.current = id;
     },
-    [items],
+    [],
   );
 
   /** 全选当前已加载的条目（⌘A）。 */
@@ -218,6 +252,13 @@ export default function App() {
     () => (previewId === null ? null : items.find((item) => item.id === previewId) ?? null),
     [previewId, items],
   );
+
+  // 懒加载弹窗：第一次打开才挂载（并加载 chunk），之后常驻，见 useOpenedOnce。
+  const settingsEverOpened = useOpenedOnce(settingsOpen);
+  const previewEverOpened = useOpenedOnce(previewItem !== null);
+  const agentBatchEverOpened = useOpenedOnce(agentBatchOpen);
+  const agentFlowEverOpened = useOpenedOnce(agentFlowOpen);
+  const agentChatEverOpened = useOpenedOnce(agentChatOpen);
 
   const handleCopyMerged = useCallback(async () => {
     if (!canMerge) return;
@@ -493,17 +534,21 @@ export default function App() {
         </div>
       )}
 
-      <SettingsPanel
-        open={settingsOpen}
-        settings={settings}
-        onClose={() => setSettingsOpen(false)}
-        onSave={async (next) => {
-          const saved = await commands.updateSettings(next);
-          setSettings(saved);
-          applyTheme(isThemePreference(saved.theme) ? saved.theme : "system");
-        }}
-        onSettingsChange={setSettings}
-      />
+      {settingsEverOpened && (
+        <Suspense fallback={null}>
+          <SettingsPanel
+            open={settingsOpen}
+            settings={settings}
+            onClose={() => setSettingsOpen(false)}
+            onSave={async (next) => {
+              const saved = await commands.updateSettings(next);
+              setSettings(saved);
+              applyTheme(isThemePreference(saved.theme) ? saved.theme : "system");
+            }}
+            onSettingsChange={setSettings}
+          />
+        </Suspense>
+      )}
 
       <ConfirmDialog
         open={confirmClearOpen}
@@ -514,61 +559,77 @@ export default function App() {
         onCancel={() => setConfirmClearOpen(false)}
       />
 
-      <AgentBatchDialog
-        open={agentBatchOpen}
-        items={items.filter((item) => selectedIds.has(item.id))}
-        onClose={() => setAgentBatchOpen(false)}
-        onOpenSettings={() => {
-          setAgentBatchOpen(false);
-          setSettingsOpen(true);
-        }}
-      />
+      {agentBatchEverOpened && (
+        <Suspense fallback={null}>
+          <AgentBatchDialog
+            open={agentBatchOpen}
+            items={items.filter((item) => selectedIds.has(item.id))}
+            onClose={() => setAgentBatchOpen(false)}
+            onOpenSettings={() => {
+              setAgentBatchOpen(false);
+              setSettingsOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
 
       {/* 会话工作台：打开那一次会触发服务端重算（关键判断 10）。
           `onOpenSettings` 照批量入口（:500-503）的写法：先关掉工作台再打开设置 ——
           用户是从建议面板里那条「去设置」过来的，回来时不该还挂着那个面板。 */}
-      <AgentFlowDialog
-        open={agentFlowOpen}
-        onClose={() => setAgentFlowOpen(false)}
-        onOpenSettings={() => {
-          setAgentFlowOpen(false);
-          setSettingsOpen(true);
-        }}
-      />
+      {agentFlowEverOpened && (
+        <Suspense fallback={null}>
+          <AgentFlowDialog
+            open={agentFlowOpen}
+            onClose={() => setAgentFlowOpen(false)}
+            onOpenSettings={() => {
+              setAgentFlowOpen(false);
+              setSettingsOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
 
-      <AgentChatDialog
-        open={agentChatOpen}
-        seed={agentChatSeed}
-        onClose={() => setAgentChatOpen(false)}
-        onOpenSettings={() => {
-          setAgentChatOpen(false);
-          setSettingsOpen(true);
-        }}
-      />
+      {agentChatEverOpened && (
+        <Suspense fallback={null}>
+          <AgentChatDialog
+            open={agentChatOpen}
+            seed={agentChatSeed}
+            onClose={() => setAgentChatOpen(false)}
+            onOpenSettings={() => {
+              setAgentChatOpen(false);
+              setSettingsOpen(true);
+            }}
+          />
+        </Suspense>
+      )}
 
-      <PreviewDialog
-        item={previewItem}
-        iconSrc={getSourceIconPath(previewItem ?? null)}
-        onCopy={async (id) => {
-          try {
-            await copyItem(id);
-            setPreviewId(null);
-            showToast("已复制 ✓");
-          } catch {
-            /* 失败提示由 hook 统一写入 errorMessage */
-          }
-        }}
-        onPaste={(id) => {
-          setPreviewId(null);
-          handlePaste(id);
-        }}
-        onClose={() => setPreviewId(null)}
-        onOpenSettings={() => setSettingsOpen(true)}
-        onAskAi={(item) => {
-          setPreviewId(null);
-          openAgentChat({ itemIds: [item.id], startFresh: true });
-        }}
-      />
+      {previewEverOpened && (
+        <Suspense fallback={null}>
+          <PreviewDialog
+            item={previewItem}
+            iconSrc={getSourceIconPath(previewItem ?? null)}
+            onCopy={async (id) => {
+              try {
+                await copyItem(id);
+                setPreviewId(null);
+                showToast("已复制 ✓");
+              } catch {
+                /* 失败提示由 hook 统一写入 errorMessage */
+              }
+            }}
+            onPaste={(id) => {
+              setPreviewId(null);
+              handlePaste(id);
+            }}
+            onClose={() => setPreviewId(null)}
+            onOpenSettings={() => setSettingsOpen(true)}
+            onAskAi={(item) => {
+              setPreviewId(null);
+              openAgentChat({ itemIds: [item.id], startFresh: true });
+            }}
+          />
+        </Suspense>
+      )}
     </main>
   );
 }

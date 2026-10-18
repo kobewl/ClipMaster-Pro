@@ -16,8 +16,25 @@
 /// `pub(crate)` 而不是私有：会话的内容词（`session_build::content_terms`）与
 /// 检索词共用这一张表 —— 两处各留一份，改一边就是两套口径。
 pub(crate) const STOP_WORDS: &[&str] = &[
-    "的", "了", "吗", "呢", "吧", "啊", "一下", "找", "找找", "搜索", "关于",
-    "请问", "帮我", "如何", "怎么", "怎样", "为什么", "是什么", "怎么做",
+    "的",
+    "了",
+    "吗",
+    "呢",
+    "吧",
+    "啊",
+    "一下",
+    "找",
+    "找找",
+    "搜索",
+    "关于",
+    "请问",
+    "帮我",
+    "如何",
+    "怎么",
+    "怎样",
+    "为什么",
+    "是什么",
+    "怎么做",
 ];
 
 /// 检索前缀：出现在词首时剥掉，剩下的部分才是内容。
@@ -32,7 +49,17 @@ pub(crate) const STOP_WORDS: &[&str] = &[
 /// （实测 0 命中，见 `evals/retrieval/cases.json` 那条用例）—— 用户只是在提问，
 /// 却因此搜不到东西。
 const QUERY_PREFIXES: &[&str] = &[
-    "为什么", "是什么", "什么是", "怎么做", "请问", "帮我", "如何", "怎么", "怎样", "搜索", "关于",
+    "为什么",
+    "是什么",
+    "什么是",
+    "怎么做",
+    "请问",
+    "帮我",
+    "如何",
+    "怎么",
+    "怎样",
+    "搜索",
+    "关于",
     "找找",
 ];
 
@@ -70,7 +97,11 @@ pub fn parse_query(raw: &str) -> Vec<String> {
     if tokens.is_empty() {
         for raw_token in raw.split_whitespace() {
             let token = strip_boundary_punct(raw_token).to_lowercase();
-            let token = if token.is_empty() { raw_token.to_string() } else { token };
+            let token = if token.is_empty() {
+                raw_token.to_string()
+            } else {
+                token
+            };
             if !tokens.iter().any(|t| t == &token) {
                 tokens.push(token);
             }
@@ -187,7 +218,11 @@ mod tests {
             "「+」是词的一部分：剥成「c」会让查询变成命中全库的单字"
         );
         assert_eq!(parse_query("C#"), vec!["c#"], "「#」同理（C# 是语言名）");
-        assert_eq!(parse_query("node.js"), vec!["node.js"], "词内的点号是内容，不是句末标点");
+        assert_eq!(
+            parse_query("node.js"),
+            vec!["node.js"],
+            "词内的点号是内容，不是句末标点"
+        );
         assert_eq!(
             parse_query("？（redis）"),
             vec!["redis"],
@@ -238,8 +273,11 @@ mod tests {
 
     #[test]
     fn parse_query_dedups_in_order_and_handles_blank_input() {
-        assert_eq!(parse_query("Redis redis 超时"), vec!["redis", "超时"],
-            "重复词去重，且保持用户输入的先后顺序");
+        assert_eq!(
+            parse_query("Redis redis 超时"),
+            vec!["redis", "超时"],
+            "重复词去重，且保持用户输入的先后顺序"
+        );
         assert!(
             parse_query("   ").is_empty(),
             "纯空白解析出空词集，调用方按「浏览列表」路径处理"
@@ -249,7 +287,11 @@ mod tests {
     #[test]
     fn relax_threshold_table() {
         for (n, expect) in [(0usize, 1usize), (1, 1), (2, 1), (3, 2), (4, 2), (5, 3)] {
-            assert_eq!(relax_threshold(n), expect, "词数 {n} 的放宽阈值应为 ⌈n/2⌉ 且至少 1");
+            assert_eq!(
+                relax_threshold(n),
+                expect,
+                "词数 {n} 的放宽阈值应为 ⌈n/2⌉ 且至少 1"
+            );
         }
     }
 

@@ -467,7 +467,11 @@ impl From<AgentChatDetail> for AgentChatDetailDto {
             title: chat.title,
             created_at: chat.created_at.to_rfc3339(),
             updated_at: chat.updated_at.to_rfc3339(),
-            messages: chat.messages.into_iter().map(AgentChatMessageDto::from).collect(),
+            messages: chat
+                .messages
+                .into_iter()
+                .map(AgentChatMessageDto::from)
+                .collect(),
         }
     }
 }
@@ -630,13 +634,22 @@ mod tests {
         });
         let value = serde_json::to_value(&with).expect("序列化");
         assert_eq!(value["source_bundle_id"], "com.microsoft.VSCode", "{value}");
-        assert_eq!(value["source_app_path"], "/Applications/Visual Studio Code.app", "{value}");
+        assert_eq!(
+            value["source_app_path"], "/Applications/Visual Studio Code.app",
+            "{value}"
+        );
 
         let without = ClipboardItemDto::from(sample_domain_item("示例", "2026-09-22T10:00:00Z"));
         let value = serde_json::to_value(&without).expect("序列化");
         let object = value.as_object().expect("对象");
-        assert!(object.get("source_bundle_id").is_some_and(|v| v.is_null()), "{value}");
-        assert!(object.get("source_app_path").is_some_and(|v| v.is_null()), "{value}");
+        assert!(
+            object.get("source_bundle_id").is_some_and(|v| v.is_null()),
+            "{value}"
+        );
+        assert!(
+            object.get("source_app_path").is_some_and(|v| v.is_null()),
+            "{value}"
+        );
     }
 
     /// 前端可能只给部分字段（旧记录只有应用名），缺的字段落成 None。
@@ -668,8 +681,14 @@ mod tests {
         })
         .expect("序列化列表响应");
 
-        assert!(!json.contains("relaxed_dropped"), "空 query 不得出现放宽字段：{json}");
-        assert!(!json.contains("matched_terms"), "空 query 不得出现命中词字段：{json}");
+        assert!(
+            !json.contains("relaxed_dropped"),
+            "空 query 不得出现放宽字段：{json}"
+        );
+        assert!(
+            !json.contains("matched_terms"),
+            "空 query 不得出现命中词字段：{json}"
+        );
     }
 
     /// 有查询词时两个字段都如实出现（前端横幅与行内命中词直接读它们）。

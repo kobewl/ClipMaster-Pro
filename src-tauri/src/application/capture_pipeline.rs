@@ -58,10 +58,7 @@ impl CapturePipeline {
                     continue;
                 }
 
-                match history_service
-                    .capture(event)
-                    .await
-                {
+                match history_service.capture(event).await {
                     Ok(item) => on_captured(item),
                     Err(err) => {
                         // 单条失败不得中断整条流水线（可靠性需求 4.2 节）。

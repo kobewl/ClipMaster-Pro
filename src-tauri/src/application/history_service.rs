@@ -10,9 +10,7 @@ use crate::application::query_parse;
 use crate::application::rerank;
 use crate::domain::error::{AppError, DomainError, RepositoryError};
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
-use crate::domain::normalize::{
-    compute_fingerprint, compute_fingerprint_bytes, searchable_text,
-};
+use crate::domain::normalize::{compute_fingerprint, compute_fingerprint_bytes, searchable_text};
 use crate::domain::ports::{
     ClipboardEvent, ClipboardRepository, ClipboardWriter, ListResult, SearchQuery, SettingsStore,
 };
@@ -63,7 +61,11 @@ impl HistoryService {
         writer: Arc<dyn ClipboardWriter>,
         settings_store: Arc<dyn SettingsStore>,
     ) -> Self {
-        Self { repository, writer, settings_store }
+        Self {
+            repository,
+            writer,
+            settings_store,
+        }
     }
 
     pub async fn capture(&self, event: ClipboardEvent) -> Result<ClipboardItem, AppError> {
@@ -114,15 +116,18 @@ impl HistoryService {
         }
 
         let fingerprint = compute_fingerprint("text", &content);
-        let item = self.repository.insert_or_touch(NewClipboardItem {
-            content_type: ContentType::Text,
-            content_text: content,
-            fingerprint,
-            source_app: source.app,
-            source_url: source.url,
-            source_bundle_id: source.bundle_id,
-            source_app_path: source.app_path,
-        }).await?;
+        let item = self
+            .repository
+            .insert_or_touch(NewClipboardItem {
+                content_type: ContentType::Text,
+                content_text: content,
+                fingerprint,
+                source_app: source.app,
+                source_url: source.url,
+                source_bundle_id: source.bundle_id,
+                source_app_path: source.app_path,
+            })
+            .await?;
 
         self.run_cleanup_after_capture().await?;
         Ok(item)
@@ -136,19 +141,23 @@ impl HistoryService {
         if image_path.is_empty() {
             return Err(AppError::Domain(DomainError::EmptyContent));
         }
-        let bytes = tokio::fs::read(&image_path).await
+        let bytes = tokio::fs::read(&image_path)
+            .await
             .map_err(|e| AppError::Domain(DomainError::InvalidContentType(e.to_string())))?;
         let fingerprint = compute_fingerprint_bytes("image", &bytes);
 
-        let item = self.repository.insert_or_touch(NewClipboardItem {
-            content_type: ContentType::Image,
-            content_text: image_path,
-            fingerprint,
-            source_app: source.app,
-            source_url: source.url,
-            source_bundle_id: source.bundle_id,
-            source_app_path: source.app_path,
-        }).await?;
+        let item = self
+            .repository
+            .insert_or_touch(NewClipboardItem {
+                content_type: ContentType::Image,
+                content_text: image_path,
+                fingerprint,
+                source_app: source.app,
+                source_url: source.url,
+                source_bundle_id: source.bundle_id,
+                source_app_path: source.app_path,
+            })
+            .await?;
 
         self.run_cleanup_after_capture().await?;
         Ok(item)
@@ -174,15 +183,18 @@ impl HistoryService {
         }
 
         let fingerprint = compute_fingerprint("html", &html);
-        let item = self.repository.insert_or_touch(NewClipboardItem {
-            content_type: ContentType::Html,
-            content_text: html,
-            fingerprint,
-            source_app: source.app,
-            source_url: source.url,
-            source_bundle_id: source.bundle_id,
-            source_app_path: source.app_path,
-        }).await?;
+        let item = self
+            .repository
+            .insert_or_touch(NewClipboardItem {
+                content_type: ContentType::Html,
+                content_text: html,
+                fingerprint,
+                source_app: source.app,
+                source_url: source.url,
+                source_bundle_id: source.bundle_id,
+                source_app_path: source.app_path,
+            })
+            .await?;
 
         self.run_cleanup_after_capture().await?;
         Ok(item)
@@ -206,15 +218,18 @@ impl HistoryService {
 
         let joined = paths.join("\n");
         let fingerprint = compute_fingerprint("files", &joined);
-        let item = self.repository.insert_or_touch(NewClipboardItem {
-            content_type: ContentType::Files,
-            content_text: joined,
-            fingerprint,
-            source_app: source.app,
-            source_url: source.url,
-            source_bundle_id: source.bundle_id,
-            source_app_path: source.app_path,
-        }).await?;
+        let item = self
+            .repository
+            .insert_or_touch(NewClipboardItem {
+                content_type: ContentType::Files,
+                content_text: joined,
+                fingerprint,
+                source_app: source.app,
+                source_url: source.url,
+                source_bundle_id: source.bundle_id,
+                source_app_path: source.app_path,
+            })
+            .await?;
 
         self.run_cleanup_after_capture().await?;
         Ok(item)
@@ -222,9 +237,15 @@ impl HistoryService {
 
     async fn run_cleanup_after_capture(&self) -> Result<(), AppError> {
         let settings = self.settings_store.load().await?;
-        let max_r = self.repository.enforce_max_count(settings.max_history).await?;
+        let max_r = self
+            .repository
+            .enforce_max_count(settings.max_history)
+            .await?;
         spawn_image_cleanup(max_r.image_paths);
-        let ret_r = self.repository.enforce_retention_days(settings.retention_days).await?;
+        let ret_r = self
+            .repository
+            .enforce_retention_days(settings.retention_days)
+            .await?;
         spawn_image_cleanup(ret_r.image_paths);
         Ok(())
     }
@@ -391,7 +412,9 @@ impl HistoryService {
         let id = parse_id(id_str)?;
         let result = self.repository.delete(id).await?;
         if !result.deleted {
-            return Err(AppError::Repository(RepositoryError::NotFound(id_str.to_string())));
+            return Err(AppError::Repository(RepositoryError::NotFound(
+                id_str.to_string(),
+            )));
         }
         if let Some(path) = result.image_path {
             spawn_image_cleanup(vec![path]);
@@ -409,9 +432,18 @@ impl HistoryService {
         let id = parse_id(id_str)?;
         let item = self.repository.get_by_id(id).await?;
         match item.content_type {
-            ContentType::Text => self.writer.write_text(&item.content_text).map_err(AppError::Clipboard)?,
-            ContentType::Image => self.writer.write_image(&item.content_text).map_err(AppError::Clipboard)?,
-            ContentType::Html => self.writer.write_html(&item.content_text).map_err(AppError::Clipboard)?,
+            ContentType::Text => self
+                .writer
+                .write_text(&item.content_text)
+                .map_err(AppError::Clipboard)?,
+            ContentType::Image => self
+                .writer
+                .write_image(&item.content_text)
+                .map_err(AppError::Clipboard)?,
+            ContentType::Html => self
+                .writer
+                .write_html(&item.content_text)
+                .map_err(AppError::Clipboard)?,
             ContentType::Files => {
                 let paths: Vec<String> = item
                     .content_text
@@ -419,18 +451,22 @@ impl HistoryService {
                     .filter(|path| !path.trim().is_empty())
                     .map(str::to_string)
                     .collect();
-                self.writer.write_files(&paths).map_err(AppError::Clipboard)?;
+                self.writer
+                    .write_files(&paths)
+                    .map_err(AppError::Clipboard)?;
             }
         }
-        self.repository.insert_or_touch(NewClipboardItem {
-            content_type: item.content_type,
-            content_text: item.content_text,
-            fingerprint: item.fingerprint,
-            source_app: item.source_app,
-            source_url: item.source_url,
-            source_bundle_id: item.source_bundle_id,
-            source_app_path: item.source_app_path,
-        }).await?;
+        self.repository
+            .insert_or_touch(NewClipboardItem {
+                content_type: item.content_type,
+                content_text: item.content_text,
+                fingerprint: item.fingerprint,
+                source_app: item.source_app,
+                source_url: item.source_url,
+                source_bundle_id: item.source_bundle_id,
+                source_app_path: item.source_app_path,
+            })
+            .await?;
         Ok(())
     }
 
@@ -452,7 +488,10 @@ impl HistoryService {
     }
 
     pub async fn run_retention_cleanup(&self, retention_days: i64) -> Result<u64, AppError> {
-        let result = self.repository.enforce_retention_days(retention_days).await?;
+        let result = self
+            .repository
+            .enforce_retention_days(retention_days)
+            .await?;
         spawn_image_cleanup(result.image_paths);
         Ok(result.deleted_count)
     }
@@ -491,7 +530,9 @@ fn slice_page(
 }
 
 fn spawn_image_cleanup(paths: Vec<String>) {
-    if paths.is_empty() { return; }
+    if paths.is_empty() {
+        return;
+    }
     tokio::spawn(async move {
         for path in &paths {
             if let Err(e) = tokio::fs::remove_file(path).await {
@@ -518,15 +559,18 @@ mod tests {
     /// 到下游变成「浏览整库」——用户以为在筛，实际看到的是全部历史。
     #[test]
     fn non_blank_query_never_falls_back_to_browsing() {
-        for raw in ["😀", "→", "？？？", "C++", "C#", "★热点", "请问怎么做 redis", "的 了 吗"] {
-            let query = HistoryService::build_search_query(
-                None,
-                Some(raw.to_string()),
-                None,
-                None,
-                10,
-                0,
-            );
+        for raw in [
+            "😀",
+            "→",
+            "？？？",
+            "C++",
+            "C#",
+            "★热点",
+            "请问怎么做 redis",
+            "的 了 吗",
+        ] {
+            let query =
+                HistoryService::build_search_query(None, Some(raw.to_string()), None, None, 10, 0);
             assert!(
                 query.search_text.is_some(),
                 "查询 {raw:?} 不得退化成浏览列表（search_text 为 None）"
@@ -535,15 +579,12 @@ mod tests {
 
         // 反向：真正的空输入仍必须走浏览路径，否则列表页会去搜一个不存在的词。
         for raw in ["", "   ", "\n\t"] {
-            let query = HistoryService::build_search_query(
-                None,
-                Some(raw.to_string()),
-                None,
-                None,
-                10,
-                0,
+            let query =
+                HistoryService::build_search_query(None, Some(raw.to_string()), None, None, 10, 0);
+            assert!(
+                query.search_text.is_none(),
+                "空白输入 {raw:?} 应按浏览列表处理"
             );
-            assert!(query.search_text.is_none(), "空白输入 {raw:?} 应按浏览列表处理");
         }
     }
 }

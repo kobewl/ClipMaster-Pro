@@ -45,10 +45,7 @@ pub fn swap_shortcut(
 
     // 新的注册成功后才注销旧的
     if !old_shortcut.is_empty() {
-        if let Err(err) = app_handle
-            .global_shortcut()
-            .unregister(old_shortcut)
-        {
+        if let Err(err) = app_handle.global_shortcut().unregister(old_shortcut) {
             tracing::warn!(error = %err, shortcut = old_shortcut, "注销旧快捷键失败（非致命）");
         }
     }

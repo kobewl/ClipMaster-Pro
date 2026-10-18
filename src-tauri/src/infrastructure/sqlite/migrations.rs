@@ -354,7 +354,9 @@ mod tests {
         apply_migrations(&mut conn, &MIGRATIONS[..9]).expect("迁移到 v9");
 
         let version: i64 = conn
-            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
             .expect("读版本号");
         assert_eq!(version, 9);
         let has_bundle_column: i64 = conn
@@ -381,7 +383,9 @@ mod tests {
         run_migrations(&mut conn).expect("升级到最新版本");
 
         let version: i64 = conn
-            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
             .expect("读版本号");
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
         let count: i64 = conn

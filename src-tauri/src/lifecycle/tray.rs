@@ -65,8 +65,13 @@ pub fn update_capture_menu_item(app: &AppHandle, capture_enabled: bool) {
 ///
 /// 失败不致命：调用方记 warn 继续 —— 托盘只是入口之一，快捷键仍可用。
 pub fn setup_tray(app: &AppHandle, capture_enabled: bool) -> tauri::Result<()> {
-    let show_hide =
-        MenuItem::with_id(app, MENU_ID_SHOW_HIDE, "显示 / 隐藏主窗口", true, None::<&str>)?;
+    let show_hide = MenuItem::with_id(
+        app,
+        MENU_ID_SHOW_HIDE,
+        "显示 / 隐藏主窗口",
+        true,
+        None::<&str>,
+    )?;
     let toggle_capture = MenuItem::with_id(
         app,
         MENU_ID_TOGGLE_CAPTURE,

@@ -8,7 +8,7 @@ use serde_json::{json, Value};
 
 use crate::application::agent_service::contains_sensitive_content;
 use crate::application::history_service::HistoryService;
-use crate::domain::model::{ContentType, ClipboardItem};
+use crate::domain::model::{ClipboardItem, ContentType};
 use crate::domain::normalize::strip_html_tags;
 use crate::domain::ports::SearchQuery;
 

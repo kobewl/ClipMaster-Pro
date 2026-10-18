@@ -2,8 +2,8 @@
 
 use crate::domain::error::{ClipboardSourceError, RepositoryError, SecretError};
 use crate::domain::model::{
-    AgentChatDetail, AgentChatSummary, AgentSessionDetail, AgentSessionDraft,
-    AgentSessionSummary, ClipGroup, ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem,
+    AgentChatDetail, AgentChatSummary, AgentSessionDetail, AgentSessionDraft, AgentSessionSummary,
+    ClipGroup, ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem,
 };
 use crate::domain::settings::AppSettings;
 use async_trait::async_trait;
@@ -128,11 +128,8 @@ pub trait ClipboardRepository: Send + Sync {
 #[async_trait]
 pub trait GroupRepository: Send + Sync {
     async fn list_groups(&self) -> Result<Vec<ClipGroup>, RepositoryError>;
-    async fn create_group(
-        &self,
-        name: String,
-        color: String,
-    ) -> Result<ClipGroup, RepositoryError>;
+    async fn create_group(&self, name: String, color: String)
+        -> Result<ClipGroup, RepositoryError>;
     async fn update_group(
         &self,
         id: String,
@@ -169,8 +166,7 @@ pub trait AgentConfigStore: Send + Sync {
     /// `Ok(None)` = 用户没配过，调用方回退到默认值。
     async fn load_agent_config(&self) -> Result<Option<AgentProviderConfig>, RepositoryError>;
 
-    async fn save_agent_config(&self, config: AgentProviderConfig)
-        -> Result<(), RepositoryError>;
+    async fn save_agent_config(&self, config: AgentProviderConfig) -> Result<(), RepositoryError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -274,8 +270,12 @@ pub trait AgentChatStore: Send + Sync {
         created_at: &str,
     ) -> Result<(), RepositoryError>;
 
-    async fn touch(&self, chat_id: &str, title: Option<&str>, updated_at: &str)
-        -> Result<(), RepositoryError>;
+    async fn touch(
+        &self,
+        chat_id: &str,
+        title: Option<&str>,
+        updated_at: &str,
+    ) -> Result<(), RepositoryError>;
 
     async fn list(&self, limit: u32) -> Result<Vec<AgentChatSummary>, RepositoryError>;
 

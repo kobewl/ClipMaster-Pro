@@ -123,7 +123,12 @@ fn get_source_info() -> SourceInfo {
     // 只有前台是受支持的浏览器时才会真正 spawn osascript 去查标签页 URL ——
     // 每个浏览器的 AppleScript 字典没有进程内替代，这条子进程保留。
     let source_url = app_name.as_deref().and_then(get_browser_url);
-    SourceInfo { app_name, source_url, bundle_id, app_path }
+    SourceInfo {
+        app_name,
+        source_url,
+        bundle_id,
+        app_path,
+    }
 }
 
 /// 各浏览器取「当前标签页 URL」的 AppleScript；None = 不是受支持的浏览器。
@@ -158,7 +163,11 @@ fn get_browser_url(app_name: &str) -> Option<String> {
         return None;
     }
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if url.is_empty() || url == "missing value" { None } else { Some(url) }
+    if url.is_empty() || url == "missing value" {
+        None
+    } else {
+        Some(url)
+    }
 }
 
 impl EventHandler {
@@ -412,7 +421,9 @@ impl ClipboardWriter for MacOsClipboardWriter {
 
     fn write_html(&self, html: &str) -> Result<(), ClipboardSourceError> {
         if html.trim().is_empty() {
-            return Err(ClipboardSourceError::WriteFailed("HTML 内容为空".to_string()));
+            return Err(ClipboardSourceError::WriteFailed(
+                "HTML 内容为空".to_string(),
+            ));
         }
 
         // 同时带一份纯文本兜底：目标应用若只认 text/plain（终端、多数输入框），
@@ -420,7 +431,10 @@ impl ClipboardWriter for MacOsClipboardWriter {
         // 单次 set 写入（见 clipboard_contents_for_html 的注释）。
         let plain = strip_html_tags(html);
         let contents = clipboard_contents_for_html(html, &plain);
-        mark_self_write(&self.self_write_guard, &html_write_fingerprints(html, &plain));
+        mark_self_write(
+            &self.self_write_guard,
+            &html_write_fingerprints(html, &plain),
+        );
 
         let ctx = ClipboardContext::new()
             .map_err(|e| ClipboardSourceError::WriteFailed(e.to_string()))?;
@@ -435,7 +449,9 @@ impl ClipboardWriter for MacOsClipboardWriter {
             .cloned()
             .collect();
         if paths.is_empty() {
-            return Err(ClipboardSourceError::WriteFailed("文件列表为空".to_string()));
+            return Err(ClipboardSourceError::WriteFailed(
+                "文件列表为空".to_string(),
+            ));
         }
 
         // 指纹口径必须与采集侧一致：同样按顺序用 \n 连接后计算。
@@ -479,10 +495,7 @@ mod tests {
     fn html_write_marks_both_html_and_plain_text_fingerprints() {
         // 写 HTML 时同时放两份内容进剪贴板；采集侧无论先读到哪份都得能对上。
         let guard = new_self_write_guard();
-        mark_self_write(
-            &guard,
-            &["fp-html".to_string(), "fp-plain".to_string()],
-        );
+        mark_self_write(&guard, &["fp-html".to_string(), "fp-plain".to_string()]);
 
         // 采集侧先读到纯文本 → 消费纯文本指纹；
         // HTML 指纹仍在队列里 —— 若目标应用清掉了 text，采集侧后来读到
@@ -513,7 +526,11 @@ mod tests {
         // 粘贴就退化成纯文本了。
         let contents = clipboard_contents_for_html("<b>你好</b> 世界", "你好 世界");
 
-        assert_eq!(contents.len(), 2, "有可读纯文本时必须是 Html + Text 两个 representation");
+        assert_eq!(
+            contents.len(),
+            2,
+            "有可读纯文本时必须是 Html + Text 两个 representation"
+        );
         match &contents[0] {
             ClipboardContent::Html(data) => assert_eq!(data.as_str(), "<b>你好</b> 世界"),
             _ => panic!("第一项应是 HTML representation"),
@@ -566,13 +583,25 @@ mod tests {
     fn browser_scripts_only_spawn_osascript_for_supported_browsers() {
         // 受支持的浏览器：脚本必须指向对应的应用（一次 URL 查询 = 一次子进程，映射错了就白付）
         assert!(browser_script_for("Safari").unwrap().contains("Safari"));
-        assert!(browser_script_for("Safari Technology Preview").unwrap().contains("Safari"));
-        assert!(browser_script_for("Google Chrome").unwrap().contains("Google Chrome"));
-        assert!(browser_script_for("Google Chrome Canary").unwrap().contains("Google Chrome"));
-        assert!(browser_script_for("Chromium").unwrap().contains("Google Chrome"));
-        assert!(browser_script_for("Microsoft Edge Dev").unwrap().contains("Microsoft Edge"));
+        assert!(browser_script_for("Safari Technology Preview")
+            .unwrap()
+            .contains("Safari"));
+        assert!(browser_script_for("Google Chrome")
+            .unwrap()
+            .contains("Google Chrome"));
+        assert!(browser_script_for("Google Chrome Canary")
+            .unwrap()
+            .contains("Google Chrome"));
+        assert!(browser_script_for("Chromium")
+            .unwrap()
+            .contains("Google Chrome"));
+        assert!(browser_script_for("Microsoft Edge Dev")
+            .unwrap()
+            .contains("Microsoft Edge"));
         assert!(browser_script_for("Arc").unwrap().contains("Arc"));
-        assert!(browser_script_for("Brave Browser").unwrap().contains("Brave Browser"));
+        assert!(browser_script_for("Brave Browser")
+            .unwrap()
+            .contains("Brave Browser"));
 
         // 非浏览器必须返回 None —— 每次复制都会路过这里，多 spawn 一个子进程都是浪费
         assert_eq!(browser_script_for("Finder"), None);

@@ -50,8 +50,7 @@ impl SettingsStore for SqliteSettingsStore {
             let capture_enabled = get_value(&conn, KEY_CAPTURE_ENABLED)?
                 .map(|v| v == "true")
                 .unwrap_or(defaults.capture_enabled);
-            let shortcut = get_value(&conn, KEY_SHORTCUT)?
-                .unwrap_or(defaults.shortcut.clone());
+            let shortcut = get_value(&conn, KEY_SHORTCUT)?.unwrap_or(defaults.shortcut.clone());
             let theme = get_value(&conn, KEY_THEME)?
                 .filter(|v| matches!(v.as_str(), "system" | "light" | "dark"))
                 .unwrap_or(defaults.theme.clone());
@@ -125,10 +124,7 @@ impl AgentConfigStore for SqliteSettingsStore {
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    async fn save_agent_config(
-        &self,
-        config: AgentProviderConfig,
-    ) -> Result<(), RepositoryError> {
+    async fn save_agent_config(&self, config: AgentProviderConfig) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");

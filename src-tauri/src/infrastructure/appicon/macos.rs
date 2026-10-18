@@ -293,8 +293,14 @@ pub fn frontmost_app_source() -> Option<FrontmostApp> {
         let app = frontmost_application()?;
         let non_empty = |value: String| if value.is_empty() { None } else { Some(value) };
         Some(FrontmostApp {
-            name: app.localizedName().map(|n| n.to_string()).and_then(non_empty),
-            bundle_id: app.bundleIdentifier().map(|id| id.to_string()).and_then(non_empty),
+            name: app
+                .localizedName()
+                .map(|n| n.to_string())
+                .and_then(non_empty),
+            bundle_id: app
+                .bundleIdentifier()
+                .map(|id| id.to_string())
+                .and_then(non_empty),
             app_path: app
                 .bundleURL()
                 .and_then(|url| url.path())
@@ -470,7 +476,11 @@ mod tests {
         // IDEA 的进程名是 "idea"、目录名是 "IntelliJ IDEA.app"，
         // 只有走别名表才能在应用没运行时也找到它。
         assert_eq!(bundle_alias("idea"), Some("IntelliJ IDEA"));
-        assert_eq!(bundle_alias("IDEA"), Some("IntelliJ IDEA"), "别名匹配不区分大小写");
+        assert_eq!(
+            bundle_alias("IDEA"),
+            Some("IntelliJ IDEA"),
+            "别名匹配不区分大小写"
+        );
         assert_eq!(bundle_alias("code"), Some("Visual Studio Code"));
     }
 

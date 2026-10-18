@@ -30,7 +30,11 @@ pub async fn set_autostart_enabled(app: AppHandle, enabled: bool) -> Result<(), 
     }
 
     let manager = app.autolaunch();
-    let result = if enabled { manager.enable() } else { manager.disable() };
+    let result = if enabled {
+        manager.enable()
+    } else {
+        manager.disable()
+    };
 
     // 失败时把「想干什么」写进 message：只报一句系统错误，用户不知道是哪个开关没设上。
     result.map_err(|err| {
@@ -81,7 +85,10 @@ fn parse_release_tag(tag: &str) -> Option<semver::Version> {
 /// 判断 `latest_tag` 是否比当前运行版本新。
 /// 任一侧解析不出 semver（打错了 tag）时保守返回 false —— 宁可漏报，不误导升级。
 fn is_newer(current: &str, latest_tag: &str) -> bool {
-    match (semver::Version::parse(current).ok(), parse_release_tag(latest_tag)) {
+    match (
+        semver::Version::parse(current).ok(),
+        parse_release_tag(latest_tag),
+    ) {
         (Some(c), Some(l)) => l > c,
         _ => false,
     }
@@ -226,7 +233,10 @@ mod tests {
 
     #[test]
     fn parse_release_tag_accepts_v_prefix() {
-        assert_eq!(parse_release_tag("v0.1.0"), Some(semver::Version::new(0, 1, 0)));
+        assert_eq!(
+            parse_release_tag("v0.1.0"),
+            Some(semver::Version::new(0, 1, 0))
+        );
         assert_eq!(
             parse_release_tag("0.1.0"),
             Some(semver::Version::new(0, 1, 0))
@@ -285,7 +295,10 @@ mod tests {
         let release: LatestRelease = serde_json::from_str(payload).unwrap();
         assert_eq!(release.tag_name, "v0.2.0");
         assert!(is_newer("0.1.0-beta.2", &release.tag_name));
-        assert_eq!(release.html_url, "https://github.com/kobewl/ClipMaster-Pro/releases/tag/v0.2.0");
+        assert_eq!(
+            release.html_url,
+            "https://github.com/kobewl/ClipMaster-Pro/releases/tag/v0.2.0"
+        );
     }
 
     #[test]

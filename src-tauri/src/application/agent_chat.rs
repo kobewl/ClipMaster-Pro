@@ -143,20 +143,20 @@ impl AgentChatService {
             }),
         );
 
-        let reply = self
-            .agent
-            .with_shared_gate(request.request_id.clone(), "chat", item_ids, move || {
-                let agent = agent.clone();
-                let app = app_for_loop.clone();
-                let history = history_for_loop;
-                let user_text = user_text.clone();
-                let cited = cited.clone();
-                let emit_id = emit_id_for_loop;
-                async move {
-                    run_tool_loop(&agent, &app, &emit_id, &history, &user_text, &cited).await
-                }
-            })
-            .await?;
+        let reply =
+            self.agent
+                .with_shared_gate(request.request_id.clone(), "chat", item_ids, move || {
+                    let agent = agent.clone();
+                    let app = app_for_loop.clone();
+                    let history = history_for_loop;
+                    let user_text = user_text.clone();
+                    let cited = cited.clone();
+                    let emit_id = emit_id_for_loop;
+                    async move {
+                        run_tool_loop(&agent, &app, &emit_id, &history, &user_text, &cited).await
+                    }
+                })
+                .await?;
 
         let done_at = chrono::Utc::now().to_rfc3339();
         self.store

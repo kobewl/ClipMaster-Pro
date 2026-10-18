@@ -44,7 +44,9 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<AgentRunRecord> {
         status: row.get("status")?,
         error_code: row.get("error_code")?,
         duration_ms: row.get::<_, i64>("duration_ms")?.max(0) as u64,
-        output_chars: row.get::<_, Option<i64>>("output_chars")?.map(|v| v.max(0) as u64),
+        output_chars: row
+            .get::<_, Option<i64>>("output_chars")?
+            .map(|v| v.max(0) as u64),
     })
 }
 
@@ -54,7 +56,9 @@ impl AgentRunStore for SqliteAgentRunStore {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
             let mut conn = conn.lock().expect("sqlite mutex poisoned");
-            let tx = conn.transaction().map_err(SqliteAgentRunStore::map_db_err)?;
+            let tx = conn
+                .transaction()
+                .map_err(SqliteAgentRunStore::map_db_err)?;
 
             tx.execute(
                 "INSERT INTO agent_runs
@@ -177,7 +181,11 @@ impl AgentRunStore for SqliteAgentRunStore {
             let conn = conn.lock().expect("sqlite mutex poisoned");
 
             let mut run: Option<AgentRunRecord> = conn
-                .query_row("SELECT * FROM agent_runs WHERE id = ?1", params![id], row_to_run)
+                .query_row(
+                    "SELECT * FROM agent_runs WHERE id = ?1",
+                    params![id],
+                    row_to_run,
+                )
                 .optional()
                 .map_err(SqliteAgentRunStore::map_db_err)?;
 

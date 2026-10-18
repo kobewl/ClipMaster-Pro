@@ -49,9 +49,10 @@ impl AgentChatStore for SqliteChatStore {
         created_at: &str,
         updated_at: &str,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         let tx = conn.transaction().map_err(Self::map_err)?;
         tx.execute(
             "INSERT INTO agent_chats (id, title, created_at, updated_at) VALUES (?1, ?2, ?3, ?4)",
@@ -77,9 +78,10 @@ impl AgentChatStore for SqliteChatStore {
         content: &str,
         created_at: &str,
     ) -> Result<(), RepositoryError> {
-        let mut conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let mut conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         let tx = conn.transaction().map_err(Self::map_err)?;
         let next: i64 = tx
             .query_row(
@@ -115,9 +117,10 @@ impl AgentChatStore for SqliteChatStore {
         title: Option<&str>,
         updated_at: &str,
     ) -> Result<(), RepositoryError> {
-        let conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         if let Some(title) = title {
             conn.execute(
                 "UPDATE agent_chats SET title = ?1, updated_at = ?2 WHERE id = ?3",
@@ -135,9 +138,10 @@ impl AgentChatStore for SqliteChatStore {
     }
 
     async fn list(&self, limit: u32) -> Result<Vec<AgentChatSummary>, RepositoryError> {
-        let conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         let mut stmt = conn
             .prepare(
                 "SELECT c.id, c.title, c.created_at, c.updated_at,
@@ -173,9 +177,10 @@ impl AgentChatStore for SqliteChatStore {
     }
 
     async fn find(&self, id: &str) -> Result<Option<AgentChatDetail>, RepositoryError> {
-        let conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         let header = conn
             .query_row(
                 "SELECT id, title, created_at, updated_at FROM agent_chats WHERE id = ?1",
@@ -228,9 +233,10 @@ impl AgentChatStore for SqliteChatStore {
     }
 
     async fn delete(&self, id: &str) -> Result<bool, RepositoryError> {
-        let conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         let changed = conn
             .execute("DELETE FROM agent_chats WHERE id = ?1", params![id])
             .map_err(Self::map_err)?;
@@ -238,9 +244,10 @@ impl AgentChatStore for SqliteChatStore {
     }
 
     async fn clear(&self) -> Result<u64, RepositoryError> {
-        let conn = self.conn.lock().map_err(|err| {
-            RepositoryError::Database(format!("对话库锁中毒: {err}"))
-        })?;
+        let conn = self
+            .conn
+            .lock()
+            .map_err(|err| RepositoryError::Database(format!("对话库锁中毒: {err}")))?;
         let changed = conn
             .execute("DELETE FROM agent_chats", [])
             .map_err(Self::map_err)?;

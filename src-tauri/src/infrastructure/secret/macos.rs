@@ -60,10 +60,7 @@ fn map_err(err: security_framework::base::Error) -> SecretError {
         ERR_SEC_INTERACTION_NOT_ALLOWED => "（当前无法弹出钥匙串授权框，请解锁屏幕后重试）",
         _ => "",
     };
-    SecretError::Access(format!(
-        "Security.framework 状态码 {}{hint}",
-        err.code()
-    ))
+    SecretError::Access(format!("Security.framework 状态码 {}{hint}", err.code()))
 }
 
 #[async_trait]
@@ -73,9 +70,9 @@ impl SecretStore for KeychainSecretStore {
         tokio::task::spawn_blocking(move || {
             let options = PasswordOptions::new_generic_password(SERVICE, &account);
             match generic_password(options) {
-                Ok(bytes) => String::from_utf8(bytes).map(Some).map_err(|_| {
-                    SecretError::Access("钥匙串条目不是合法 UTF-8".to_string())
-                }),
+                Ok(bytes) => String::from_utf8(bytes)
+                    .map(Some)
+                    .map_err(|_| SecretError::Access("钥匙串条目不是合法 UTF-8".to_string())),
                 Err(err) if err.code() == ERR_SEC_ITEM_NOT_FOUND => Ok(None),
                 Err(err) => Err(map_err(err)),
             }

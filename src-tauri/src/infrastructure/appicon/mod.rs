@@ -129,7 +129,10 @@ mod tests {
             self
         }
         fn called(&self, prefix: &str) -> bool {
-            self.calls.borrow().iter().any(|call| call.starts_with(prefix))
+            self.calls
+                .borrow()
+                .iter()
+                .any(|call| call.starts_with(prefix))
         }
     }
 
@@ -209,7 +212,10 @@ mod tests {
         let locator = FakeLocator::default().exists("/etc/passwd");
         let found = resolve_app_path(&source(None, None, Some("/etc/passwd")), &locator);
         assert_eq!(found, None);
-        assert!(!locator.called("exists:/etc/passwd"), "非 .app 路径连查都不该查");
+        assert!(
+            !locator.called("exists:/etc/passwd"),
+            "非 .app 路径连查都不该查"
+        );
     }
 
     #[test]
@@ -217,12 +223,17 @@ mod tests {
         let locator = FakeLocator::default();
         let found = resolve_app_path(&source(Some(""), Some(""), Some("")), &locator);
         assert_eq!(found, None);
-        assert!(locator.calls.borrow().is_empty(), "{:?}", locator.calls.borrow());
+        assert!(
+            locator.calls.borrow().is_empty(),
+            "{:?}",
+            locator.calls.borrow()
+        );
     }
 
     #[test]
     fn icon_cache_file_name_prefers_bundle_id() {
-        let with_bundle = icon_cache_file_name(&source(Some("Safari"), Some("com.apple.Safari"), None));
+        let with_bundle =
+            icon_cache_file_name(&source(Some("Safari"), Some("com.apple.Safari"), None));
         let name_only = icon_cache_file_name(&source(Some("Safari"), None, None));
         assert_ne!(with_bundle, name_only);
         // 旧记录的缓存文件名不变，已有缓存继续命中。

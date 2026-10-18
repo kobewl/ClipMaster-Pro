@@ -81,9 +81,7 @@ pub async fn list_clipboard_items(
         .as_deref()
         .map(|s| s.parse::<ContentType>())
         .transpose()
-        .map_err(|err| {
-            CommandError::from(crate::domain::error::AppError::Domain(err))
-        })?;
+        .map_err(|err| CommandError::from(crate::domain::error::AppError::Domain(err)))?;
     let search_query = crate::application::history_service::HistoryService::build_search_query(
         query.group_id,
         query.search,
@@ -92,7 +90,11 @@ pub async fn list_clipboard_items(
         limit,
         query.offset,
     );
-    let result = runtime.history.list(search_query).await.map_err(CommandError::from)?;
+    let result = runtime
+        .history
+        .list(search_query)
+        .await
+        .map_err(CommandError::from)?;
     // 命中词按条目 id 分发到各行：装配在应用层完成，这里只做 DTO 层的搬运。
     let mut matched_by_id = result.matched_terms.unwrap_or_default();
     let items = result
@@ -104,7 +106,11 @@ pub async fn list_clipboard_items(
             dto
         })
         .collect();
-    Ok(ListResultDto { items, total: result.total, relaxed_dropped: result.relaxed_dropped })
+    Ok(ListResultDto {
+        items,
+        total: result.total,
+        relaxed_dropped: result.relaxed_dropped,
+    })
 }
 
 #[tauri::command]
@@ -113,7 +119,11 @@ pub async fn delete_clipboard_item(
     runtime: State<'_, AppRuntime>,
     id: String,
 ) -> Result<(), CommandError> {
-    runtime.history.delete(&id).await.map_err(CommandError::from)?;
+    runtime
+        .history
+        .delete(&id)
+        .await
+        .map_err(CommandError::from)?;
     emit_or_warn(&app, "clipboard://deleted", &id);
     Ok(())
 }
@@ -125,7 +135,11 @@ pub async fn set_item_group(
     id: String,
     group_id: Option<String>,
 ) -> Result<(), CommandError> {
-    runtime.history.set_group(&id, group_id).await.map_err(CommandError::from)?;
+    runtime
+        .history
+        .set_group(&id, group_id)
+        .await
+        .map_err(CommandError::from)?;
     if let Ok(item) = runtime.history.get(&id).await {
         emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
     }
@@ -138,7 +152,11 @@ pub async fn copy_clipboard_item(
     runtime: State<'_, AppRuntime>,
     id: String,
 ) -> Result<(), CommandError> {
-    runtime.history.copy_to_clipboard(&id).await.map_err(CommandError::from)?;
+    runtime
+        .history
+        .copy_to_clipboard(&id)
+        .await
+        .map_err(CommandError::from)?;
     if let Ok(item) = runtime.history.get(&id).await {
         emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
     }
@@ -151,7 +169,11 @@ pub async fn paste_clipboard_item(
     runtime: State<'_, AppRuntime>,
     id: String,
 ) -> Result<(), CommandError> {
-    runtime.history.copy_to_clipboard(&id).await.map_err(CommandError::from)?;
+    runtime
+        .history
+        .copy_to_clipboard(&id)
+        .await
+        .map_err(CommandError::from)?;
     if let Ok(item) = runtime.history.get(&id).await {
         emit_or_warn(&app, "clipboard://updated", ClipboardItemDto::from(item));
     }
@@ -164,7 +186,11 @@ pub async fn copy_text_to_clipboard(
     runtime: State<'_, AppRuntime>,
     text: String,
 ) -> Result<(), CommandError> {
-    runtime.history.copy_text_to_clipboard(&text).await.map_err(CommandError::from)
+    runtime
+        .history
+        .copy_text_to_clipboard(&text)
+        .await
+        .map_err(CommandError::from)
 }
 
 /// 合并复制之后直接粘贴：写剪贴板 → 隐藏窗口 → 模拟 ⌘V。
@@ -174,7 +200,11 @@ pub async fn paste_text(
     runtime: State<'_, AppRuntime>,
     text: String,
 ) -> Result<(), CommandError> {
-    runtime.history.copy_text_to_clipboard(&text).await.map_err(CommandError::from)?;
+    runtime
+        .history
+        .copy_text_to_clipboard(&text)
+        .await
+        .map_err(CommandError::from)?;
     hide_window_and_simulate_paste(&app).await
 }
 
@@ -289,7 +319,11 @@ pub async fn clear_history(
     runtime: State<'_, AppRuntime>,
     keep_grouped: bool,
 ) -> Result<u64, CommandError> {
-    let deleted = runtime.history.clear(keep_grouped).await.map_err(CommandError::from)?;
+    let deleted = runtime
+        .history
+        .clear(keep_grouped)
+        .await
+        .map_err(CommandError::from)?;
     emit_or_warn(&app, "clipboard://cleared", deleted);
     Ok(deleted)
 }
@@ -312,7 +346,11 @@ pub async fn create_group(
     runtime: State<'_, AppRuntime>,
     dto: CreateGroupDto,
 ) -> Result<ClipGroupDto, CommandError> {
-    let group = runtime.groups.create(dto.name, dto.color).await.map_err(CommandError::from)?;
+    let group = runtime
+        .groups
+        .create(dto.name, dto.color)
+        .await
+        .map_err(CommandError::from)?;
     let dto = ClipGroupDto::from(group);
     emit_or_warn(&app, "groups://changed", "created");
     Ok(dto)
@@ -324,7 +362,11 @@ pub async fn update_group(
     runtime: State<'_, AppRuntime>,
     dto: UpdateGroupDto,
 ) -> Result<ClipGroupDto, CommandError> {
-    let group = runtime.groups.update(dto.id, dto.name, dto.color).await.map_err(CommandError::from)?;
+    let group = runtime
+        .groups
+        .update(dto.id, dto.name, dto.color)
+        .await
+        .map_err(CommandError::from)?;
     let dto = ClipGroupDto::from(group);
     emit_or_warn(&app, "groups://changed", "updated");
     Ok(dto)
@@ -336,7 +378,11 @@ pub async fn delete_group(
     runtime: State<'_, AppRuntime>,
     id: String,
 ) -> Result<(), CommandError> {
-    runtime.groups.delete(id).await.map_err(CommandError::from)?;
+    runtime
+        .groups
+        .delete(id)
+        .await
+        .map_err(CommandError::from)?;
     emit_or_warn(&app, "groups://changed", "deleted");
     Ok(())
 }
@@ -346,10 +392,13 @@ pub async fn delete_group(
 // ---------------------------------------------------------------------------
 
 #[tauri::command]
-pub async fn get_settings(
-    runtime: State<'_, AppRuntime>,
-) -> Result<AppSettingsDto, CommandError> {
-    runtime.settings.get().await.map(AppSettingsDto::from).map_err(CommandError::from)
+pub async fn get_settings(runtime: State<'_, AppRuntime>) -> Result<AppSettingsDto, CommandError> {
+    runtime
+        .settings
+        .get()
+        .await
+        .map(AppSettingsDto::from)
+        .map_err(CommandError::from)
 }
 
 #[tauri::command]
@@ -358,7 +407,11 @@ pub async fn update_settings(
     runtime: State<'_, AppRuntime>,
     settings: AppSettingsDto,
 ) -> Result<AppSettingsDto, CommandError> {
-    let updated = runtime.settings.update(settings.into()).await.map_err(CommandError::from)?;
+    let updated = runtime
+        .settings
+        .update(settings.into())
+        .await
+        .map_err(CommandError::from)?;
     // 保存的设置里也可能带着新的采集开关 —— 与其它入口走同一条联动，
     // 否则只在这里改开关时，前端状态栏和托盘菜单都不会刷新。
     crate::lifecycle::runtime::sync_capture_side_effects(&app, &runtime, updated.capture_enabled);
@@ -375,7 +428,11 @@ pub async fn update_shortcut(
     swap_shortcut(&app, &old_settings.shortcut, &shortcut).map_err(CommandError::shortcut)?;
     let mut new_settings = old_settings;
     new_settings.shortcut = shortcut;
-    let saved = runtime.settings.update(new_settings).await.map_err(CommandError::from)?;
+    let saved = runtime
+        .settings
+        .update(new_settings)
+        .await
+        .map_err(CommandError::from)?;
     Ok(AppSettingsDto::from(saved))
 }
 

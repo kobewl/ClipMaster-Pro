@@ -30,7 +30,10 @@ const RELAXED_FTS_FROM: &str = "clipboard_items INNER JOIN clipboard_items_fts \
 ///
 /// 返回 `(WHERE 子句, 绑定值)`。`?N` 序号按「先筛选条件、后查询词」分配，
 /// 与绑定值入列顺序严格一致 —— 这里错位就会静默查出错误的数据。
-fn relaxed_where(filters: &SearchQuery, term_templates: &[(String, String)]) -> (String, Vec<String>) {
+fn relaxed_where(
+    filters: &SearchQuery,
+    term_templates: &[(String, String)],
+) -> (String, Vec<String>) {
     let mut conditions: Vec<String> = Vec::new();
     let mut binds: Vec<String> = Vec::new();
 
@@ -150,7 +153,11 @@ pub(crate) fn parse_datetime(value: &str) -> DateTime<Utc> {
         .unwrap_or_else(|_| Utc::now())
 }
 
-fn sync_fts_insert(conn: &Connection, rowid: i64, search_text: &str) -> Result<(), RepositoryError> {
+fn sync_fts_insert(
+    conn: &Connection,
+    rowid: i64,
+    search_text: &str,
+) -> Result<(), RepositoryError> {
     conn.execute(
         "INSERT INTO clipboard_items_fts(rowid, search_text) VALUES (?1, ?2)",
         params![rowid, search_text],
@@ -159,7 +166,11 @@ fn sync_fts_insert(conn: &Connection, rowid: i64, search_text: &str) -> Result<(
     Ok(())
 }
 
-fn sync_fts_delete(conn: &Connection, rowid: i64, old_search_text: &str) -> Result<(), RepositoryError> {
+fn sync_fts_delete(
+    conn: &Connection,
+    rowid: i64,
+    old_search_text: &str,
+) -> Result<(), RepositoryError> {
     conn.execute(
         "INSERT INTO clipboard_items_fts(clipboard_items_fts, rowid, search_text) \
          VALUES('delete', ?1, ?2)",
@@ -192,7 +203,9 @@ fn collect_image_paths_with_sql(
     sql: &str,
     params: &[&dyn rusqlite::types::ToSql],
 ) -> Result<Vec<String>, RepositoryError> {
-    let mut stmt = conn.prepare(sql).map_err(|e| RepositoryError::Database(e.to_string()))?;
+    let mut stmt = conn
+        .prepare(sql)
+        .map_err(|e| RepositoryError::Database(e.to_string()))?;
     let rows = stmt
         .query_map(params, |row| row.get(0))
         .map_err(|e| RepositoryError::Database(e.to_string()))?;
@@ -221,8 +234,11 @@ fn evict_rows(
         if content_type.as_str() == "image" {
             image_paths.push(content_text.clone());
         }
-        tx.execute("DELETE FROM clipboard_items WHERE rowid = ?1", params![rowid])
-            .map_err(|e| RepositoryError::Database(e.to_string()))?;
+        tx.execute(
+            "DELETE FROM clipboard_items WHERE rowid = ?1",
+            params![rowid],
+        )
+        .map_err(|e| RepositoryError::Database(e.to_string()))?;
     }
     Ok((deleted_count, image_paths))
 }
@@ -337,12 +353,17 @@ impl ClipboardRepository for SqliteClipboardRepository {
 
             if let Some(ref text) = query.search_text {
                 for word in text.split_whitespace() {
-                    if word.is_empty() { continue; }
+                    if word.is_empty() {
+                        continue;
+                    }
                     if word.chars().count() >= 3 {
                         let escaped = word.replace('"', "\"\"");
                         fts_terms.push(format!("\"{escaped}\""));
                     } else {
-                        let escaped = word.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+                        let escaped = word
+                            .replace('\\', "\\\\")
+                            .replace('%', "\\%")
+                            .replace('_', "\\_");
                         like_patterns.push(format!("%{escaped}%"));
                     }
                 }
@@ -385,7 +406,9 @@ impl ClipboardRepository for SqliteClipboardRepository {
             }
             for pattern in &like_patterns {
                 pidx += 1;
-                conditions.push(format!("clipboard_items.search_text LIKE ?{pidx} ESCAPE '\\'"));
+                conditions.push(format!(
+                    "clipboard_items.search_text LIKE ?{pidx} ESCAPE '\\'"
+                ));
                 param_values.push(Box::new(pattern.clone()));
             }
 
@@ -396,7 +419,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
             };
 
             let count_sql = format!("SELECT COUNT(*) FROM {from_clause} {where_sql}");
-            let count_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+            let count_refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_values.iter().map(|p| p.as_ref()).collect();
             let total: i64 = conn
                 .query_row(&count_sql, count_refs.as_slice(), |row| row.get(0))
                 .map_err(Self::map_db_err)?;
@@ -412,7 +436,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
             );
             param_values.push(Box::new(query.limit));
             param_values.push(Box::new(query.offset));
-            let list_refs: Vec<&dyn rusqlite::types::ToSql> = param_values.iter().map(|p| p.as_ref()).collect();
+            let list_refs: Vec<&dyn rusqlite::types::ToSql> =
+                param_values.iter().map(|p| p.as_ref()).collect();
 
             let mut stmt = conn.prepare(&list_sql).map_err(Self::map_db_err)?;
             let mut rows = stmt.query(list_refs.as_slice()).map_err(Self::map_db_err)?;
@@ -421,7 +446,12 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 items.push(Self::row_to_item(row).map_err(Self::map_db_err)?);
             }
 
-            Ok(ListResult { items, total: total as u64, matched_terms: None, relaxed_dropped: None })
+            Ok(ListResult {
+                items,
+                total: total as u64,
+                matched_terms: None,
+                relaxed_dropped: None,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
@@ -459,7 +489,10 @@ impl ClipboardRepository for SqliteClipboardRepository {
             .iter()
             .filter(|term| !term.is_empty() && term.chars().count() < 3)
             .map(|term| {
-                let escaped = term.replace('\\', "\\\\").replace('%', "\\%").replace('_', "\\_");
+                let escaped = term
+                    .replace('\\', "\\\\")
+                    .replace('%', "\\%")
+                    .replace('_', "\\_");
                 format!("%{escaped}%")
             })
             .collect();
@@ -471,16 +504,26 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 fts_terms.join(" OR "),
             );
             let (where_sql, binds) = relaxed_where(filters, &[template]);
-            merged
-                .extend(self.run_relaxed_query(RELAXED_FTS_FROM, &where_sql, binds, cap).await?);
+            merged.extend(
+                self.run_relaxed_query(RELAXED_FTS_FROM, &where_sql, binds, cap)
+                    .await?,
+            );
         }
         if !like_patterns.is_empty() {
             let templates: Vec<(String, String)> = like_patterns
                 .into_iter()
-                .map(|pattern| ("clipboard_items.search_text LIKE {} ESCAPE '\\'".to_string(), pattern))
+                .map(|pattern| {
+                    (
+                        "clipboard_items.search_text LIKE {} ESCAPE '\\'".to_string(),
+                        pattern,
+                    )
+                })
                 .collect();
             let (where_sql, binds) = relaxed_where(filters, &templates);
-            merged.extend(self.run_relaxed_query("clipboard_items", &where_sql, binds, cap).await?);
+            merged.extend(
+                self.run_relaxed_query("clipboard_items", &where_sql, binds, cap)
+                    .await?,
+            );
         }
 
         // 同一条可能既中长词又中短词：按 id 去重（保留先到的，字段完全一致）。
@@ -551,7 +594,10 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 .map_err(Self::map_db_err)?;
 
             let affected = tx
-                .execute("DELETE FROM clipboard_items WHERE id = ?1", params![id.to_string()])
+                .execute(
+                    "DELETE FROM clipboard_items WHERE id = ?1",
+                    params![id.to_string()],
+                )
                 .map_err(Self::map_db_err)?;
 
             let mut image_path: Option<String> = None;
@@ -562,7 +608,10 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 }
             }
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(DeleteResult { deleted: affected > 0, image_path })
+            Ok(DeleteResult {
+                deleted: affected > 0,
+                image_path,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
@@ -597,7 +646,10 @@ impl ClipboardRepository for SqliteClipboardRepository {
             let affected = tx.execute(sql, []).map_err(Self::map_db_err)?;
             fts_rebuild(&tx)?;
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(CleanupResult { deleted_count: affected as u64, image_paths })
+            Ok(CleanupResult {
+                deleted_count: affected as u64,
+                image_paths,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
@@ -631,18 +683,25 @@ impl ClipboardRepository for SqliteClipboardRepository {
                         Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                     })
                     .map_err(Self::map_db_err)?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(Self::map_db_err)?
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(Self::map_db_err)?
             };
 
             let (deleted_count, image_paths) = evict_rows(&tx, victims)?;
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(CleanupResult { deleted_count, image_paths })
+            Ok(CleanupResult {
+                deleted_count,
+                image_paths,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    async fn enforce_retention_days(&self, retention_days: i64) -> Result<CleanupResult, RepositoryError> {
+    async fn enforce_retention_days(
+        &self,
+        retention_days: i64,
+    ) -> Result<CleanupResult, RepositoryError> {
         if retention_days <= 0 {
             return Ok(CleanupResult::default());
         }
@@ -666,12 +725,16 @@ impl ClipboardRepository for SqliteClipboardRepository {
                         Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
                     })
                     .map_err(Self::map_db_err)?;
-                rows.collect::<Result<Vec<_>, _>>().map_err(Self::map_db_err)?
+                rows.collect::<Result<Vec<_>, _>>()
+                    .map_err(Self::map_db_err)?
             };
 
             let (deleted_count, image_paths) = evict_rows(&tx, victims)?;
             tx.commit().map_err(Self::map_db_err)?;
-            Ok(CleanupResult { deleted_count, image_paths })
+            Ok(CleanupResult {
+                deleted_count,
+                image_paths,
+            })
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?

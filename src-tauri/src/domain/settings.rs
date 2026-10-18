@@ -83,7 +83,13 @@ fn validate_shortcut_format(shortcut: &str) -> Result<(), String> {
         return Err("快捷键至少需要一个修饰键（Cmd/Ctrl/Shift/Alt）".to_string());
     }
     let valid_modifiers = [
-        "Cmd", "Ctrl", "CmdOrCtrl", "Shift", "Alt", "Option", "Super",
+        "Cmd",
+        "Ctrl",
+        "CmdOrCtrl",
+        "Shift",
+        "Alt",
+        "Option",
+        "Super",
     ];
     for m in modifiers {
         let m = m.trim();
@@ -109,29 +115,44 @@ mod tests {
 
     #[test]
     fn empty_shortcut_is_valid() {
-        let s = AppSettings { shortcut: String::new(), ..Default::default() };
+        let s = AppSettings {
+            shortcut: String::new(),
+            ..Default::default()
+        };
         assert!(s.validate().is_ok(), "空字符串表示不绑定快捷键");
     }
 
     #[test]
     fn single_key_without_modifier_is_rejected() {
-        let s = AppSettings { shortcut: "V".to_string(), ..Default::default() };
+        let s = AppSettings {
+            shortcut: "V".to_string(),
+            ..Default::default()
+        };
         assert!(s.validate().is_err());
     }
 
     #[test]
     fn valid_shortcut_passes() {
-        let s = AppSettings { shortcut: "Alt+Shift+C".to_string(), ..Default::default() };
+        let s = AppSettings {
+            shortcut: "Alt+Shift+C".to_string(),
+            ..Default::default()
+        };
         assert!(s.validate().is_ok());
     }
 
     #[test]
     fn theme_must_be_one_of_three() {
         for theme in [THEME_SYSTEM, THEME_LIGHT, THEME_DARK] {
-            let s = AppSettings { theme: theme.to_string(), ..Default::default() };
+            let s = AppSettings {
+                theme: theme.to_string(),
+                ..Default::default()
+            };
             assert!(s.validate().is_ok(), "theme={theme}");
         }
-        let bad = AppSettings { theme: "auto".to_string(), ..Default::default() };
+        let bad = AppSettings {
+            theme: "auto".to_string(),
+            ..Default::default()
+        };
         assert!(bad.validate().is_err());
     }
 }

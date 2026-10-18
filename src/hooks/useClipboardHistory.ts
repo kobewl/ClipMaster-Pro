@@ -166,7 +166,8 @@ export function useClipboardHistory(options: Options) {
    * 重新查询。
    * @param reset 为 true 时回到第一页（查询条件变了）；为 false 时保留已加载窗口（后台数据变了）。
    * @param headOnly 只在 `reset=false` 时有意义：只拉第一页（PAGE_SIZE 条），结果放到
-   *   列表头部，旧列表里不在这一页的条目原样接在后面。窗口隐藏时用：用户呼出窗口后
+   *   列表头部，旧列表里不在这一页的条目原样接在后面，总长度不超过
+   *   max(旧长度, PAGE_SIZE)（窗口大小不变）。窗口隐藏时用：用户呼出窗口后
    *   最常见的操作是直接回车粘贴第一条，第一条必须已经是刚复制的内容，不能等显示后
    *   再刷新（那样回车可能把旧的第一条粘到别的应用里）。完整窗口的对齐留给显示后
    *   那一次刷新，隐藏期间连续复制也只是每次一页的开销。
@@ -211,9 +212,16 @@ export function useClipboardHistory(options: Options) {
         if (last === null) return;
         const result = last;
         // headOnly：第一页在前，旧列表里不在第一页的接在后面（被顶上来的条目
-        // 已经在第一页里，appendUnique 不会再留一份在原位置）。
+        // 已经在第一页里，appendUnique 不会再留一份在原位置）。合并后截回
+        // max(旧长度, PAGE_SIZE)：被新条目挤出窗口的尾部条目丢掉，否则隐藏期间
+        // 每采集一条，已加载窗口就永久 +1，之后每次刷新要拉回、渲染的行越来越多。
         setItems((prev) =>
-          reconcileItems(prev, headOnly ? appendUnique(collected, prev) : collected),
+          reconcileItems(
+            prev,
+            headOnly
+              ? appendUnique(collected, prev).slice(0, Math.max(prev.length, PAGE_SIZE))
+              : collected,
+          ),
         );
         setTotal(result.total);
         // 宽松路径的证据随本次响应更新；严格路径/空查询时是 undefined → null。

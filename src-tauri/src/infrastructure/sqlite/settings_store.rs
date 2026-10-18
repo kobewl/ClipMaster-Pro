@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use rusqlite::{params, Connection, OptionalExtension};
 
+use crate::domain::capture_policy::default_excluded_apps;
 use crate::domain::error::RepositoryError;
 use crate::domain::ports::{AgentConfigStore, AgentProviderConfig, SettingsStore};
 use crate::domain::settings::AppSettings;
@@ -18,6 +19,8 @@ const KEY_RETENTION_DAYS: &str = "retention_days";
 const KEY_CAPTURE_ENABLED: &str = "capture_enabled";
 const KEY_SHORTCUT: &str = "shortcut";
 const KEY_THEME: &str = "theme";
+/// 「不记录这些应用」名单，值是 JSON 字符串数组。
+const KEY_EXCLUDED_APPS: &str = "excluded_apps";
 // 模型服务的地址与模型名。**密钥不在这里** —— 它走系统钥匙串
 // （见 domain/ports.rs 里两个 trait 的注释）。
 const KEY_AI_BASE_URL: &str = "ai_base_url";
@@ -54,6 +57,14 @@ impl SettingsStore for SqliteSettingsStore {
             let theme = get_value(&conn, KEY_THEME)?
                 .filter(|v| matches!(v.as_str(), "system" | "light" | "dark"))
                 .unwrap_or(defaults.theme.clone());
+            // 没存过 → 默认名单；存坏了也回退默认（隐私上偏安全）；存的是 [] 就保持空。
+            let excluded_apps = match get_value(&conn, KEY_EXCLUDED_APPS)? {
+                None => default_excluded_apps(),
+                Some(raw) => serde_json::from_str::<Vec<String>>(&raw).unwrap_or_else(|err| {
+                    tracing::warn!(error = %err, "排除应用名单解析失败，回退到默认名单");
+                    default_excluded_apps()
+                }),
+            };
 
             Ok(AppSettings {
                 max_history,
@@ -61,6 +72,7 @@ impl SettingsStore for SqliteSettingsStore {
                 capture_enabled,
                 shortcut,
                 theme,
+                excluded_apps,
             })
         })
         .await
@@ -92,6 +104,9 @@ impl SettingsStore for SqliteSettingsStore {
             )?;
             set_value(&tx, KEY_SHORTCUT, &settings.shortcut)?;
             set_value(&tx, KEY_THEME, &settings.theme)?;
+            let excluded_apps = serde_json::to_string(&settings.excluded_apps)
+                .map_err(|e| RepositoryError::Database(e.to_string()))?;
+            set_value(&tx, KEY_EXCLUDED_APPS, &excluded_apps)?;
 
             tx.commit()
                 .map_err(|e| RepositoryError::Database(e.to_string()))?;
@@ -160,4 +175,61 @@ fn set_value(conn: &Connection, key: &str, value: &str) -> Result<(), Repository
     )
     .map_err(|e| RepositoryError::Database(e.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::capture_policy::DEFAULT_EXCLUDED_APPS;
+
+    fn store() -> SqliteSettingsStore {
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        crate::infrastructure::sqlite::migrations::run_migrations(&mut conn).expect("跑迁移");
+        SqliteSettingsStore::new(Arc::new(Mutex::new(conn)))
+    }
+
+    #[tokio::test]
+    async fn missing_excluded_apps_key_loads_defaults() {
+        let loaded = store().load().await.expect("读取设置");
+        assert_eq!(loaded.excluded_apps, default_excluded_apps());
+        assert_eq!(loaded.excluded_apps.len(), DEFAULT_EXCLUDED_APPS.len());
+    }
+
+    #[tokio::test]
+    async fn empty_excluded_apps_round_trip_stays_empty() {
+        let store = store();
+        let settings = AppSettings {
+            excluded_apps: Vec::new(),
+            ..Default::default()
+        };
+        store.save(settings).await.expect("保存设置");
+        let loaded = store.load().await.expect("读取设置");
+        assert!(
+            loaded.excluded_apps.is_empty(),
+            "用户清空的名单不回填默认值"
+        );
+    }
+
+    #[tokio::test]
+    async fn custom_excluded_apps_round_trip() {
+        let store = store();
+        let apps = vec!["com.example.vault".to_string(), "钥匙串访问".to_string()];
+        let settings = AppSettings {
+            excluded_apps: apps.clone(),
+            ..Default::default()
+        };
+        store.save(settings).await.expect("保存设置");
+        assert_eq!(store.load().await.expect("读取设置").excluded_apps, apps);
+    }
+
+    #[tokio::test]
+    async fn corrupt_excluded_apps_falls_back_to_defaults() {
+        let store = store();
+        {
+            let conn = store.conn.lock().unwrap();
+            set_value(&conn, KEY_EXCLUDED_APPS, "not json").unwrap();
+        }
+        let loaded = store.load().await.expect("读取设置");
+        assert_eq!(loaded.excluded_apps, default_excluded_apps());
+    }
 }

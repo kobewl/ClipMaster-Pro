@@ -3,6 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::domain::capture_policy::{
+    default_excluded_apps, MAX_EXCLUDED_APPS, MAX_EXCLUDED_APP_LEN,
+};
+
 /// macOS 默认全局快捷键（待决策 D-001 最终确认）。
 /// 使用 Cmd+Shift+V —— macOS 上"粘贴并匹配格式"的常见快捷键是 Cmd+Shift+Opt+V，
 /// 而 Cmd+Shift+V 在大多数应用中没有默认绑定，冲突概率较低。
@@ -23,6 +27,9 @@ pub struct AppSettings {
     pub shortcut: String,
     /// `system` | `light` | `dark`。默认跟随系统。
     pub theme: String,
+    /// 「不记录这些应用」：每条是 bundle id 或应用名，大小写不敏感匹配。
+    /// 默认是钥匙串与常见密码管理器；用户清空后保持为空。
+    pub excluded_apps: Vec<String>,
 }
 
 impl Default for AppSettings {
@@ -33,6 +40,7 @@ impl Default for AppSettings {
             capture_enabled: true,
             shortcut: DEFAULT_SHORTCUT.to_string(),
             theme: THEME_SYSTEM.to_string(),
+            excluded_apps: default_excluded_apps(),
         }
     }
 }
@@ -53,8 +61,26 @@ impl AppSettings {
             validate_shortcut_format(&self.shortcut)?;
         }
         validate_theme(&self.theme)?;
+        validate_excluded_apps(&self.excluded_apps)?;
         Ok(())
     }
+}
+
+fn validate_excluded_apps(apps: &[String]) -> Result<(), String> {
+    if apps.len() > MAX_EXCLUDED_APPS {
+        return Err(format!("不记录的应用最多 {MAX_EXCLUDED_APPS} 个"));
+    }
+    for app in apps {
+        if app.trim().is_empty() {
+            return Err("不记录的应用名不能为空".to_string());
+        }
+        if app.chars().count() > MAX_EXCLUDED_APP_LEN {
+            return Err(format!(
+                "不记录的应用名过长（最多 {MAX_EXCLUDED_APP_LEN} 个字符）"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_theme(theme: &str) -> Result<(), String> {
@@ -154,5 +180,43 @@ mod tests {
             ..Default::default()
         };
         assert!(bad.validate().is_err());
+    }
+
+    #[test]
+    fn default_excluded_apps_include_keychain() {
+        let settings = AppSettings::default();
+        assert!(settings
+            .excluded_apps
+            .iter()
+            .any(|app| app == "com.apple.keychainaccess"));
+    }
+
+    #[test]
+    fn excluded_apps_are_bounded() {
+        let too_many = AppSettings {
+            excluded_apps: (0..=MAX_EXCLUDED_APPS)
+                .map(|i| format!("com.example.app{i}"))
+                .collect(),
+            ..Default::default()
+        };
+        assert!(too_many.validate().is_err());
+
+        let too_long = AppSettings {
+            excluded_apps: vec!["x".repeat(MAX_EXCLUDED_APP_LEN + 1)],
+            ..Default::default()
+        };
+        assert!(too_long.validate().is_err());
+
+        let blank = AppSettings {
+            excluded_apps: vec!["  ".to_string()],
+            ..Default::default()
+        };
+        assert!(blank.validate().is_err());
+
+        let empty = AppSettings {
+            excluded_apps: Vec::new(),
+            ..Default::default()
+        };
+        assert!(empty.validate().is_ok(), "空名单是合法的");
     }
 }

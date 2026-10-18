@@ -16,8 +16,9 @@ use crate::commands::agent_commands::{
 use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, copy_text_to_clipboard, create_group,
     delete_clipboard_item, delete_group, get_settings, get_source_icons, list_clipboard_items,
-    list_groups, paste_clipboard_item, paste_text, run_agent_action, run_agent_action_batch,
-    set_capture_enabled, set_item_group, update_group, update_settings, update_shortcut,
+    list_groups, list_recent_source_apps, paste_clipboard_item, paste_text, run_agent_action,
+    run_agent_action_batch, set_capture_enabled, set_excluded_apps, set_item_group, update_group,
+    update_settings, update_shortcut,
 };
 use crate::commands::system_commands::{
     check_for_updates, download_and_install_update, get_autostart_enabled, set_autostart_enabled,
@@ -63,9 +64,9 @@ pub fn run() {
             }
         }))
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        // 应用内自动安装更新（download_and_install）将来才接；现在「检查更新」
-        // 走 GitHub API（system_commands.rs），不经过这个插件。注册保留 +
-        // tauri.conf.json 里的空占位是插件初始化的硬性要求（缺了启动即 panic）。
+        // 应用内一键更新走这个插件：download_and_install_update（system_commands.rs）
+        // 通过 UpdaterExt 下载、校验并安装新版本，所以必须注册；pubkey 与 endpoints
+        // 在 tauri.conf.json。「检查更新」本身走 GitHub API，不经过它。
         .plugin(tauri_plugin_updater::Builder::new().build())
         // 前端「前往下载」按钮的 openUrl 靠它；不注册的话调用直接报
         // "plugin opener not found"。
@@ -154,8 +155,10 @@ pub fn run() {
             get_settings,
             update_settings,
             set_capture_enabled,
+            set_excluded_apps,
             update_shortcut,
             get_source_icons,
+            list_recent_source_apps,
             get_autostart_enabled,
             set_autostart_enabled,
             check_for_updates,

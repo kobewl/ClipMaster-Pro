@@ -1524,52 +1524,13 @@ struct ChatMessage {
     content: Option<String>,
 }
 
-/// 这是“宁可多拦”的本地第一道门，而不是完整 DLP。Phase 1 会将它独立为
-/// Policy Engine 并增加用户可配置规则。当前实现刻意不用内容进日志。
-pub(crate) fn contains_sensitive_content(text: &str) -> bool {
-    let lower = text.to_ascii_lowercase();
-    if lower.contains("-----begin") && lower.contains("private key-----") {
-        return true;
-    }
-    if lower.contains("password=") || lower.contains("passwd=") || lower.contains("api_key=") {
-        return true;
-    }
-    if text.contains("sk-") || text.contains("AKIA") || text.contains("xoxb-") {
-        return true;
-    }
-    text.split_whitespace().any(looks_like_jwt)
-}
-
-fn looks_like_jwt(value: &str) -> bool {
-    let mut parts = value.split('.');
-    let Some(a) = parts.next() else { return false };
-    let Some(b) = parts.next() else { return false };
-    let Some(c) = parts.next() else { return false };
-    parts.next().is_none()
-        && a.len() >= 10
-        && b.len() >= 10
-        && c.len() >= 10
-        && [a, b, c].into_iter().all(|part| {
-            part.chars()
-                .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
-        })
-}
+/// 敏感内容判断已独立成 [`crate::application::sensitive_policy`]；这里 re-export，
+/// `agent_chat` / `agent_tools` 的 import 不用改。
+pub(crate) use crate::application::sensitive_policy::contains_sensitive_content;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn blocks_common_secrets_without_logging_them() {
-        assert!(contains_sensitive_content("-----BEGIN PRIVATE KEY-----"));
-        assert!(contains_sensitive_content("token=sk-example"));
-        assert!(contains_sensitive_content(
-            "aaaabbbbbb.cccccccccc.dddddddddd"
-        ));
-        assert!(!contains_sensitive_content(
-            "Redis timeout happened after deployment."
-        ));
-    }
 
     #[test]
     fn api_key_validation_accepts_realistic_keys() {

@@ -12,6 +12,12 @@
 
 mod budget;
 mod sanitize;
+// 本地专用测试（被 gitignore），文件存在时由 build.rs 打开这个 cfg。
+// rustfmt 不看 cfg、会去解析 tests.rs，CI 上文件不存在会让 `cargo fmt --check`
+// 直接报错，所以这里跳过格式化。
+#[cfg(all(test, has_local_agent_prompt_tests))]
+#[rustfmt::skip]
+mod tests;
 
 use chrono::{DateTime, Utc};
 

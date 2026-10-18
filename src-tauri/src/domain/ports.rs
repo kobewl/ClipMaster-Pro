@@ -21,8 +21,9 @@ pub struct SearchQuery {
     pub search_text: Option<String>,
     /// 按内容类型过滤（如只看图片）。None = 全部类型。
     pub content_type: Option<ContentType>,
-    /// 只返回 created_at 不早于该时刻的条目（RFC3339 字符串，与列的存储
-    /// 格式一致，字典序即时间序）。None = 不限时间。
+    /// 只返回 last_copied_at（最近一次复制时间，列表的排序/显示口径）不早于
+    /// 该时刻的条目（RFC3339 字符串，与列的存储格式一致，字典序即时间序）。
+    /// None = 不限时间。
     pub since: Option<String>,
     pub limit: u32,
     pub offset: u32,
@@ -105,10 +106,9 @@ pub trait ClipboardRepository: Send + Sync {
 
     /// 会话候选取数：`last_copied_at >= since` 的最近 `limit` 条，新复制在前。
     ///
-    /// **与 [`SearchQuery::since`] 的语义差异是刻意的**（见关键判断 9）：
-    /// 那边用 `created_at`（首次入库时间，检索的时间筛选语义），这边用
-    /// `last_copied_at` —— 会话按「最近一次复制」成组，同一条内容被再复制一次
-    /// 就该回到工作记忆的顶端。既有 `search` 的 `since` 语义一行不改。
+    /// 与 [`SearchQuery::since`] 用同一列（`last_copied_at`）开窗：会话按「最近
+    /// 一次复制」成组，同一条内容被再复制一次就该回到工作记忆的顶端。两者只差
+    /// 在这里有 rowid 兜平局与 `limit`，不分页、不带其他筛选。
     async fn list_since(
         &self,
         since: &str,

@@ -15,6 +15,7 @@ import type {
   ListQuery,
   ListResult,
   PlannerSuggestionSet,
+  SourceApp,
   SourceIconRequest,
   UpdateStatus,
 } from "@/types/clipboard";
@@ -80,6 +81,14 @@ export const commands = {
   },
   updateShortcut(shortcut: string): Promise<AppSettings> {
     return invoke("update_shortcut", { shortcut });
+  },
+  /** 「不记录这些应用」名单：立即生效，不走「保存」。 */
+  setExcludedApps(apps: string[]): Promise<AppSettings> {
+    return invoke("set_excluded_apps", { apps });
+  },
+  /** 最近复制过内容的来源应用（去重，最近的在前）。 */
+  listRecentSourceApps(): Promise<SourceApp[]> {
+    return invoke("list_recent_source_apps");
   },
 
   // 系统集成

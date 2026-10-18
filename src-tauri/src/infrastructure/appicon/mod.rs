@@ -63,20 +63,52 @@ fn non_empty(value: &Option<String>) -> Option<&str> {
 ///    也能找到；系统给的路径同样要求仍在磁盘上，过期的登记记录直接跳过。
 /// 3. 应用名：没有 bundle 信息的旧记录走这条（含别名表）。
 pub fn resolve_app_path(source: &IconSource, locator: &impl AppLocator) -> Option<String> {
-    if let Some(path) = non_empty(&source.app_path) {
-        if path.to_lowercase().ends_with(".app") && locator.bundle_exists(path) {
-            return Some(path.to_string());
-        }
+    stored_app_path(source, locator).or_else(|| lookup_app_path(source, locator, &[]))
+}
+
+/// 第 1 步：复制时记下的 `.app` 路径（仍在磁盘上才算）。
+///
+/// 只做一次文件系统 stat，不碰 AppKit —— 可以（也应该）在后台线程跑：
+/// 记录的路径可能在网络卷上，stat 会卡，不能放在主线程。
+pub fn stored_app_path(source: &IconSource, locator: &impl AppLocator) -> Option<String> {
+    let path = non_empty(&source.app_path)?;
+    if path.to_lowercase().ends_with(".app") && locator.bundle_exists(path) {
+        return Some(path.to_string());
     }
+    None
+}
+
+/// 第 2、3 步：先 bundle id，再应用名。要问 LaunchServices / NSWorkspace，
+/// 在 macOS 上需要主线程。不会再去 stat 已记录的路径。
+///
+/// `avoid_paths`：后台检查超时的那些已记录路径（多半在网络卷等慢速位置）。
+/// 主线程不能再碰它们 —— 系统给出的路径若正是其中之一，既不 stat 也不返回，
+/// 这次退回 emoji，下次请求再试。
+pub fn lookup_app_path(
+    source: &IconSource,
+    locator: &impl AppLocator,
+    avoid_paths: &[String],
+) -> Option<String> {
     if let Some(bundle_id) = non_empty(&source.bundle_id) {
         if let Some(path) = locator.path_for_bundle_id(bundle_id) {
-            if locator.bundle_exists(&path) {
+            if !is_avoided(&path, avoid_paths) && locator.bundle_exists(&path) {
                 return Some(path);
             }
         }
     }
     let name = non_empty(&source.name)?;
-    locator.path_for_name(name)
+    locator
+        .path_for_name(name)
+        .filter(|path| !is_avoided(path, avoid_paths))
+}
+
+/// 路径是否在 `avoid` 里。两边都去掉首尾空白和末尾的 `/` 再比较。
+fn is_avoided(path: &str, avoid: &[String]) -> bool {
+    fn normalize(p: &str) -> &str {
+        p.trim().trim_end_matches('/')
+    }
+    let path = normalize(path);
+    avoid.iter().any(|entry| normalize(entry) == path)
 }
 
 /// 来源 → 图标缓存文件名。`None` = 什么标识都没有，不必去取。
@@ -227,6 +259,101 @@ mod tests {
             locator.calls.borrow().is_empty(),
             "{:?}",
             locator.calls.borrow()
+        );
+    }
+
+    #[test]
+    fn stored_app_path_only_checks_existence() {
+        let locator = FakeLocator::default()
+            .exists("/Volumes/Net/Foo.app")
+            .bundle("com.foo", "/Other/Foo.app")
+            .name("Foo", "/Other/Foo.app");
+        let src = source(Some("Foo"), Some("com.foo"), Some("/Volumes/Net/Foo.app"));
+        assert_eq!(
+            stored_app_path(&src, &locator).as_deref(),
+            Some("/Volumes/Net/Foo.app")
+        );
+        assert!(locator.called("exists:/Volumes/Net/Foo.app"));
+        assert!(!locator.called("bundle:"), "第 1 步不该问 bundle id");
+        assert!(!locator.called("name:"), "第 1 步不该按名字找");
+
+        let gone = FakeLocator::default();
+        assert_eq!(stored_app_path(&src, &gone), None);
+        assert!(!gone.called("bundle:"));
+        assert!(!gone.called("name:"));
+    }
+
+    #[test]
+    fn lookup_app_path_never_stats_the_stored_path() {
+        let locator = FakeLocator::default()
+            .exists("/Users/x/Apps/Foo.app")
+            .bundle("com.foo", "/Users/x/Apps/Foo.app");
+        let src = source(Some("Foo"), Some("com.foo"), Some("/Volumes/Net/Foo.app"));
+        assert_eq!(
+            lookup_app_path(&src, &locator, &[]).as_deref(),
+            Some("/Users/x/Apps/Foo.app")
+        );
+        assert!(
+            !locator.called("exists:/Volumes/Net/Foo.app"),
+            "已记录路径的检查归第 1 步（后台线程），这里不许再 stat"
+        );
+    }
+
+    #[test]
+    fn split_steps_compose_to_resolve_app_path() {
+        let cases = [
+            source(Some("Foo"), Some("com.foo"), Some("/Applications/Foo.app")),
+            source(Some("Foo"), Some("com.foo"), Some("/Gone/Foo.app")),
+            source(Some("Foo"), None, None),
+            source(None, Some("com.foo"), None),
+            source(None, None, Some("/etc/passwd")),
+            IconSource::default(),
+        ];
+        for src in cases {
+            let locator = || {
+                FakeLocator::default()
+                    .exists("/Applications/Foo.app")
+                    .exists("/Users/x/Apps/Foo.app")
+                    .bundle("com.foo", "/Users/x/Apps/Foo.app")
+                    .name("Foo", "/Elsewhere/Foo.app")
+            };
+            let split = stored_app_path(&src, &locator())
+                .or_else(|| lookup_app_path(&src, &locator(), &[]));
+            assert_eq!(split, resolve_app_path(&src, &locator()), "{src:?}");
+        }
+    }
+
+    #[test]
+    fn lookup_skips_avoided_launch_services_path() {
+        // 已记录路径的后台检查超时了；LaunchServices 又给出同一个慢路径 ——
+        // 主线程不能去 stat 它，改按应用名找。
+        for avoided in ["/Volumes/Net/Foo.app", "/Volumes/Net/Foo.app/"] {
+            let locator = FakeLocator::default()
+                .exists("/Volumes/Net/Foo.app")
+                .bundle("com.foo", "/Volumes/Net/Foo.app")
+                .name("Foo", "/Applications/Foo.app");
+            let src = source(Some("Foo"), Some("com.foo"), Some("/Volumes/Net/Foo.app"));
+            let found = lookup_app_path(&src, &locator, &[avoided.to_string()]);
+            assert_eq!(found.as_deref(), Some("/Applications/Foo.app"), "{avoided}");
+            assert!(
+                !locator.called("exists:/Volumes/Net/Foo.app"),
+                "avoid 里的路径主线程一次都不能碰：{avoided}"
+            );
+        }
+    }
+
+    #[test]
+    fn lookup_returns_none_when_name_result_is_avoided() {
+        let locator = FakeLocator::default().name("Foo", "/Volumes/Net/Foo.app");
+        let src = source(Some("Foo"), None, Some("/Volumes/Net/Foo.app"));
+        assert_eq!(
+            lookup_app_path(&src, &locator, &[" /Volumes/Net/Foo.app ".to_string()]),
+            None
+        );
+        // 不在 avoid 里时照常返回。
+        assert_eq!(
+            lookup_app_path(&src, &locator, &["/Volumes/Other.app".to_string()]).as_deref(),
+            Some("/Volumes/Net/Foo.app")
         );
     }
 

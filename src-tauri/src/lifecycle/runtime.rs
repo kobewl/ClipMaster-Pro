@@ -12,6 +12,7 @@ use crate::application::history_service::HistoryService;
 use crate::application::planner_service::PlannerService;
 use crate::application::session_service::SessionService;
 use crate::application::settings_service::SettingsService;
+use crate::domain::capture_policy::CaptureGate;
 use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
@@ -49,6 +50,8 @@ pub struct AppRuntime {
     /// 对话 Agent。与 `agent` 共用同一道单飞闸门，正文落在派生表。
     pub chats: Arc<AgentChatService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
+    /// 采集开关 + 排除名单的内存投影。watcher 与 pipeline 持有同一份克隆。
+    pub capture_gate: CaptureGate,
     settings_store: Arc<dyn SettingsStore>,
 }
 
@@ -58,7 +61,7 @@ impl AppRuntime {
     }
 
     /// 采集开关的**唯一写入路径**。设置面板保存、状态栏点击、托盘菜单
-    /// 三条入口都汇到这里：settings 表是唯一真相源，pipeline 的原子标记、
+    /// 三条入口都汇到这里：settings 表是唯一真相源，采集闸门的原子标记、
     /// 前端状态栏、托盘菜单文案都是它的镜像（由 [`sync_capture_side_effects`]
     /// 统一刷新，任何一条路单独改镜像都会造成显示分叉）。
     pub async fn set_capture_enabled(
@@ -71,6 +74,14 @@ impl AppRuntime {
         Ok(updated)
     }
 
+    /// 「不记录这些应用」名单：落库成功后立刻刷新闸门，下一次复制即生效。
+    pub async fn set_excluded_apps(&self, apps: Vec<String>) -> Result<AppSettings, AppError> {
+        let updated = self.settings.set_excluded_apps(apps).await?;
+        self.capture_gate
+            .set_excluded_apps(updated.excluded_apps.clone());
+        Ok(updated)
+    }
+
     pub fn shutdown(&self) {
         if let Ok(mut pipeline) = self.capture_pipeline.lock() {
             pipeline.stop();
@@ -78,11 +89,9 @@ impl AppRuntime {
     }
 }
 
-/// 采集开关落库后的全部联动：pipeline 内存投影、前端事件、托盘菜单文案。
+/// 采集开关落库后的全部联动：闸门内存投影、前端事件、托盘菜单文案。
 pub fn sync_capture_side_effects(app: &AppHandle, runtime: &AppRuntime, capture_enabled: bool) {
-    if let Ok(pipeline) = runtime.capture_pipeline.lock() {
-        pipeline.set_enabled(capture_enabled);
-    }
+    runtime.capture_gate.set_enabled(capture_enabled);
     if let Err(err) = app.emit("settings://capture-changed", capture_enabled) {
         tracing::warn!(error = %err, "发送 settings://capture-changed 事件失败");
     }
@@ -107,6 +116,15 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
     let settings_impl = Arc::new(SqliteSettingsStore::new(conn.clone()));
     let settings_store: Arc<dyn SettingsStore> = settings_impl.clone();
 
+    // 启动时用已保存的设置初始化闸门：暂停状态下重启，托盘显示「已暂停」，
+    // 实际也必须不采集；排除名单同理。
+    let initial_settings =
+        tauri::async_runtime::block_on(settings_store.load()).unwrap_or_default();
+    let capture_gate = CaptureGate::new(
+        initial_settings.capture_enabled,
+        initial_settings.excluded_apps.clone(),
+    );
+
     let image_dir = app_data_dir.join("images");
     std::fs::create_dir_all(&image_dir).map_err(|e| format!("创建图片存储目录失败: {e}"))?;
 
@@ -118,7 +136,11 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         let guard = new_self_write_guard();
         (
             Arc::new(MacOsClipboardWriter::new(guard.clone())),
-            Box::new(MacOsClipboardSource::new(guard, image_dir)),
+            Box::new(MacOsClipboardSource::new(
+                guard,
+                image_dir,
+                capture_gate.clone(),
+            )),
         )
     };
 
@@ -164,7 +186,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
 
     spawn_retention_cleanup_timer(history.clone(), settings_store.clone());
 
-    let mut capture_pipeline = CapturePipeline::new(source);
+    let mut capture_pipeline = CapturePipeline::new(source, capture_gate.clone());
 
     let app_handle_for_events = app_handle.clone();
     if let Err(err) = capture_pipeline.start(history.clone(), move |item| {
@@ -193,6 +215,7 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         planner,
         chats,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),
+        capture_gate,
         settings_store,
     })
 }

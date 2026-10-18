@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 10;
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -258,6 +258,18 @@ const MIGRATIONS: &[(i64, &str)] = &[
     ALTER TABLE clipboard_items ADD COLUMN source_app_path TEXT;
     "#,
     ),
+    // 删掉三个从没被查询用到的索引（dbstat 实测 search_text 索引约占主表 54%）：
+    // - search_text：检索只有 `LIKE '%x%'` 与 FTS，b-tree 索引用不上；
+    // - favorite_time：is_favorite 在 migration 4 已被 group_id 取代，新行恒为 0；
+    // - legacy_id：只在 INSERT 时写入、读回模型，没有任何按它查找的路径。
+    (
+        11,
+        r#"
+    DROP INDEX IF EXISTS idx_clipboard_items_search_text;
+    DROP INDEX IF EXISTS idx_clipboard_items_favorite_time;
+    DROP INDEX IF EXISTS idx_clipboard_items_legacy_id;
+    "#,
+    ),
 ];
 
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<()> {
@@ -406,5 +418,152 @@ mod tests {
         assert_eq!(item.source_url.as_deref(), Some("https://example.com"));
         assert!(item.source_bundle_id.is_none());
         assert!(item.source_app_path.is_none());
+    }
+
+    const DROPPED_IN_11: [&str; 3] = [
+        "idx_clipboard_items_search_text",
+        "idx_clipboard_items_favorite_time",
+        "idx_clipboard_items_legacy_id",
+    ];
+
+    fn index_names(conn: &Connection) -> Vec<String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name IS NOT NULL")
+            .expect("查索引");
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .expect("读索引");
+        rows.collect::<Result<Vec<_>, _>>().expect("收集索引名")
+    }
+
+    /// 停在 v10 的库（真机升级的样子）跑完迁移 11：三个无用索引被删，
+    /// 热路径用到的索引都还在，数据行原样保留。
+    #[test]
+    fn migration_11_drops_unused_indexes_on_v10_database() {
+        assert_eq!(MIGRATIONS[9].0, 10, "切片 [..10] 必须正好停在 v10");
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        apply_migrations(&mut conn, &MIGRATIONS[..10]).expect("迁移到 v10");
+
+        let before = index_names(&conn);
+        for name in DROPPED_IN_11 {
+            assert!(
+                before.iter().any(|n| n == name),
+                "v10 应该还有 {name}：{before:?}"
+            );
+        }
+
+        conn.execute(
+            "INSERT INTO clipboard_items
+                (id, content_type, content_text, fingerprint, search_text, is_favorite, group_id,
+                 created_at, updated_at, last_copied_at, source_app, source_url, legacy_id)
+             VALUES ('33333333-3333-3333-3333-333333333333', 'text', 'v10 时代的内容',
+                     'fp-v10', 'v10 时代的内容', 0, NULL,
+                     '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00',
+                     '2026-01-01T00:00:00+00:00', 'Safari', NULL, NULL)",
+            [],
+        )
+        .expect("写入 v10 行");
+
+        run_migrations(&mut conn).expect("升级到最新版本");
+
+        let after = index_names(&conn);
+        for name in DROPPED_IN_11 {
+            assert!(
+                !after.iter().any(|n| n == name),
+                "{name} 应该已被删除：{after:?}"
+            );
+        }
+        for name in [
+            "idx_clipboard_items_fingerprint",
+            "idx_clipboard_items_copied_time",
+            "idx_clipboard_items_group_time",
+            "idx_clipboard_items_group_id",
+        ] {
+            assert!(
+                after.iter().any(|n| n == name),
+                "{name} 必须保留：{after:?}"
+            );
+        }
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
+            .expect("数行数");
+        assert_eq!(count, 1);
+    }
+
+    /// 仓储的真实查询形状在迁移 11 之后仍然走索引：不全表扫描、不为 ORDER BY
+    /// 建临时 b-tree，也不依赖已删掉的索引。
+    #[test]
+    fn hot_queries_still_use_indexes_after_migration_11() {
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        run_migrations(&mut conn).expect("跑迁移");
+
+        let cases: [(&str, &str, bool); 5] = [
+            (
+                "列表",
+                "SELECT clipboard_items.* FROM clipboard_items
+                 ORDER BY clipboard_items.last_copied_at DESC LIMIT ?1 OFFSET ?2",
+                true,
+            ),
+            (
+                "时间筛选",
+                "SELECT clipboard_items.* FROM clipboard_items
+                 WHERE clipboard_items.last_copied_at >= ?1
+                 ORDER BY clipboard_items.last_copied_at DESC LIMIT ?2 OFFSET ?3",
+                true,
+            ),
+            (
+                "分组视图",
+                "SELECT clipboard_items.* FROM clipboard_items
+                 WHERE clipboard_items.group_id = ?1
+                 ORDER BY clipboard_items.last_copied_at DESC LIMIT ?2 OFFSET ?3",
+                true,
+            ),
+            (
+                "数量淘汰",
+                "SELECT rowid, search_text, content_type, content_text
+                 FROM clipboard_items
+                 WHERE group_id IS NULL
+                 ORDER BY last_copied_at ASC
+                 LIMIT ?1",
+                true,
+            ),
+            (
+                "指纹去重",
+                "SELECT id, search_text FROM clipboard_items WHERE fingerprint = ?1",
+                false,
+            ),
+        ];
+
+        for (label, sql, has_order_by) in cases {
+            let mut stmt = conn
+                .prepare(&format!("EXPLAIN QUERY PLAN {sql}"))
+                .expect("EXPLAIN");
+            // 参数值不影响计划，全部绑 NULL。
+            let nulls = vec![rusqlite::types::Null; stmt.parameter_count()];
+            let details: Vec<String> = stmt
+                .query_map(rusqlite::params_from_iter(nulls), |row| {
+                    row.get::<_, String>(3)
+                })
+                .expect("读计划")
+                .collect::<Result<_, _>>()
+                .expect("收集计划");
+            let plan = details.join(" | ");
+            assert!(
+                plan.contains("idx_clipboard_items_"),
+                "{label} 必须走索引：{plan}"
+            );
+            if has_order_by {
+                assert!(
+                    !plan.contains("USE TEMP B-TREE FOR ORDER BY"),
+                    "{label} 的排序必须由索引给出：{plan}"
+                );
+            }
+            for name in DROPPED_IN_11 {
+                assert!(
+                    !plan.contains(name),
+                    "{label} 不能依赖已删除的 {name}：{plan}"
+                );
+            }
+        }
     }
 }

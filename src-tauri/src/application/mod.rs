@@ -9,6 +9,7 @@ pub mod planner_build;
 pub mod planner_service;
 pub mod query_parse;
 pub mod rerank;
+pub mod sensitive_policy;
 pub mod session_build;
 pub mod session_service;
 pub mod settings_service;

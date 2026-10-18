@@ -47,7 +47,10 @@ fn relaxed_where(
     }
     if let Some(ref since) = filters.since {
         binds.push(since.clone());
-        conditions.push(format!("clipboard_items.created_at >= ?{}", binds.len()));
+        conditions.push(format!(
+            "clipboard_items.last_copied_at >= ?{}",
+            binds.len()
+        ));
     }
 
     let term_expr = term_templates
@@ -395,8 +398,10 @@ impl ClipboardRepository for SqliteClipboardRepository {
             }
             if let Some(ref since) = query.since {
                 pidx += 1;
-                // created_at 是 RFC3339 UTC 文本，字典序即时间序（见 time_range_to_since）。
-                conditions.push(format!("clipboard_items.created_at >= ?{pidx}"));
+                // 按最近一次复制时间筛选，与列表的排序/显示口径一致，也能走
+                // idx_clipboard_items_copied_time。last_copied_at 与 created_at 同由
+                // Utc::now().to_rfc3339() 写入，字典序即时间序（见 time_range_to_since）。
+                conditions.push(format!("clipboard_items.last_copied_at >= ?{pidx}"));
                 param_values.push(Box::new(since.clone()));
             }
             if use_fts {
@@ -740,9 +745,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
         .map_err(|e| RepositoryError::Database(e.to_string()))?
     }
 
-    /// 会话候选取数。与 `search` 的 `since` 用 `created_at` 不同，这里用
-    /// `last_copied_at`（见 trait 上的语义说明与关键判断 9）：会话按「最近一次
-    /// 复制」成组，同一条内容被再复制一次就该回到工作记忆的顶端。
+    /// 会话候选取数。与 `search` 的 `since` 同样按 `last_copied_at` 开窗：会话按
+    /// 「最近一次复制」成组，同一条内容被再复制一次就该回到工作记忆的顶端。
     /// 排序与列表路径同一口径（`last_copied_at DESC`），rowid 兜平局时的稳定序。
     async fn list_since(
         &self,
@@ -807,5 +811,141 @@ impl ClipboardRepository for SqliteClipboardRepository {
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::domain::normalize::compute_fingerprint;
+    use chrono::Duration;
+
+    fn repo_with_conn() -> (SqliteClipboardRepository, Arc<Mutex<Connection>>) {
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        crate::infrastructure::sqlite::migrations::run_migrations(&mut conn).expect("跑迁移");
+        let conn = Arc::new(Mutex::new(conn));
+        (SqliteClipboardRepository::new(conn.clone()), conn)
+    }
+
+    fn text_item(text: &str) -> NewClipboardItem {
+        NewClipboardItem {
+            content_type: ContentType::Text,
+            content_text: text.to_string(),
+            fingerprint: compute_fingerprint("text", text),
+            source_app: None,
+            source_url: None,
+            source_bundle_id: None,
+            source_app_path: None,
+        }
+    }
+
+    fn query_all() -> SearchQuery {
+        SearchQuery {
+            group_id: None,
+            search_text: None,
+            content_type: None,
+            since: None,
+            limit: 100,
+            offset: 0,
+        }
+    }
+
+    fn one_day_ago() -> String {
+        (Utc::now() - Duration::days(1)).to_rfc3339()
+    }
+
+    /// `recopied`：3 天前第一次复制、今天又复制了一次（只回拨 created_at）；
+    /// `stale`：3 天前复制后再没碰过（两列都回拨）。
+    fn backdate(conn: &Arc<Mutex<Connection>>, recopied_id: &str, stale_id: &str) {
+        let three_days_ago = (Utc::now() - Duration::days(3)).to_rfc3339();
+        // 作用域块：锁在这里就释放，不跨后面的 `.await`（clippy::await_holding_lock）。
+        {
+            let guard = conn.lock().unwrap();
+            guard
+                .execute(
+                    "UPDATE clipboard_items SET created_at = ?1 WHERE id = ?2",
+                    params![three_days_ago, recopied_id],
+                )
+                .unwrap();
+            guard
+                .execute(
+                    "UPDATE clipboard_items SET created_at = ?1, last_copied_at = ?1 WHERE id = ?2",
+                    params![three_days_ago, stale_id],
+                )
+                .unwrap();
+        }
+    }
+
+    /// 两条都带一个 ≥3 字的词（`copied`，走 FTS）和一个 2 字的词（`ok`，走 LIKE）。
+    async fn seed() -> (SqliteClipboardRepository, String, String) {
+        let (repo, conn) = repo_with_conn();
+        let recopied = repo
+            .insert_or_touch(text_item("ok copied again today"))
+            .await
+            .unwrap();
+        let stale = repo
+            .insert_or_touch(text_item("ok copied long ago"))
+            .await
+            .unwrap();
+        let (recopied_id, stale_id) = (recopied.id.to_string(), stale.id.to_string());
+        backdate(&conn, &recopied_id, &stale_id);
+        (repo, recopied_id, stale_id)
+    }
+
+    fn ids(items: &[ClipboardItem]) -> Vec<String> {
+        items.iter().map(|item| item.id.to_string()).collect()
+    }
+
+    #[tokio::test]
+    async fn strict_search_since_filters_on_last_copied_at() {
+        let (repo, recopied_id, _stale_id) = seed().await;
+
+        for search_text in [None, Some("copied"), Some("ok")] {
+            let result = repo
+                .search(SearchQuery {
+                    since: Some(one_day_ago()),
+                    search_text: search_text.map(str::to_string),
+                    ..query_all()
+                })
+                .await
+                .unwrap();
+            assert_eq!(result.total, 1, "search_text = {search_text:?}");
+            assert_eq!(
+                ids(&result.items),
+                vec![recopied_id.clone()],
+                "按 last_copied_at 开窗：今天又复制过的那条要在，3 天前的不在（{search_text:?}）"
+            );
+        }
+
+        let unfiltered = repo.search(query_all()).await.unwrap();
+        assert_eq!(unfiltered.total, 2, "不限时间时两条都在");
+    }
+
+    #[tokio::test]
+    async fn relaxed_search_since_filters_on_last_copied_at() {
+        let (repo, recopied_id, stale_id) = seed().await;
+        let windowed = SearchQuery {
+            since: Some(one_day_ago()),
+            ..query_all()
+        };
+
+        // `copied` 走 FTS 子查询，`ok` 走 LIKE 子查询。
+        for term in ["copied", "ok"] {
+            let items = repo
+                .search_relaxed(&windowed, &[term.to_string()], 50)
+                .await
+                .unwrap();
+            assert_eq!(ids(&items), vec![recopied_id.clone()], "term = {term}");
+
+            let all = repo
+                .search_relaxed(&query_all(), &[term.to_string()], 50)
+                .await
+                .unwrap();
+            let mut all_ids = ids(&all);
+            all_ids.sort();
+            let mut expected = vec![recopied_id.clone(), stale_id.clone()];
+            expected.sort();
+            assert_eq!(all_ids, expected, "since 为 None 时两条都返回（{term}）");
+        }
     }
 }

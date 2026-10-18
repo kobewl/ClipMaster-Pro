@@ -24,6 +24,7 @@ import {
 } from "@/lib/theme";
 import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmDialog } from "./ConfirmDialog";
+import { ExcludedAppsSection } from "./ExcludedAppsSection";
 import { Icon } from "./Icon";
 import { ReleaseNotes } from "./ReleaseNotes";
 
@@ -126,13 +127,31 @@ export function SettingsPanel({
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
 
+  // 上一次同步进草稿的服务端设置。只同步真正变了的字段：立即生效的通道
+  // （排除名单、主题、快捷键）每次都会产生新的 settings 对象，整份覆盖会把
+  // 别的未保存草稿（最大历史数量、保留天数、采集开关）冲掉；而托盘切换暂停
+  // 改的 capture_enabled 仍要同步进来，否则再点保存会把托盘的设置覆盖回去。
+  const syncedSettingsRef = useRef<AppSettings | null>(null);
+
   useEffect(() => {
     if (!settings) return;
-    setMaxHistory(String(settings.max_history));
-    setRetentionDays(String(settings.retention_days));
-    setCaptureEnabled(settings.capture_enabled);
-    setShortcut(settings.shortcut);
-    setTheme(isThemePreference(settings.theme) ? settings.theme : "system");
+    const prev = syncedSettingsRef.current;
+    syncedSettingsRef.current = settings;
+    if (!prev || prev.max_history !== settings.max_history) {
+      setMaxHistory(String(settings.max_history));
+    }
+    if (!prev || prev.retention_days !== settings.retention_days) {
+      setRetentionDays(String(settings.retention_days));
+    }
+    if (!prev || prev.capture_enabled !== settings.capture_enabled) {
+      setCaptureEnabled(settings.capture_enabled);
+    }
+    if (!prev || prev.shortcut !== settings.shortcut) {
+      setShortcut(settings.shortcut);
+    }
+    if (!prev || prev.theme !== settings.theme) {
+      setTheme(isThemePreference(settings.theme) ? settings.theme : "system");
+    }
   }, [settings]);
 
   // 每次打开面板都清掉上一次的错误提示，并重新读一次自启状态
@@ -187,23 +206,29 @@ export function SettingsPanel({
 
   async function handleSave() {
     const current = settingsRef.current;
+    // 排除名单是整体保存的一部分：设置还没读到就保存，会把名单写成空。
+    if (!current) {
+      setError("设置尚未加载完成，请稍后再试");
+      return;
+    }
     setSaving(true);
     setError(null);
     try {
       await onSave({
         max_history: parseIntInRange(
           maxHistory,
-          current?.max_history ?? 1000,
+          current.max_history,
           MAX_HISTORY_RANGE,
         ),
         retention_days: parseIntInRange(
           retentionDays,
-          current?.retention_days ?? 30,
+          current.retention_days,
           RETENTION_DAYS_RANGE,
         ),
         capture_enabled: captureEnabled,
         shortcut,
         theme,
+        excluded_apps: current.excluded_apps,
       });
       onClose();
     } catch (err: unknown) {
@@ -250,6 +275,7 @@ export function SettingsPanel({
         capture_enabled: current.capture_enabled,
         shortcut: current.shortcut,
         theme: next,
+        excluded_apps: current.excluded_apps,
       });
       onSettingsChange({ ...current, theme: next });
     } catch (err: unknown) {
@@ -517,6 +543,13 @@ export function SettingsPanel({
             启用剪贴板采集
           </label>
         </fieldset>
+
+        {settings && (
+          <ExcludedAppsSection
+            excludedApps={settings.excluded_apps}
+            onSettingsChange={onSettingsChange}
+          />
+        )}
 
         <fieldset className="settings-section mt-3">
           <legend className="px-1.5 text-[11px] font-medium text-[var(--cm-fg-faint)]">全局快捷键</legend>

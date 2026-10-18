@@ -1,10 +1,10 @@
 [package]
 name = "clipmaster-pro"
-version = "1.2.3"
-description = "ClipMaster Pro 0.01 Beta - 轻量级本地优先剪贴板助手"
+version = "1.3.0"
+description = "ClipMaster Pro - 轻量级本地优先的 macOS 剪贴板助手"
 authors = ["ClipMaster Pro"]
 license = "MIT"
-repository = ""
+repository = "https://github.com/kobewl/ClipMaster-Pro"
 edition = "2021"
 rust-version = "1.77.2"
 
@@ -43,10 +43,9 @@ tauri-plugin-autostart = "2.5.1"
 # 会各拉起一个实例，于是出现两个菜单栏图标、两个进程抢全局快捷键。
 # 硬性要求：必须在所有插件里**第一个**注册（它靠接管第二实例的启动来生效）。
 tauri-plugin-single-instance = "2"
-# 应用内自动安装更新用的（tauri.conf.json 里的空占位是它的硬性要求）。
-# 「检查更新」本身走 GitHub API（见 system_commands.rs），不依赖这个插件；
-# 将来接「自动下载安装」时才需要它 —— 那时再生成 minisign 密钥并配置
-# pubkey/endpoints（docs/release/RELEASE.md）。
+# 应用内一键更新：download_and_install_update（system_commands.rs）用它下载
+# latest.json 指向的安装包并做 minisign 校验后安装；pubkey 与 endpoints 配在
+# tauri.conf.json 的 plugins.updater。「检查更新」本身仍走 GitHub API，不经过它。
 tauri-plugin-updater = "2"
 # 前端 openUrl（「前往下载」按钮）靠这个插件；npm 侧已有 @tauri-apps/plugin-opener。
 tauri-plugin-opener = "2"
@@ -66,6 +65,10 @@ semver = "1"
 # 不用字符串前缀判断 —— 那分不清 https://evil.com/api.deepseek.com 这种地址。
 # 这个 crate 已在依赖树里（reqwest 需要它），显式声明不新增下载。
 url = "2"
+
+# 敏感内容规则（application/sensitive_policy.rs）。已在依赖树里（Cargo.lock 中是
+# regex 1.13.1），钉住同一版本，零新增下载。
+regex = "=1.13.1"
 
 # macOS 剪贴板读写（含图片支持，默认启用 image feature）。
 [target.'cfg(target_os = "macos")'.dependencies]

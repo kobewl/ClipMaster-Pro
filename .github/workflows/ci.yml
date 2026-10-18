@@ -2,7 +2,7 @@
 #
 # 两条并行流水线：
 #  - frontend：类型检查 + 构建（纯 Node，跑得快）
-#  - backend：cargo test + clippy。必须用 macOS runner —— 剪贴板采集、
+#  - backend：cargo fmt --check + cargo test + clippy。必须用 macOS runner —— 剪贴板采集、
 #    AppKit 图标、CGEvent 粘贴都是 macOS 专属依赖，Linux 上编不出来。
 #
 # 触发：push 到 main、所有 PR。
@@ -26,16 +26,16 @@ jobs:
     name: Frontend（类型检查 / 构建）
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
       - name: 检查受追踪文件中的凭据
         run: python3 scripts/check-secrets.py
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: 安装依赖
@@ -45,10 +45,10 @@ jobs:
         run: npm run build
 
   backend:
-    name: Backend（cargo test / clippy）
+    name: Backend（cargo fmt / test / clippy）
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
@@ -56,6 +56,14 @@ jobs:
         uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      # runner 镜像一般自带，显式安装防止镜像变动后 fmt / clippy 缺失。
+      - name: 安装 rustfmt / clippy
+        run: rustup component add rustfmt clippy
+
+      - name: cargo fmt --check
+        working-directory: src-tauri
+        run: cargo fmt --check
 
       - name: cargo test
         working-directory: src-tauri

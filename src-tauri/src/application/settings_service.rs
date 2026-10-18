@@ -2,6 +2,7 @@
 
 use std::sync::Arc;
 
+use crate::domain::capture_policy::normalize_excluded_apps;
 use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
@@ -19,7 +20,8 @@ impl SettingsService {
         Ok(self.store.load().await?)
     }
 
-    pub async fn update(&self, next: AppSettings) -> Result<AppSettings, AppError> {
+    pub async fn update(&self, mut next: AppSettings) -> Result<AppSettings, AppError> {
+        next.excluded_apps = normalize_excluded_apps(next.excluded_apps);
         next.validate().map_err(AppError::InvalidSettings)?;
         self.store.save(next.clone()).await?;
         Ok(next)
@@ -28,6 +30,15 @@ impl SettingsService {
     pub async fn set_capture_enabled(&self, enabled: bool) -> Result<AppSettings, AppError> {
         let mut current = self.store.load().await?;
         current.capture_enabled = enabled;
+        self.store.save(current.clone()).await?;
+        Ok(current)
+    }
+
+    /// 「不记录这些应用」名单单独一条立即生效的通道（与快捷键、主题一样不等「保存」）。
+    pub async fn set_excluded_apps(&self, apps: Vec<String>) -> Result<AppSettings, AppError> {
+        let mut current = self.store.load().await?;
+        current.excluded_apps = normalize_excluded_apps(apps);
+        current.validate().map_err(AppError::InvalidSettings)?;
         self.store.save(current.clone()).await?;
         Ok(current)
     }

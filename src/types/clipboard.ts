@@ -71,6 +71,14 @@ export interface AppSettings {
   shortcut: string;
   /** `system` | `light` | `dark` */
   theme: string;
+  /** 「不记录这些应用」：每条是 bundle id 或应用名，大小写不敏感匹配。 */
+  excluded_apps: string[];
+}
+
+/** 历史里出现过的来源应用（设置面板「从最近复制来源中添加」用）。 */
+export interface SourceApp {
+  name: string | null;
+  bundle_id: string | null;
 }
 
 export interface CommandError {

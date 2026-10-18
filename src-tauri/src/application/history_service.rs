@@ -8,6 +8,7 @@ use chrono::Utc;
 
 use crate::application::query_parse;
 use crate::application::rerank;
+use crate::domain::capture_policy::{distinct_source_apps, SourceApp};
 use crate::domain::error::{AppError, DomainError, RepositoryError};
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::normalize::{compute_fingerprint, compute_fingerprint_bytes, searchable_text};
@@ -368,6 +369,16 @@ impl HistoryService {
             matched_terms: Some(evidence),
             relaxed_dropped: Some(dropped),
         })
+    }
+
+    /// 最近复制过内容的来源应用（去重，最近的在前，最多 `max` 个）。
+    /// 只看最近 500 条：浏览列表的顺序就是复制时间倒序，这个窗口足够覆盖常用应用。
+    pub async fn recent_source_apps(&self, max: usize) -> Result<Vec<SourceApp>, AppError> {
+        let result = self
+            .repository
+            .search(Self::build_search_query(None, None, None, None, 500, 0))
+            .await?;
+        Ok(distinct_source_apps(&result.items, max))
     }
 
     pub async fn get(&self, id_str: &str) -> Result<ClipboardItem, AppError> {

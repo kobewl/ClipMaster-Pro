@@ -26,7 +26,7 @@ jobs:
             exit 1
           fi
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.ref }}
           persist-credentials: false
@@ -50,13 +50,27 @@ jobs:
             echo "${delimiter}"
           } >> "${GITHUB_OUTPUT}"
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - name: Install frontend dependencies
         run: npm ci
+
+      # Universal 包需要两套 Rust target；fmt / clippy 给下一步的检查用。
+      - name: Install Rust targets
+        run: |
+          rustup target add aarch64-apple-darwin x86_64-apple-darwin
+          rustup component add rustfmt clippy
+
+      # 与本地 pre-push 同一份脚本：fmt / clippy / cargo test / vitest / 前端构建，
+      # 外加 tag 与各处版本号一致、CHANGELOG 有本版本一节。放在导入签名证书之前：
+      # 检查不过就不碰钥匙串、也不创建草稿 Release。
+      - name: Pre-release verification (fmt / clippy / tests / version / changelog)
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash scripts/verify.sh --release "${RELEASE_TAG}"
 
       # 稳定代码签名：让 TCC「辅助功能」授权绑在证书指纹上，而不是每次构建都变的 CDHash。
       # 缺少 Secret 时直接失败，避免再次发出「更新后必须删掉重加授权」的 ad-hoc 包。
@@ -75,6 +89,8 @@ jobs:
           fi
           bash scripts/import-ci-signing-cert.sh
 
+      # 保持 v0（v0.6.2 已跑在 node24）：v1 改了输入名、对已有 Release 的草稿状态
+      # 与名称/说明处理不同，会影响下面的「草稿 → 校验 → 发布」流程，迁移另行处理。
       - name: Build draft GitHub Release
         uses: tauri-apps/tauri-action@v0
         env:
@@ -90,16 +106,26 @@ jobs:
           releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: true
           prerelease: false
+          # Universal 包：一个 .app 同时支持 Apple Silicon 与 Intel；
+          # latest.json 会同时写入 darwin-aarch64 与 darwin-x86_64。
+          args: --target universal-apple-darwin
 
       - name: Verify release app is not cdhash-pinned
         run: |
           set -euo pipefail
-          APP="$(find src-tauri/target/release/bundle -type d -name 'ClipMaster Pro.app' | head -n1 || true)"
+          APP="$(find src-tauri/target/universal-apple-darwin/release/bundle -type d -name 'ClipMaster Pro.app' | head -n1 || true)"
           if [ -z "${APP}" ] || [ ! -d "${APP}" ]; then
-            echo "::error::ClipMaster Pro.app not found under target/release/bundle"
+            echo "::error::ClipMaster Pro.app not found under target/universal-apple-darwin/release/bundle"
             exit 1
           fi
           echo "Verifying: ${APP}"
+          EXE="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${APP}/Contents/Info.plist")"
+          ARCHS="$(lipo -archs "${APP}/Contents/MacOS/${EXE}")"
+          echo "Architectures: ${ARCHS}"
+          if [[ " ${ARCHS} " != *" x86_64 "* || " ${ARCHS} " != *" arm64 "* ]]; then
+            echo "::error::Expected a universal binary (x86_64 + arm64), got: ${ARCHS}"
+            exit 1
+          fi
           codesign --verify --deep --strict --verbose=2 "${APP}"
           DR="$(codesign -d -r- "${APP}" 2>&1)"
           echo "${DR}"
@@ -113,6 +139,19 @@ jobs:
           fi
           echo "::error::Unexpected designated requirement; refusing to ship."
           exit 1
+
+      - name: Verify latest.json covers both architectures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release download "$RELEASE_TAG" --pattern latest.json --dir "$RUNNER_TEMP" --clobber
+          jq '.platforms | keys' "$RUNNER_TEMP/latest.json"
+          if ! jq -e '.platforms["darwin-aarch64"].url and .platforms["darwin-x86_64"].url' "$RUNNER_TEMP/latest.json" > /dev/null; then
+            echo "::error::latest.json must contain darwin-aarch64 and darwin-x86_64 entries"
+            exit 1
+          fi
 
       - name: Publish verified release
         env:

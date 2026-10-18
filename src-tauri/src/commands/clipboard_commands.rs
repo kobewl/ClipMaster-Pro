@@ -2,7 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::dto::{
     AppSettingsDto, ClipGroupDto, ClipboardItemDto, CreateGroupDto, ListQueryDto, ListResultDto,
-    RunAgentActionBatchDto, RunAgentActionDto, SourceIconRequestDto, UpdateGroupDto,
+    RunAgentActionBatchDto, RunAgentActionDto, SourceAppDto, SourceIconRequestDto, UpdateGroupDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::model::ContentType;
@@ -44,7 +44,7 @@ pub async fn run_agent_action_batch(
         .map_err(|err| CommandError::new(err.code(), err.to_string(), err.retryable()))
 }
 
-/// 把前端的预设时间档换算成筛选起点（RFC3339 / UTC，与 created_at 列的存储
+/// 把前端的预设时间档换算成筛选起点（RFC3339 / UTC，与 last_copied_at 列的存储
 /// 格式一致 —— 字符串比较即时间比较）。None = 不限时间。
 ///
 /// 「今天」按本地时区的零点算，换算完**必须转回 UTC** 再序列化：否则
@@ -232,8 +232,12 @@ async fn hide_window_and_simulate_paste(app: &AppHandle) -> Result<(), CommandEr
 /// 第 i 项是第 i 个来源的 PNG 绝对路径，`null` = 找不到，前端退回 emoji。
 ///
 /// 每个来源按「复制时记下的 `.app` 路径 → bundle id → 应用名」的顺序找应用
-/// （见 `appicon::resolve_app_path`）。缓存文件按 bundle id（旧记录按应用名）
-/// 命名，已经在缓存里的直接读盘，不会再走一次 AppKit。
+/// （见 `appicon::resolve_app_path`）。第 1 步只是 stat，在阻塞线程池里做
+/// （`appicon::stored_app_path`）；只有它没找到的才在主线程走后两步
+/// （`appicon::lookup_app_path`）。后台检查超时时，主线程会跳过这批已记录路径
+/// （系统给出的路径恰好是它们时既不 stat 也不渲染），那几条这次退回 emoji。
+/// 缓存文件按 bundle id（旧记录按应用名）命名，已经在缓存里的直接读盘，
+/// 不会再走一次 AppKit。
 #[tauri::command]
 pub async fn get_source_icons(
     app: AppHandle,
@@ -267,14 +271,66 @@ pub async fn get_source_icons(
             return Ok(result);
         }
 
+        // 第 1 步（复制时记下的 `.app` 路径是否还在）只是一次文件系统 stat，
+        // 不需要 AppKit。那个路径可能在网络卷上，stat 会卡 —— 放到阻塞线程池里做，
+        // 不占主线程。超时或任务异常时降级：全部当作「没有可用的已记录路径」，
+        // 交给主线程按 bundle id / 应用名去找（顺序不变）；同时把这些已记录路径
+        // 全部交给主线程跳过 —— 后台没在时限内答完，哪一条都可能在那个慢卷上。
+        let fallback: Vec<(usize, String, IconSource, Option<String>)> = missing
+            .iter()
+            .cloned()
+            .map(|(index, file_name, source)| (index, file_name, source, None))
+            .collect();
+        let slow_paths: Vec<String> = missing
+            .iter()
+            .filter_map(|(_, _, source)| source.app_path.as_deref())
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect();
+        let (pre_resolved, avoid) = match tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            tokio::task::spawn_blocking(move || {
+                missing
+                    .into_iter()
+                    .map(|(index, file_name, source)| {
+                        let stored =
+                            appicon::stored_app_path(&source, &appicon::macos::MacAppLocator);
+                        (index, file_name, source, stored)
+                    })
+                    .collect::<Vec<_>>()
+            }),
+        )
+        .await
+        {
+            Ok(Ok(resolved)) => (resolved, Vec::new()),
+            Ok(Err(err)) => {
+                tracing::warn!(error = %err, "检查已记录的应用路径失败，改按 bundle id / 应用名查找，并跳过已记录路径");
+                (fallback, slow_paths)
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "检查已记录的应用路径超时，改按 bundle id / 应用名查找，主线程跳过这些慢路径"
+                );
+                (fallback, slow_paths)
+            }
+        };
+
         // AppKit 只在主线程用：整批一次性丢过去，省得每个应用来回一趟。
-        // 解析也放在这里：按 bundle id / 运行中的应用找路径都要碰 NSWorkspace。
+        // bundle id / 运行中的应用找路径都要碰 NSWorkspace，渲染也必须在主线程。
         let (tx, rx) = tokio::sync::oneshot::channel();
         app.run_on_main_thread(move || {
-            let rendered: Vec<(usize, String, Vec<u8>)> = missing
+            let rendered: Vec<(usize, String, Vec<u8>)> = pre_resolved
                 .into_iter()
-                .filter_map(|(index, file_name, source)| {
-                    let bytes = appicon::resolve_app_path(&source, &appicon::macos::MacAppLocator)
+                .filter_map(|(index, file_name, source, stored)| {
+                    let bytes = stored
+                        .or_else(|| {
+                            appicon::lookup_app_path(
+                                &source,
+                                &appicon::macos::MacAppLocator,
+                                &avoid,
+                            )
+                        })
                         .and_then(|path| appicon::macos::render_icon_png_at(&path));
                     if bytes.is_none() {
                         tracing::debug!(file = %file_name, "来源应用图标未找到，退回 emoji");
@@ -415,6 +471,9 @@ pub async fn update_settings(
     // 保存的设置里也可能带着新的采集开关 —— 与其它入口走同一条联动，
     // 否则只在这里改开关时，前端状态栏和托盘菜单都不会刷新。
     crate::lifecycle::runtime::sync_capture_side_effects(&app, &runtime, updated.capture_enabled);
+    runtime
+        .capture_gate
+        .set_excluded_apps(updated.excluded_apps.clone());
     Ok(AppSettingsDto::from(updated))
 }
 
@@ -449,4 +508,30 @@ pub async fn set_capture_enabled(
         .await
         .map_err(CommandError::from)?;
     Ok(AppSettingsDto::from(updated))
+}
+
+/// 「不记录这些应用」名单：立即生效（落库后马上刷新采集闸门），不等「保存」。
+#[tauri::command]
+pub async fn set_excluded_apps(
+    runtime: State<'_, AppRuntime>,
+    apps: Vec<String>,
+) -> Result<AppSettingsDto, CommandError> {
+    let updated = runtime
+        .set_excluded_apps(apps)
+        .await
+        .map_err(CommandError::from)?;
+    Ok(AppSettingsDto::from(updated))
+}
+
+/// 最近复制过内容的来源应用（去重，最近的在前），供设置面板挑选加入排除名单。
+#[tauri::command]
+pub async fn list_recent_source_apps(
+    runtime: State<'_, AppRuntime>,
+) -> Result<Vec<SourceAppDto>, CommandError> {
+    let apps = runtime
+        .history
+        .recent_source_apps(30)
+        .await
+        .map_err(CommandError::from)?;
+    Ok(apps.into_iter().map(SourceAppDto::from).collect())
 }

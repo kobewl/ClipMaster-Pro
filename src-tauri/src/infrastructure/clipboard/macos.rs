@@ -2,11 +2,18 @@
 //!
 //! 支持 Text + Image 两种类型。
 //! 防自拷贝循环：writer 写入前记录 fingerprint，采集侧匹配后跳过。
+//!
+//! 采集顺序：暂停 → 读剪贴板类型 → 隐私类型 → 排除应用 → 来源 URL → 读内容。
+//! 前几步都在读取内容、查浏览器 URL（会开 osascript 子进程）、编码 / 落盘图片
+//! **之前**返回；读不到类型列表时按隐私优先同样跳过（失败关闭）。
+//! 任何一次跳过都会丢弃待消费的自写指纹（见 [`discard_pending_self_writes`]）。
 
 use std::path::PathBuf;
+use std::process::{Command, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use clipboard_rs::{
     common::RustImage, Clipboard, ClipboardContent, ClipboardContext, ClipboardHandler,
@@ -14,11 +21,12 @@ use clipboard_rs::{
 };
 use tokio::sync::mpsc::Sender;
 
+use crate::domain::capture_policy::{CaptureGate, SkipReason};
 use crate::domain::error::ClipboardSourceError;
 use crate::domain::model::ContentType;
 use crate::domain::normalize::{compute_fingerprint, compute_fingerprint_bytes, strip_html_tags};
 use crate::domain::ports::{ClipboardEvent, ClipboardSource, ClipboardWriter};
-use crate::infrastructure::appicon::macos::frontmost_app_source;
+use crate::infrastructure::appicon::macos::{frontmost_app_source, FrontmostApp};
 
 /// 待消费的 self-write 指纹队列（先进先出，上限 8 个）。
 ///
@@ -54,24 +62,92 @@ fn matches_and_consume_self_write(guard: &SelfWriteGuard, fingerprint: &str) -> 
     }
 }
 
+/// 这次变化被跳过时，清空所有待消费的自写指纹。
+///
+/// 跳过时不能读内容（隐私闸门的前提），没法只消费匹配的那一枚，只能整队清空。
+/// 否则暂停期间从历史粘贴登记的指纹会一直留着，恢复后用户真的复制同样内容时，
+/// 那一次会被误当成自写而丢掉。
+///
+/// 代价：若恰好在「writer 登记指纹」与「它的写入触发变化」之间插进一次被跳过的
+/// 外部变化，那次自写会被当成新复制多记一次。窗口只有微秒级，结果也只是触发
+/// `insert_or_touch` 的去重更新，不丢数据。
+fn discard_pending_self_writes(guard: &SelfWriteGuard) {
+    guard.lock().expect("mutex poisoned").clear();
+}
+
+/// 读内容之前跳过这次变化的原因。日志里只记它，不记内容和路径。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureSkip {
+    /// 采集闸门：暂停 / 隐私类型 / 排除应用。
+    Gate(SkipReason),
+    /// 打不开剪贴板上下文。
+    ContextUnavailable,
+    /// 读不到剪贴板类型列表：没法确认有没有隐私标记，按隐私优先跳过。
+    TypesUnreadable,
+}
+
+/// 读内容之前的跳过判断（纯函数，便于单测）。
+/// 顺序：暂停 → 类型读不到（失败关闭）→ 闸门的隐私类型 / 排除应用。
+fn pre_capture_skip<E>(
+    gate: &CaptureGate,
+    types: &Result<Vec<String>, E>,
+    bundle_id: Option<&str>,
+    app_name: Option<&str>,
+) -> Option<CaptureSkip> {
+    if !gate.is_enabled() {
+        return Some(CaptureSkip::Gate(SkipReason::Paused));
+    }
+    match types {
+        Err(_) => Some(CaptureSkip::TypesUnreadable),
+        Ok(types) => gate
+            .skip_reason(types, bundle_id, app_name)
+            .map(CaptureSkip::Gate),
+    }
+}
+
 struct EventHandler {
     sender: Sender<ClipboardEvent>,
     self_write_guard: SelfWriteGuard,
     image_dir: PathBuf,
+    /// 与 pipeline / AppRuntime 共享的同一个闸门（采集开关 + 排除名单）。
+    gate: CaptureGate,
 }
 
 impl ClipboardHandler for EventHandler {
     fn on_clipboard_change(&mut self) {
+        // 暂停就是真暂停：连剪贴板上下文都不开，更不查来源、不读内容、不写图片。
+        if !self.gate.is_enabled() {
+            self.skip_change(CaptureSkip::Gate(SkipReason::Paused));
+            return;
+        }
+
         let ctx = match ClipboardContext::new() {
             Ok(ctx) => ctx,
             Err(err) => {
                 tracing::warn!(error = %err, "打开 macOS 剪贴板上下文失败");
+                self.skip_change(CaptureSkip::ContextUnavailable);
                 return;
             }
         };
 
-        // 采集来源应用信息（在处理剪贴板内容前获取，此时前台应用即复制源）
-        let source_info = get_source_info();
+        // 只读 NSPasteboard 的类型列表（进程内调用，不开子进程、不读内容），
+        // 前台应用身份同样是进程内查询。此时前台应用即复制源。
+        let types = ctx.available_formats();
+        if let Err(err) = &types {
+            tracing::debug!(error = %err, "读取剪贴板类型失败，按隐私优先跳过");
+        }
+        let app = frontmost_app_source();
+        let (bundle_id, app_name) = match &app {
+            Some(app) => (app.bundle_id.as_deref(), app.name.as_deref()),
+            None => (None, None),
+        };
+        if let Some(skip) = pre_capture_skip(&self.gate, &types, bundle_id, app_name) {
+            self.skip_change(skip);
+            return;
+        }
+
+        // 闸门放行后才查浏览器 URL（会开 osascript 子进程）。
+        let source_info = source_info_from(app);
 
         // 优先文件引用：Finder 里 ⌘C 文件时，剪贴板上会同时出现「文件 URL」和
         // 一段路径样子的文本。先查文件，才能把文件拷贝和普通文本区分开。
@@ -111,18 +187,18 @@ struct SourceInfo {
     app_path: Option<String>,
 }
 
-fn get_source_info() -> SourceInfo {
+fn source_info_from(app: Option<FrontmostApp>) -> SourceInfo {
     // 前台应用身份走 NSWorkspace 进程内查询：零子进程、零「自动化」权限依赖。
     // 旧 osascript 路径（System Events）实测每次复制要付 40ms+ 的子进程底价，
     // 且授权被拒后来源永远为空。失败时各字段为 None，按「无来源」记录。
     // bundle id 与 `.app` 路径用来事后取真实图标，这里不渲染、不碰磁盘。
-    let (app_name, bundle_id, app_path) = match frontmost_app_source() {
+    let (app_name, bundle_id, app_path) = match app {
         Some(app) => (app.name, app.bundle_id, app.app_path),
         None => (None, None, None),
     };
     // 只有前台是受支持的浏览器时才会真正 spawn osascript 去查标签页 URL ——
     // 每个浏览器的 AppleScript 字典没有进程内替代，这条子进程保留。
-    let source_url = app_name.as_deref().and_then(get_browser_url);
+    let source_url = get_browser_url(bundle_id.as_deref(), app_name.as_deref());
     SourceInfo {
         app_name,
         source_url,
@@ -131,37 +207,131 @@ fn get_source_info() -> SourceInfo {
     }
 }
 
+/// 取当前标签页 URL 的两种 AppleScript 写法。
+#[derive(Clone, Copy)]
+enum TabSyntax {
+    /// Safari 系：`current tab`。
+    Safari,
+    /// Chromium 系：`active tab`。
+    Chromium,
+}
+
+/// 受支持的浏览器：(bundle id, AppleScript 应用名, 语法)。
+///
+/// 每个浏览器都用**自己的**应用名：Chromium / Chrome Canary / Edge Beta 等都是独立
+/// 应用，写成 `tell application "Google Chrome"` 会去问（甚至拉起）另一个应用。
+const BROWSERS: &[(&str, &str, TabSyntax)] = &[
+    ("com.apple.Safari", "Safari", TabSyntax::Safari),
+    (
+        "com.apple.SafariTechnologyPreview",
+        "Safari Technology Preview",
+        TabSyntax::Safari,
+    ),
+    ("com.google.Chrome", "Google Chrome", TabSyntax::Chromium),
+    (
+        "com.google.Chrome.beta",
+        "Google Chrome Beta",
+        TabSyntax::Chromium,
+    ),
+    (
+        "com.google.Chrome.dev",
+        "Google Chrome Dev",
+        TabSyntax::Chromium,
+    ),
+    (
+        "com.google.Chrome.canary",
+        "Google Chrome Canary",
+        TabSyntax::Chromium,
+    ),
+    ("org.chromium.Chromium", "Chromium", TabSyntax::Chromium),
+    (
+        "com.microsoft.edgemac",
+        "Microsoft Edge",
+        TabSyntax::Chromium,
+    ),
+    (
+        "com.microsoft.edgemac.Beta",
+        "Microsoft Edge Beta",
+        TabSyntax::Chromium,
+    ),
+    (
+        "com.microsoft.edgemac.Dev",
+        "Microsoft Edge Dev",
+        TabSyntax::Chromium,
+    ),
+    (
+        "com.microsoft.edgemac.Canary",
+        "Microsoft Edge Canary",
+        TabSyntax::Chromium,
+    ),
+    ("company.thebrowser.Browser", "Arc", TabSyntax::Chromium),
+    ("com.brave.Browser", "Brave Browser", TabSyntax::Chromium),
+];
+
+/// osascript 查 URL 的最长等待。超时直接 kill，采集不能卡在这里。
+const BROWSER_URL_TIMEOUT: Duration = Duration::from_millis(300);
+
 /// 各浏览器取「当前标签页 URL」的 AppleScript；None = 不是受支持的浏览器。
 ///
-/// 抽成纯函数是为了能单测映射关系（哪些应用名会触发子进程、哪些不会）。
-fn browser_script_for(app_name: &str) -> Option<&'static str> {
-    match app_name {
-        "Safari" | "Safari Technology Preview" => {
-            Some(r#"tell application "Safari" to get URL of current tab of front window"#)
+/// 先按 bundle id 匹配（中文系统下 Safari 的显示名可能是「Safari浏览器」），
+/// 再按应用名精确匹配。脚本里的名字只来自 [`BROWSERS`] 常量表，不拼接外部输入；
+/// `if application "X" is running` 保证不会把一个没在运行的浏览器拉起来。
+///
+/// 抽成纯函数是为了能单测映射关系（哪些应用会触发子进程、哪些不会）。
+fn browser_script_for(bundle_id: Option<&str>, app_name: Option<&str>) -> Option<String> {
+    let by_bundle = bundle_id.and_then(|id| {
+        BROWSERS
+            .iter()
+            .find(|(bundle, _, _)| bundle.eq_ignore_ascii_case(id))
+    });
+    let (_, name, syntax) = by_bundle
+        .or_else(|| app_name.and_then(|app| BROWSERS.iter().find(|(_, name, _)| *name == app)))?;
+    let tab = match syntax {
+        TabSyntax::Safari => "current tab",
+        TabSyntax::Chromium => "active tab",
+    };
+    Some(format!(
+        r#"if application "{name}" is running then tell application "{name}" to get URL of {tab} of front window"#
+    ))
+}
+
+/// 跑一个子进程，最多等 `timeout`；超时就 kill 并返回 None。
+fn output_with_timeout(cmd: &mut Command, timeout: Duration) -> Option<Output> {
+    let mut child = cmd
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(10)),
+            Err(_) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
         }
-        "Google Chrome" | "Google Chrome Canary" | "Chromium" => {
-            Some(r#"tell application "Google Chrome" to get URL of active tab of front window"#)
-        }
-        "Microsoft Edge" | "Microsoft Edge Beta" | "Microsoft Edge Dev" => {
-            Some(r#"tell application "Microsoft Edge" to get URL of active tab of front window"#)
-        }
-        "Arc" => Some(r#"tell application "Arc" to get URL of active tab of front window"#),
-        "Brave Browser" => {
-            Some(r#"tell application "Brave Browser" to get URL of active tab of front window"#)
-        }
-        _ => None,
     }
 }
 
-fn get_browser_url(app_name: &str) -> Option<String> {
-    let script = browser_script_for(app_name)?;
-    let output = std::process::Command::new("osascript")
-        .args(["-e", script])
-        .output()
-        .ok()?;
+fn get_browser_url(bundle_id: Option<&str>, app_name: Option<&str>) -> Option<String> {
+    let script = browser_script_for(bundle_id, app_name)?;
+    let output = output_with_timeout(
+        Command::new("osascript").args(["-e", &script]),
+        BROWSER_URL_TIMEOUT,
+    )?;
     if !output.status.success() {
         return None;
     }
+    // 浏览器没在运行时 `if` 不成立，输出为空。
     let url = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if url.is_empty() || url == "missing value" {
         None
@@ -171,6 +341,12 @@ fn get_browser_url(app_name: &str) -> Option<String> {
 }
 
 impl EventHandler {
+    /// 跳过这次变化：只记原因（不记内容、应用路径），并丢弃待消费的自写指纹。
+    fn skip_change(&self, skip: CaptureSkip) {
+        tracing::debug!(?skip, "跳过本次剪贴板变化");
+        discard_pending_self_writes(&self.self_write_guard);
+    }
+
     fn handle_files(&self, files: Vec<String>, source: SourceInfo) {
         let files: Vec<String> = files
             .into_iter()
@@ -260,6 +436,12 @@ impl EventHandler {
         let file_name = format!("{}.png", &fingerprint[..32.min(fingerprint.len())]);
         let file_path = self.image_dir.join(&file_name);
 
+        // 编码途中被暂停：不落盘，不留孤儿图片。
+        if !self.gate.is_enabled() {
+            self.skip_change(CaptureSkip::Gate(SkipReason::Paused));
+            return;
+        }
+
         if !file_path.exists() {
             if let Err(err) = std::fs::write(&file_path, png_bytes) {
                 tracing::warn!(error = %err, "保存截图到文件失败");
@@ -294,15 +476,17 @@ impl EventHandler {
 pub struct MacOsClipboardSource {
     self_write_guard: SelfWriteGuard,
     image_dir: PathBuf,
+    gate: CaptureGate,
     running: Arc<AtomicBool>,
     shutdown: Option<clipboard_rs::WatcherShutdown>,
 }
 
 impl MacOsClipboardSource {
-    pub fn new(self_write_guard: SelfWriteGuard, image_dir: PathBuf) -> Self {
+    pub fn new(self_write_guard: SelfWriteGuard, image_dir: PathBuf, gate: CaptureGate) -> Self {
         Self {
             self_write_guard,
             image_dir,
+            gate,
             running: Arc::new(AtomicBool::new(false)),
             shutdown: None,
         }
@@ -326,6 +510,7 @@ impl ClipboardSource for MacOsClipboardSource {
             sender,
             self_write_guard,
             image_dir,
+            gate: self.gate.clone(),
         };
         watcher.add_handler(handler);
         let shutdown = watcher.get_shutdown_channel();
@@ -580,34 +765,198 @@ mod tests {
     }
 
     #[test]
-    fn browser_scripts_only_spawn_osascript_for_supported_browsers() {
-        // 受支持的浏览器：脚本必须指向对应的应用（一次 URL 查询 = 一次子进程，映射错了就白付）
-        assert!(browser_script_for("Safari").unwrap().contains("Safari"));
-        assert!(browser_script_for("Safari Technology Preview")
-            .unwrap()
-            .contains("Safari"));
-        assert!(browser_script_for("Google Chrome")
-            .unwrap()
-            .contains("Google Chrome"));
-        assert!(browser_script_for("Google Chrome Canary")
-            .unwrap()
-            .contains("Google Chrome"));
-        assert!(browser_script_for("Chromium")
-            .unwrap()
-            .contains("Google Chrome"));
-        assert!(browser_script_for("Microsoft Edge Dev")
-            .unwrap()
-            .contains("Microsoft Edge"));
-        assert!(browser_script_for("Arc").unwrap().contains("Arc"));
-        assert!(browser_script_for("Brave Browser")
-            .unwrap()
-            .contains("Brave Browser"));
+    fn browser_scripts_use_each_browsers_own_name() {
+        let script = |bundle: Option<&str>, name: Option<&str>| {
+            browser_script_for(bundle, name).unwrap_or_else(|| panic!("{bundle:?} {name:?}"))
+        };
 
+        let chromium = script(None, Some("Chromium"));
+        assert!(chromium.contains(r#"tell application "Chromium""#));
+        assert!(
+            !chromium.contains("Google Chrome"),
+            "Chromium 不能去问 Google Chrome"
+        );
+        assert!(script(None, Some("Google Chrome Canary"))
+            .contains(r#"tell application "Google Chrome Canary""#));
+        assert!(script(None, Some("Microsoft Edge Dev"))
+            .contains(r#"tell application "Microsoft Edge Dev""#));
+        assert!(script(None, Some("Microsoft Edge Beta"))
+            .contains(r#"tell application "Microsoft Edge Beta""#));
+        assert!(script(None, Some("Safari Technology Preview"))
+            .contains(r#"tell application "Safari Technology Preview""#));
+        assert!(script(None, Some("Safari")).contains("current tab"));
+        assert!(script(None, Some("Arc")).contains("active tab"));
+
+        // bundle id 优先：中文系统下 Safari 的显示名可能是「Safari浏览器」
+        let safari = script(Some("com.apple.Safari"), Some("Safari浏览器"));
+        assert!(safari.contains(r#"tell application "Safari" "#));
+        assert!(script(Some("com.google.Chrome.canary"), None)
+            .contains(r#"tell application "Google Chrome Canary""#));
+        assert!(script(Some("COM.BRAVE.BROWSER"), Some("Brave"))
+            .contains(r#"tell application "Brave Browser""#));
+
+        // 每条脚本都只在应用已运行时才 tell，不会拉起没在跑的浏览器
+        for (bundle, name, _) in BROWSERS {
+            let by_bundle = script(Some(bundle), None);
+            assert!(
+                by_bundle.starts_with(&format!(r#"if application "{name}" is running then"#)),
+                "{by_bundle}"
+            );
+            assert_eq!(by_bundle, script(None, Some(name)));
+        }
+    }
+
+    #[test]
+    fn browser_scripts_only_spawn_osascript_for_supported_browsers() {
         // 非浏览器必须返回 None —— 每次复制都会路过这里，多 spawn 一个子进程都是浪费
-        assert_eq!(browser_script_for("Finder"), None);
-        assert_eq!(browser_script_for("IntelliJ IDEA"), None);
-        assert_eq!(browser_script_for("iTerm2"), None);
+        assert_eq!(browser_script_for(None, Some("Finder")), None);
+        assert_eq!(
+            browser_script_for(Some("com.apple.finder"), Some("Finder")),
+            None
+        );
+        assert_eq!(browser_script_for(None, Some("IntelliJ IDEA")), None);
+        assert_eq!(browser_script_for(None, Some("iTerm2")), None);
         // 别让「包含」关系误命中：ChromeHelper 不是浏览器
-        assert_eq!(browser_script_for("ChromeHelper"), None);
+        assert_eq!(browser_script_for(None, Some("ChromeHelper")), None);
+        assert_eq!(
+            browser_script_for(Some("com.google.Chrome.helper"), None),
+            None
+        );
+        assert_eq!(browser_script_for(None, None), None);
+    }
+
+    #[test]
+    fn output_with_timeout_kills_slow_children() {
+        let started = Instant::now();
+        let output =
+            output_with_timeout(Command::new("sleep").arg("5"), Duration::from_millis(200));
+        assert!(output.is_none(), "超时必须返回 None");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "超时后必须立刻 kill，不能等子进程自己结束"
+        );
+    }
+
+    #[test]
+    fn output_with_timeout_returns_fast_output() {
+        let output = output_with_timeout(Command::new("echo").arg("hi"), Duration::from_secs(2))
+            .expect("echo 应在超时前结束");
+        assert!(output.status.success());
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "hi\n");
+    }
+
+    #[test]
+    fn concealed_pasteboard_is_skipped_through_the_gate() {
+        let gate = CaptureGate::new(true, Vec::new());
+        let types = vec![
+            "org.nspasteboard.ConcealedType".to_string(),
+            "public.utf8-plain-text".to_string(),
+        ];
+        assert_eq!(
+            gate.skip_reason(&types, Some("com.example.vault"), Some("Vault")),
+            Some(crate::domain::capture_policy::SkipReason::PrivacyMarked)
+        );
+        assert_eq!(
+            gate.skip_reason(
+                &["public.utf8-plain-text".to_string()],
+                Some("com.apple.Safari"),
+                None
+            ),
+            None
+        );
+        gate.set_enabled(false);
+        assert_eq!(
+            gate.skip_reason(&[], None, None),
+            Some(crate::domain::capture_policy::SkipReason::Paused)
+        );
+    }
+
+    fn ok_types(list: &[&str]) -> Result<Vec<String>, &'static str> {
+        Ok(list.iter().map(|t| t.to_string()).collect())
+    }
+
+    #[test]
+    fn pre_capture_skip_fails_closed_when_types_unreadable() {
+        let gate = CaptureGate::new(true, vec!["com.example.vault".to_string()]);
+        let unreadable: Result<Vec<String>, &str> = Err("boom");
+
+        assert_eq!(
+            pre_capture_skip(&gate, &unreadable, Some("com.apple.Safari"), None),
+            Some(CaptureSkip::TypesUnreadable),
+            "读不到类型时不能当成「没有隐私标记」放行"
+        );
+        assert_eq!(
+            pre_capture_skip(
+                &gate,
+                &ok_types(&["public.utf8-plain-text"]),
+                Some("com.apple.Safari"),
+                Some("Safari")
+            ),
+            None
+        );
+        assert_eq!(
+            pre_capture_skip(
+                &gate,
+                &ok_types(&["org.nspasteboard.ConcealedType", "public.utf8-plain-text"]),
+                Some("com.apple.Safari"),
+                None
+            ),
+            Some(CaptureSkip::Gate(SkipReason::PrivacyMarked))
+        );
+        assert_eq!(
+            pre_capture_skip(
+                &gate,
+                &ok_types(&["public.utf8-plain-text"]),
+                Some("com.example.vault"),
+                None
+            ),
+            Some(CaptureSkip::Gate(SkipReason::ExcludedApp))
+        );
+
+        gate.set_enabled(false);
+        assert_eq!(
+            pre_capture_skip(&gate, &unreadable, None, None),
+            Some(CaptureSkip::Gate(SkipReason::Paused)),
+            "暂停优先于类型读取失败"
+        );
+    }
+
+    #[test]
+    fn skipped_change_discards_pending_self_writes() {
+        // 暂停期间从历史粘贴：writer 登记了指纹，但 watcher 因暂停跳过了这次变化。
+        let guard = new_self_write_guard();
+        mark_self_write(&guard, &["fp-paste".to_string()]);
+        let gate = CaptureGate::new(false, Vec::new());
+
+        let skip = pre_capture_skip(&gate, &ok_types(&["public.utf8-plain-text"]), None, None);
+        assert_eq!(skip, Some(CaptureSkip::Gate(SkipReason::Paused)));
+        discard_pending_self_writes(&guard);
+
+        assert!(guard.lock().unwrap().is_empty());
+        assert!(
+            !matches_and_consume_self_write(&guard, "fp-paste"),
+            "恢复后真实复制同样内容必须被记录，不能被残留指纹吞掉"
+        );
+    }
+
+    #[test]
+    fn skipped_excluded_app_change_discards_pending_self_writes() {
+        // 往排除名单里的应用粘贴：同样被跳过，同样不能留下残留指纹。
+        let guard = new_self_write_guard();
+        mark_self_write(&guard, &["fp-html".to_string(), "fp-plain".to_string()]);
+        let gate = CaptureGate::new(true, vec!["com.example.vault".to_string()]);
+
+        let skip = pre_capture_skip(
+            &gate,
+            &ok_types(&["public.utf8-plain-text"]),
+            Some("com.example.vault"),
+            Some("Vault"),
+        );
+        assert_eq!(skip, Some(CaptureSkip::Gate(SkipReason::ExcludedApp)));
+        discard_pending_self_writes(&guard);
+
+        assert!(guard.lock().unwrap().is_empty());
+        assert!(!matches_and_consume_self_write(&guard, "fp-plain"));
+        assert!(!matches_and_consume_self_write(&guard, "fp-html"));
     }
 }

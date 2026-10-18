@@ -192,6 +192,9 @@ pub struct AppSettingsDto {
     pub capture_enabled: bool,
     pub shortcut: String,
     pub theme: String,
+    /// 必填（不加 serde default）：漏传时直接报反序列化错误，
+    /// 而不是悄悄把「不记录这些应用」名单清空。
+    pub excluded_apps: Vec<String>,
 }
 
 impl From<AppSettings> for AppSettingsDto {
@@ -202,6 +205,7 @@ impl From<AppSettings> for AppSettingsDto {
             capture_enabled: s.capture_enabled,
             shortcut: s.shortcut,
             theme: s.theme,
+            excluded_apps: s.excluded_apps,
         }
     }
 }
@@ -214,6 +218,24 @@ impl From<AppSettingsDto> for AppSettings {
             capture_enabled: s.capture_enabled,
             shortcut: s.shortcut,
             theme: s.theme,
+            excluded_apps: s.excluded_apps,
+        }
+    }
+}
+
+/// 历史里出现过的来源应用（设置面板「从最近复制来源中添加」）。
+#[derive(Debug, Serialize, Clone)]
+#[serde(rename_all = "snake_case")]
+pub struct SourceAppDto {
+    pub name: Option<String>,
+    pub bundle_id: Option<String>,
+}
+
+impl From<crate::domain::capture_policy::SourceApp> for SourceAppDto {
+    fn from(app: crate::domain::capture_policy::SourceApp) -> Self {
+        Self {
+            name: app.name,
+            bundle_id: app.bundle_id,
         }
     }
 }

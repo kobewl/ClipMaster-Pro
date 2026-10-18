@@ -17,6 +17,10 @@ use crate::domain::ports::{ClipboardEvent, ClipboardSource};
 
 /// 有界队列容量。过载时新事件的发送方（同步 watcher 线程）会感知到 backpressure，
 /// 而不是无限增长内存（架构文档第 8 节并发规则、性能需求文档 4.2 节）。
+///
+/// 背压由 watcher 在自己的 OS 线程上调用 `blocking_send` 提供：队列满时阻塞
+/// watcher，期间的剪贴板变化会被 changeCount 轮询合并成最新一次。不用
+/// `try_send`，因为满了会丢掉最新那条，而那正是用户最想要的。
 const EVENT_QUEUE_CAPACITY: usize = 64;
 
 pub struct CapturePipeline {

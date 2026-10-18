@@ -134,6 +134,13 @@ pub struct NewClipboardItem {
     pub source_app_path: Option<String>,
 }
 
+/// 单条文本 / HTML 的采集上限（字节）。
+///
+/// watcher 与 HistoryService 共用：watcher 在算指纹之前就按它跳过超大内容，
+/// HistoryService 入库前再按同一个值拒绝一次。放在 domain 层，infrastructure
+/// 不必反向依赖 application。
+pub const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024;
+
 /// 面向前端的截断预览长度上限。
 pub const PREVIEW_MAX_CHARS: usize = 240;
 

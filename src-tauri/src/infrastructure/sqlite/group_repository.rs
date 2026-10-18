@@ -10,6 +10,7 @@ use uuid::Uuid;
 use crate::domain::error::RepositoryError;
 use crate::domain::model::ClipGroup;
 use crate::domain::ports::GroupRepository;
+use crate::infrastructure::sqlite::lock_conn;
 
 pub struct SqliteGroupRepository {
     conn: Arc<Mutex<Connection>>,
@@ -49,7 +50,7 @@ impl GroupRepository for SqliteGroupRepository {
     async fn list_groups(&self) -> Result<Vec<ClipGroup>, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let mut stmt = conn
                 .prepare(
                     "SELECT g.id, g.name, g.color, g.sort_order, g.created_at, g.updated_at,
@@ -80,7 +81,7 @@ impl GroupRepository for SqliteGroupRepository {
     ) -> Result<ClipGroup, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let id = Uuid::new_v4().to_string();
             let now = Utc::now().to_rfc3339();
 
@@ -121,7 +122,7 @@ impl GroupRepository for SqliteGroupRepository {
     ) -> Result<ClipGroup, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let now = Utc::now().to_rfc3339();
             let affected = conn
                 .execute(
@@ -165,7 +166,7 @@ impl GroupRepository for SqliteGroupRepository {
     async fn delete_group(&self, id: String) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn.transaction().map_err(Self::map_db_err)?;
             tx.execute(
                 "UPDATE clipboard_items SET group_id = NULL WHERE group_id = ?1",

@@ -22,6 +22,7 @@ use crate::domain::model::{
     AgentSessionDetail, AgentSessionDraft, AgentSessionMember, AgentSessionSummary, SessionSource,
 };
 use crate::domain::ports::AgentSessionStore;
+use crate::infrastructure::sqlite::lock_conn;
 use crate::infrastructure::sqlite::repository::{parse_datetime, SqliteClipboardRepository};
 
 /// 保留的 agent 源会话条数上限。
@@ -198,7 +199,7 @@ impl AgentSessionStore for SqliteSessionStore {
     ) -> Result<u64, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn.transaction().map_err(SqliteSessionStore::map_db_err)?;
 
             // 先删后写，都在同一个事务里：会话 id 由成员集合派生（关键判断 4），
@@ -227,7 +228,7 @@ impl AgentSessionStore for SqliteSessionStore {
     async fn insert_session(&self, session: AgentSessionDraft) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn.transaction().map_err(SqliteSessionStore::map_db_err)?;
 
             // 用户路径：同 id 是「还是那个会话」，覆盖写（见 `Conflict::Overwrite`）。
@@ -244,7 +245,7 @@ impl AgentSessionStore for SqliteSessionStore {
     async fn list(&self, limit: u32) -> Result<Vec<AgentSessionSummary>, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
 
             // 成员计数走相关子查询：`PRIMARY KEY(session_id, item_id)` 的前缀索引
             // 直接覆盖，比 JOIN + GROUP BY 少一趟聚合。
@@ -290,7 +291,7 @@ impl AgentSessionStore for SqliteSessionStore {
         let conn = self.conn.clone();
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
 
             let session = conn
                 .query_row(
@@ -358,7 +359,7 @@ impl AgentSessionStore for SqliteSessionStore {
         let conn = self.conn.clone();
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             // 成员行由外键 ON DELETE CASCADE 带走，不手写第二条 DELETE。
             let affected = conn
                 .execute("DELETE FROM agent_sessions WHERE id = ?1", params![id])
@@ -372,7 +373,7 @@ impl AgentSessionStore for SqliteSessionStore {
     async fn clear(&self) -> Result<u64, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let affected = conn
                 .execute("DELETE FROM agent_sessions", [])
                 .map_err(SqliteSessionStore::map_db_err)?;

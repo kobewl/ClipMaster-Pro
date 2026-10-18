@@ -23,7 +23,7 @@ use tokio::sync::mpsc::Sender;
 
 use crate::domain::capture_policy::{CaptureGate, SkipReason};
 use crate::domain::error::ClipboardSourceError;
-use crate::domain::model::ContentType;
+use crate::domain::model::{ContentType, MAX_CONTENT_BYTES};
 use crate::domain::normalize::{compute_fingerprint, compute_fingerprint_bytes, strip_html_tags};
 use crate::domain::ports::{ClipboardEvent, ClipboardSource, ClipboardWriter};
 use crate::infrastructure::appicon::macos::{frontmost_app_source, FrontmostApp};
@@ -375,6 +375,18 @@ impl EventHandler {
     }
 
     fn handle_text(&self, text: String, source: SourceInfo) {
+        // 超大文本反正会被 HistoryService 拒绝，在这里就跳过，省掉对几 MB 文本的
+        // 规范化 + 哈希和一次跨线程搬运。日志只记大小，不记内容。
+        // 跳过时不消费自写指纹：唯一可能残留的是合并复制写入的超大文本指纹，
+        // 它只会匹配同一段反正也会被跳过的文本，无害。
+        if text.len() > MAX_CONTENT_BYTES {
+            tracing::warn!(
+                size_bytes = text.len(),
+                limit = MAX_CONTENT_BYTES,
+                "剪贴板文本超过大小上限，watcher 直接跳过"
+            );
+            return;
+        }
         let fingerprint = compute_fingerprint("text", &text);
         if matches_and_consume_self_write(&self.self_write_guard, &fingerprint) {
             return;
@@ -390,6 +402,16 @@ impl EventHandler {
     }
 
     fn handle_html(&self, html: String, source: SourceInfo) {
+        // 同 handle_text：HistoryService 对 HTML 用同一个上限，先判大小再算指纹。
+        // 跳过时同样不消费自写指纹（残留的只可能是同一段超大内容的指纹，无害）。
+        if html.len() > MAX_CONTENT_BYTES {
+            tracing::warn!(
+                size_bytes = html.len(),
+                limit = MAX_CONTENT_BYTES,
+                "剪贴板 HTML 超过大小上限，watcher 直接跳过"
+            );
+            return;
+        }
         let fingerprint = compute_fingerprint("html", &html);
         if matches_and_consume_self_write(&self.self_write_guard, &fingerprint) {
             return;
@@ -459,13 +481,17 @@ impl EventHandler {
         });
     }
 
+    /// 把事件交给采集管线，队列满时阻塞当前线程（背压）。
+    ///
+    /// 调用线程是 watcher 自己的 OS 线程（`start` 里 `thread::Builder` 起的，
+    /// clipboard-rs 在它上面同步回调），不在 tokio 上下文里，所以可以用
+    /// `blocking_send`。队列满了就阻塞 watcher：阻塞期间不轮询，中间的剪贴板
+    /// 变化会被 changeCount 轮询合并成最新一次。不用 `try_send`：满了会丢掉最新
+    /// 那条，而那正是用户最想要的。以前每个事件 spawn 一个任务，等于绕过了有界队列。
     fn send_event(&self, event: ClipboardEvent) {
-        let sender = self.sender.clone();
-        tauri::async_runtime::spawn(async move {
-            if let Err(err) = sender.send(event).await {
-                tracing::warn!(error = %err, "剪贴板事件发送失败");
-            }
-        });
+        if let Err(err) = self.sender.blocking_send(event) {
+            tracing::warn!(error = %err, "剪贴板事件发送失败（采集管线已关闭）");
+        }
     }
 }
 
@@ -958,5 +984,77 @@ mod tests {
         assert!(guard.lock().unwrap().is_empty());
         assert!(!matches_and_consume_self_write(&guard, "fp-plain"));
         assert!(!matches_and_consume_self_write(&guard, "fp-html"));
+    }
+
+    fn test_handler(sender: Sender<ClipboardEvent>) -> EventHandler {
+        EventHandler {
+            sender,
+            self_write_guard: new_self_write_guard(),
+            image_dir: std::env::temp_dir(),
+            gate: CaptureGate::new(true, Vec::new()),
+        }
+    }
+
+    fn empty_source() -> SourceInfo {
+        SourceInfo {
+            app_name: None,
+            source_url: None,
+            bundle_id: None,
+            app_path: None,
+        }
+    }
+
+    #[test]
+    fn oversized_text_and_html_are_dropped_before_fingerprinting() {
+        // 同步 #[test]、不开 runtime：与 watcher 线程的真实环境一致。
+        let (sender, mut rx) = tokio::sync::mpsc::channel(4);
+        let handler = test_handler(sender);
+        let oversized = "a".repeat(MAX_CONTENT_BYTES + 1);
+
+        handler.handle_text(oversized.clone(), empty_source());
+        assert!(rx.try_recv().is_err(), "超大文本不应进入采集管线");
+
+        handler.handle_html(oversized, empty_source());
+        assert!(rx.try_recv().is_err(), "超大 HTML 不应进入采集管线");
+    }
+
+    #[test]
+    fn normal_text_is_forwarded_from_a_plain_thread() {
+        // 普通线程（无 tokio 上下文）上 blocking_send 可用，事件同步入队。
+        let (sender, mut rx) = tokio::sync::mpsc::channel(4);
+        let handler = test_handler(sender);
+
+        handler.handle_text("hello".to_string(), empty_source());
+        let event = rx.try_recv().expect("普通文本应同步进入队列");
+        assert_eq!(event.content_type, ContentType::Text);
+        assert_eq!(event.content_text, "hello");
+    }
+
+    #[test]
+    fn send_event_applies_backpressure_when_queue_is_full() {
+        let (sender, mut rx) = tokio::sync::mpsc::channel(1);
+        let event = |text: &str| ClipboardEvent {
+            content_type: ContentType::Text,
+            content_text: text.to_string(),
+            source_app: None,
+            source_url: None,
+            source_bundle_id: None,
+            source_app_path: None,
+        };
+        sender.try_send(event("first")).expect("队列有一个空位");
+
+        let handler = test_handler(sender);
+        let second = event("second");
+        let handle = std::thread::spawn(move || handler.send_event(second));
+
+        std::thread::sleep(Duration::from_millis(100));
+        assert!(
+            !handle.is_finished(),
+            "队列满时 send_event 必须阻塞，而不是另起任务绕过背压"
+        );
+
+        assert_eq!(rx.blocking_recv().expect("第一条").content_text, "first");
+        assert_eq!(rx.blocking_recv().expect("第二条").content_text, "second");
+        handle.join().expect("腾出空位后 send_event 应返回");
     }
 }

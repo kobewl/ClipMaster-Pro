@@ -341,16 +341,31 @@ pub async fn get_source_icons(
         // 主线程万一没跑到这个闭包，也不能把命令挂死在这里。
         match tokio::time::timeout(std::time::Duration::from_secs(3), rx).await {
             Ok(Ok(rendered)) => {
-                for (index, file_name, bytes) in rendered {
-                    let path = cache_dir.join(&file_name);
-                    // 系统图标原图有 1~2MB，落盘时会用 sips 缩到 128px（约 10KB）。
-                    match appicon::macos::save_icon_png(&path, &bytes) {
-                        Ok(()) => {
-                            result[index] = Some(path.to_string_lossy().to_string());
+                // 系统图标原图有 1~2MB，落盘时会用 sips 缩到 128px（约 10KB）。
+                // sips 是同步子进程，整批放进一次阻塞线程池任务，不占 async worker。
+                let save_dir = cache_dir.clone();
+                let saved = tokio::task::spawn_blocking(move || {
+                    let mut saved: Vec<(usize, String)> = Vec::new();
+                    for (index, file_name, bytes) in rendered {
+                        let path = save_dir.join(&file_name);
+                        match appicon::macos::save_icon_png(&path, &bytes) {
+                            Ok(()) => saved.push((index, path.to_string_lossy().to_string())),
+                            Err(err) => {
+                                tracing::warn!(error = %err, file = %file_name, "写入图标缓存失败")
+                            }
                         }
-                        Err(err) => {
-                            tracing::warn!(error = %err, file = %file_name, "写入图标缓存失败")
+                    }
+                    saved
+                })
+                .await;
+                match saved {
+                    Ok(saved) => {
+                        for (index, path) in saved {
+                            result[index] = Some(path);
                         }
+                    }
+                    Err(err) => {
+                        tracing::warn!(error = %err, "写入图标缓存任务异常，这一批退回 emoji")
                     }
                 }
             }

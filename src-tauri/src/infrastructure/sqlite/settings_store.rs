@@ -13,6 +13,7 @@ use crate::domain::capture_policy::default_excluded_apps;
 use crate::domain::error::RepositoryError;
 use crate::domain::ports::{AgentConfigStore, AgentProviderConfig, SettingsStore};
 use crate::domain::settings::AppSettings;
+use crate::infrastructure::sqlite::lock_conn;
 
 const KEY_MAX_HISTORY: &str = "max_history";
 const KEY_RETENTION_DAYS: &str = "retention_days";
@@ -41,7 +42,7 @@ impl SettingsStore for SqliteSettingsStore {
     async fn load(&self) -> Result<AppSettings, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let defaults = AppSettings::default();
 
             let max_history = get_value(&conn, KEY_MAX_HISTORY)?
@@ -82,7 +83,7 @@ impl SettingsStore for SqliteSettingsStore {
     async fn save(&self, settings: AppSettings) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn
                 .transaction()
                 .map_err(|e| RepositoryError::Database(e.to_string()))?;
@@ -123,7 +124,7 @@ impl AgentConfigStore for SqliteSettingsStore {
     async fn load_agent_config(&self) -> Result<Option<AgentProviderConfig>, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let base_url = get_value(&conn, KEY_AI_BASE_URL)?;
             let model = get_value(&conn, KEY_AI_MODEL)?;
             match (base_url, model) {
@@ -142,7 +143,7 @@ impl AgentConfigStore for SqliteSettingsStore {
     async fn save_agent_config(&self, config: AgentProviderConfig) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn
                 .transaction()
                 .map_err(|e| RepositoryError::Database(e.to_string()))?;

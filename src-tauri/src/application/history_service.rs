@@ -9,14 +9,14 @@ use chrono::Utc;
 use crate::application::query_parse;
 use crate::application::rerank;
 use crate::domain::capture_policy::{distinct_source_apps, SourceApp};
-use crate::domain::error::{AppError, DomainError, RepositoryError};
+use crate::domain::error::{AppError, ClipboardSourceError, DomainError, RepositoryError};
 use crate::domain::model::{ClipboardItem, ClipboardItemId, ContentType, NewClipboardItem};
 use crate::domain::normalize::{compute_fingerprint, compute_fingerprint_bytes, searchable_text};
 use crate::domain::ports::{
     ClipboardEvent, ClipboardRepository, ClipboardWriter, ListResult, SearchQuery, SettingsStore,
 };
 
-pub const MAX_CONTENT_BYTES: usize = 5 * 1024 * 1024;
+pub use crate::domain::model::MAX_CONTENT_BYTES;
 
 /// 放宽召回的候选上限。
 ///
@@ -442,31 +442,18 @@ impl HistoryService {
     pub async fn copy_to_clipboard(&self, id_str: &str) -> Result<(), AppError> {
         let id = parse_id(id_str)?;
         let item = self.repository.get_by_id(id).await?;
-        match item.content_type {
-            ContentType::Text => self
-                .writer
-                .write_text(&item.content_text)
-                .map_err(AppError::Clipboard)?,
-            ContentType::Image => self
-                .writer
-                .write_image(&item.content_text)
-                .map_err(AppError::Clipboard)?,
-            ContentType::Html => self
-                .writer
-                .write_html(&item.content_text)
-                .map_err(AppError::Clipboard)?,
-            ContentType::Files => {
-                let paths: Vec<String> = item
-                    .content_text
-                    .lines()
-                    .filter(|path| !path.trim().is_empty())
-                    .map(str::to_string)
-                    .collect();
-                self.writer
-                    .write_files(&paths)
-                    .map_err(AppError::Clipboard)?;
-            }
-        }
+        // 写剪贴板是同步调用（图片还要读文件、解码 PNG），放进阻塞线程池，
+        // 不占 async worker。线程要求不变：写入本来就跑在 tokio worker 上、
+        // 不在主线程；watcher 也一直在自己的 OS 线程上读同一个 NSPasteboard。
+        let writer = self.writer.clone();
+        let item =
+            tokio::task::spawn_blocking(move || write_item(writer.as_ref(), &item).map(|()| item))
+                .await
+                .map_err(|e| {
+                    AppError::Clipboard(ClipboardSourceError::WriteFailed(format!(
+                        "剪贴板写入任务异常: {e}"
+                    )))
+                })??;
         self.repository
             .insert_or_touch(NewClipboardItem {
                 content_type: item.content_type,
@@ -538,6 +525,31 @@ fn slice_page(
         })
         .collect();
     (items, evidence)
+}
+
+/// 按条目类型把内容写回系统剪贴板（同步，调用方负责放进阻塞线程池）。
+fn write_item(writer: &dyn ClipboardWriter, item: &ClipboardItem) -> Result<(), AppError> {
+    match item.content_type {
+        ContentType::Text => writer
+            .write_text(&item.content_text)
+            .map_err(AppError::Clipboard)?,
+        ContentType::Image => writer
+            .write_image(&item.content_text)
+            .map_err(AppError::Clipboard)?,
+        ContentType::Html => writer
+            .write_html(&item.content_text)
+            .map_err(AppError::Clipboard)?,
+        ContentType::Files => {
+            let paths: Vec<String> = item
+                .content_text
+                .lines()
+                .filter(|path| !path.trim().is_empty())
+                .map(str::to_string)
+                .collect();
+            writer.write_files(&paths).map_err(AppError::Clipboard)?;
+        }
+    }
+    Ok(())
 }
 
 fn spawn_image_cleanup(paths: Vec<String>) {

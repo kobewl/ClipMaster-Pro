@@ -16,6 +16,7 @@ use crate::domain::normalize::searchable_text;
 use crate::domain::ports::{
     CleanupResult, ClipboardRepository, DeleteResult, ListResult, SearchQuery,
 };
+use crate::infrastructure::sqlite::lock_conn;
 
 pub struct SqliteClipboardRepository {
     conn: Arc<Mutex<Connection>>,
@@ -93,7 +94,7 @@ impl SqliteClipboardRepository {
         );
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = binds
                 .into_iter()
                 .map(|value| Box::new(value) as Box<dyn rusqlite::types::ToSql>)
@@ -267,7 +268,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     ) -> Result<ClipboardItem, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let now = Utc::now().to_rfc3339();
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
@@ -385,7 +386,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     async fn search(&self, query: SearchQuery) -> Result<ListResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
 
             let mut fts_terms: Vec<String> = Vec::new();
             let mut like_patterns: Vec<String> = Vec::new();
@@ -579,7 +580,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     async fn get_by_id(&self, id: ClipboardItemId) -> Result<ClipboardItem, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             conn.query_row(
                 "SELECT * FROM clipboard_items WHERE id = ?1",
                 params![id.to_string()],
@@ -601,7 +602,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     ) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let now = Utc::now().to_rfc3339();
             let affected = conn
                 .execute(
@@ -621,7 +622,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     async fn delete(&self, id: ClipboardItemId) -> Result<DeleteResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
             let item_data: Option<(i64, String, String, String)> = tx
@@ -661,7 +662,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     async fn clear(&self, keep_grouped: bool) -> Result<CleanupResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
             let image_paths = if keep_grouped {
@@ -699,7 +700,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
     async fn enforce_max_count(&self, max_count: u32) -> Result<CleanupResult, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
             // 一趟收齐「待淘汰行」的全部所需列：按行删 FTS 要 rowid + search_text，
@@ -748,7 +749,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
         }
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let cutoff = (Utc::now() - chrono::Duration::days(retention_days)).to_rfc3339();
             let tx = conn.transaction().map_err(Self::map_db_err)?;
 
@@ -792,7 +793,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
         let conn = self.conn.clone();
         let since = since.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             // last_copied_at 是 RFC3339 UTC 文本（row_to_item 的解析口径），
             // 同一写入路径生成，字典序即时间序。
             let mut stmt = conn
@@ -823,7 +824,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
         let conn = self.conn.clone();
         let ids = ids.to_vec();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             // 占位符按 id 个数动态生成（不加引号拼接字符串，参数照旧走绑定）。
             let placeholders = (1..=ids.len())
                 .map(|index| format!("?{index}"))

@@ -7,9 +7,19 @@ pub mod session_store;
 pub mod settings_store;
 
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use rusqlite::Connection;
+
+/// 拿共享 SQLite 连接的锁；锁中毒时直接取回连接继续用。
+///
+/// 持锁线程 panic 时，rusqlite `Transaction` 的 Drop 会回滚未提交的事务
+/// （Cargo.toml 没有 `panic = "abort"`，会正常 unwind），连接本身仍然可用。
+/// 如果不恢复，之后所有 DB 调用都会跟着 panic（或永久报错），一次偶发 panic
+/// 就让整个应用的历史、设置、会话全部不可用。所有 store 统一走这里。
+pub(crate) fn lock_conn(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+}
 
 /// 打开数据库并执行 migration。启动路径失败必须直接返回错误，
 /// 不允许应用在未知结构的数据库上继续初始化（数据文档第 5 节）。
@@ -71,5 +81,23 @@ mod tests {
             .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
             .expect("维护后仍可查询");
         assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn lock_conn_recovers_from_poisoned_mutex() {
+        let mutex = Arc::new(Mutex::new(Connection::open_in_memory().expect("内存库")));
+        let poisoner = mutex.clone();
+        let joined = std::thread::spawn(move || {
+            let _guard = lock_conn(&poisoner);
+            panic!("持锁时 panic，让锁中毒");
+        })
+        .join();
+        assert!(joined.is_err(), "子线程应当 panic");
+        assert!(mutex.is_poisoned());
+
+        let one: i64 = lock_conn(&mutex)
+            .query_row("SELECT 1", [], |row| row.get(0))
+            .expect("锁中毒后连接仍可用");
+        assert_eq!(one, 1);
     }
 }

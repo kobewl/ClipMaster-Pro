@@ -14,6 +14,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::domain::error::RepositoryError;
 use crate::domain::ports::{AgentRunRecord, AgentRunStore};
+use crate::infrastructure::sqlite::lock_conn;
 
 /// 保留的审计条数上限。审计是"最近发生了什么"的时间线，不是归档。
 const MAX_RUNS: u32 = 500;
@@ -55,7 +56,7 @@ impl AgentRunStore for SqliteAgentRunStore {
     async fn record(&self, run: AgentRunRecord) -> Result<(), RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let mut conn = conn.lock().expect("sqlite mutex poisoned");
+            let mut conn = lock_conn(&conn);
             let tx = conn
                 .transaction()
                 .map_err(SqliteAgentRunStore::map_db_err)?;
@@ -121,7 +122,7 @@ impl AgentRunStore for SqliteAgentRunStore {
     async fn list_recent(&self, limit: u32) -> Result<Vec<AgentRunRecord>, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
 
             let mut runs: Vec<AgentRunRecord> = {
                 let mut stmt = conn
@@ -178,7 +179,7 @@ impl AgentRunStore for SqliteAgentRunStore {
         let conn = self.conn.clone();
         let id = id.to_string();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
 
             let mut run: Option<AgentRunRecord> = conn
                 .query_row(
@@ -211,7 +212,7 @@ impl AgentRunStore for SqliteAgentRunStore {
     async fn clear(&self) -> Result<u64, RepositoryError> {
         let conn = self.conn.clone();
         tokio::task::spawn_blocking(move || {
-            let conn = conn.lock().expect("sqlite mutex poisoned");
+            let conn = lock_conn(&conn);
             let affected = conn
                 .execute("DELETE FROM agent_runs", [])
                 .map_err(SqliteAgentRunStore::map_db_err)?;

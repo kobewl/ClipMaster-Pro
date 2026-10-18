@@ -76,13 +76,12 @@ impl SqliteClipboardRepository {
         binds: Vec<String>,
         cap: u32,
     ) -> Result<Vec<ClipboardItem>, RepositoryError> {
-        // 排序与严格路径一致：已分组优先、再按复制时间倒序
+        // 排序与严格路径一致：按复制时间倒序
         // （内存并集后还会按同一口径重排一次，两条子查询各自有序是为了让
         // LIMIT cap 截出来的是「最该被看到的 cap 条」）。
         let sql = format!(
             "SELECT clipboard_items.* FROM {from_clause} {where_sql}
-             ORDER BY (clipboard_items.group_id IS NULL) ASC,
-                      clipboard_items.last_copied_at DESC
+             ORDER BY clipboard_items.last_copied_at DESC
              LIMIT ?{}",
             binds.len() + 1
         );
@@ -392,8 +391,7 @@ impl ClipboardRepository for SqliteClipboardRepository {
             let offset_idx = pidx;
             let list_sql = format!(
                 "SELECT clipboard_items.* FROM {from_clause} {where_sql}
-                 ORDER BY (clipboard_items.group_id IS NULL) ASC,
-                          clipboard_items.last_copied_at DESC
+                 ORDER BY clipboard_items.last_copied_at DESC
                  LIMIT ?{limit_idx} OFFSET ?{offset_idx}"
             );
             param_values.push(Box::new(query.limit));
@@ -472,13 +470,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
         // 同一条可能既中长词又中短词：按 id 去重（保留先到的，字段完全一致）。
         let mut seen = std::collections::HashSet::new();
         merged.retain(|item| seen.insert(item.id.to_string()));
-        // 与严格路径同一套排序口径：已分组优先，再按复制时间倒序。
-        merged.sort_by(|a, b| {
-            a.group_id
-                .is_none()
-                .cmp(&b.group_id.is_none())
-                .then_with(|| b.last_copied_at.cmp(&a.last_copied_at))
-        });
+        // 与严格路径同一套排序口径：按复制时间倒序（分组不置顶）。
+        merged.sort_by_key(|a| std::cmp::Reverse(a.last_copied_at));
         merged.truncate(cap as usize);
         Ok(merged)
     }

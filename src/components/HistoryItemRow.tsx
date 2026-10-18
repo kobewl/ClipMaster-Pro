@@ -29,7 +29,7 @@ interface Props {
   onDelete: (id: string) => void;
 }
 
-/** 菜单大致高度，用来判断往下弹出会不会被列表底部裁掉。 */
+/** 菜单大致高度，按列表滚动容器的可视边界判断往下弹出会不会被裁掉。 */
 const MENU_ESTIMATED_HEIGHT = 210;
 
 /**
@@ -111,8 +111,15 @@ export const HistoryItemRow = memo(function HistoryItemRow({
 
   function toggleMenu() {
     if (!menuOpen) {
-      const rect = rowRef.current?.getBoundingClientRect();
-      if (rect) setMenuUp(window.innerHeight - rect.bottom < MENU_ESTIMATED_HEIGHT);
+      const trigger = menuRef.current?.getBoundingClientRect();
+      // 列表下方还有状态栏，且 .history-list 自己 overflow 滚动：
+      // 必须按滚动容器的可视边界判断，按 window 算会在列表末尾往下弹进被裁掉的区域。
+      const bounds = rowRef.current?.closest(".history-list")?.getBoundingClientRect();
+      if (trigger) {
+        const spaceBelow = (bounds?.bottom ?? window.innerHeight) - trigger.bottom;
+        const spaceAbove = trigger.top - (bounds?.top ?? 0);
+        setMenuUp(spaceBelow < MENU_ESTIMATED_HEIGHT && spaceAbove > spaceBelow);
+      }
     }
     setMenuOpen((open) => !open);
   }
@@ -269,7 +276,8 @@ export const HistoryItemRow = memo(function HistoryItemRow({
               {item.group_id && (
                 <button
                   type="button"
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation();
                     onSetGroup(item.id, null);
                     closeMenu();
                   }}
@@ -287,7 +295,8 @@ export const HistoryItemRow = memo(function HistoryItemRow({
                 <button
                   key={g.id}
                   type="button"
-                  onClick={() => {
+                  onClick={(event) => {
+                    event.stopPropagation();
                     onSetGroup(item.id, g.id);
                     closeMenu();
                   }}

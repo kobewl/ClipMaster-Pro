@@ -208,7 +208,7 @@ impl HistoryService {
     ///
     /// **重排不变量**（本阶段新增，改动前请先读完这三条）：
     /// 1. **只有 query 非空时才重排**。空 query（浏览列表）完全走原路径：顺序与分页
-    ///    仍由 SQL 的 `group_id / last_copied_at` 决定，逐条与重排前相同。
+    ///    仍由 SQL 的 `last_copied_at DESC`（复制时间倒序，分组不置顶）决定，逐条与重排前相同。
     /// 2. 重排先把候选池**一次取到窗口上限**（常量 `RERANK_WINDOW_CAP`，offset=0），
     ///    复用 `repository.search` 现成的 limit/offset 签名，**不动 SQL 排序**；
     ///    真正的分页在重排之后于内存里切 `[offset, offset+limit)`。所以同一 query 的

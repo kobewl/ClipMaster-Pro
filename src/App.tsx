@@ -436,7 +436,6 @@ export default function App() {
           keyword={trimmedSearch}
           queryTermCount={queryTermCount}
           resetKey={`${activeGroupId ?? "all"}::${trimmedSearch}`}
-          groupFilterActive={activeGroupId !== null}
           multiSelect={multiSelect}
           selected={selectedIds}
           onPaste={handlePaste}

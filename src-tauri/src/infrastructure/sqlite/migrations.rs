@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 8;
+pub const CURRENT_SCHEMA_VERSION: i64 = 9;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -97,6 +97,7 @@ const MIGRATIONS: &[(i64, &str)] = &[
     // 列表默认先展示已分组条目、再按最后复制时间倒排。用与 ORDER BY 完全一致的
     // 表达式索引，避免历史数量增长后每次刷新都临时排序整张表；分组视图则使用
     // group_id + 时间的复合索引直接取得第一页。
+    // （第一条索引已由 migration 9 替换：列表不再分组置顶。）
     (
         5,
         r#"
@@ -237,6 +238,15 @@ const MIGRATIONS: &[(i64, &str)] = &[
         created_at TEXT NOT NULL,
         PRIMARY KEY (chat_id, position)
     );
+    "#,
+    ),
+    // 列表不再把已分组条目置顶，默认列表只按复制时间倒序：换成与新 ORDER BY 一致的索引。
+    (
+        9,
+        r#"
+    CREATE INDEX IF NOT EXISTS idx_clipboard_items_copied_time
+        ON clipboard_items(last_copied_at DESC);
+    DROP INDEX IF EXISTS idx_clipboard_items_list_order;
     "#,
     ),
 ];

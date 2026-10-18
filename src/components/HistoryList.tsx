@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useReducer, useRef, useState } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState } from "react";
 import type { ClipboardItem, ClipGroup } from "@/types/clipboard";
 import { HistoryItemRow } from "./HistoryItemRow";
 import type { LoadState } from "@/hooks/useClipboardHistory";
@@ -21,8 +21,6 @@ interface Props {
   queryTermCount: number;
   /** 分组或关键词变化时用它触发「选中行回到第一条」。 */
   resetKey: string;
-  /** 是否已经按某个分组过滤（过滤时不画"未分组"分隔线）。 */
-  groupFilterActive: boolean;
   /** 多选模式：勾选框列 + 单击行 = 勾选。 */
   multiSelect: boolean;
   /** 已勾选的 id，按列表顺序无关（合并时按列表顺序走）。 */
@@ -47,7 +45,6 @@ export function HistoryList({
   keyword,
   queryTermCount,
   resetKey,
-  groupFilterActive,
   multiSelect,
   selected,
   onPaste,
@@ -248,17 +245,6 @@ export function HistoryList({
     );
   }
 
-  // 「未分组」分隔线只画在**浏览路径**上。
-  //
-  // 它成立的前提是「已分组的条目整体排在前面」（SQL 的
-  // `ORDER BY (group_id IS NULL) ASC, ...`）。搜索路径要经过本地重排，
-  // 分组/未分组会交错，这个前提不再成立 —— 照旧在第一处 group_id 为空的
-  // 位置画线，会把后面那些已分组的条目标成"未分组"。宁可少画一条线，
-  // 也不给用户一个错的归属暗示。
-  const browsing = keyword.trim().length === 0;
-  const firstUngrouped = items.findIndex((item) => item.group_id === null);
-  const showDivider = browsing && !groupFilterActive && firstUngrouped > 0;
-
   return (
     <ul
       ref={listRef}
@@ -267,33 +253,23 @@ export function HistoryList({
       className="history-list scrollbar-thin"
     >
       {items.map((item, index) => (
-        <Fragment key={item.id}>
-          {showDivider && index === firstUngrouped && (
-            <li
-              aria-hidden
-              className="list-divider"
-            >
-              <span className="shrink-0">未分组</span>
-              <span className="h-px flex-1 bg-[var(--cm-line)]" />
-            </li>
-          )}
-          <HistoryItemRow
-            item={item}
-            active={index === activeIndex}
-            now={now}
-            groups={groups}
-            keyword={keyword}
-            queryTermCount={queryTermCount}
-            iconSrc={getSourceIconPath(item.source_app)}
-            multiSelect={multiSelect}
-            picked={selected.has(item.id)}
-            onPaste={onPaste}
-            onPreview={onPreview}
-            onTogglePick={onTogglePick}
-            onSetGroup={onSetGroup}
-            onDelete={onDelete}
-          />
-        </Fragment>
+        <HistoryItemRow
+          key={item.id}
+          item={item}
+          active={index === activeIndex}
+          now={now}
+          groups={groups}
+          keyword={keyword}
+          queryTermCount={queryTermCount}
+          iconSrc={getSourceIconPath(item.source_app)}
+          multiSelect={multiSelect}
+          picked={selected.has(item.id)}
+          onPaste={onPaste}
+          onPreview={onPreview}
+          onTogglePick={onTogglePick}
+          onSetGroup={onSetGroup}
+          onDelete={onDelete}
+        />
       ))}
 
       <li

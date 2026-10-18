@@ -41,6 +41,7 @@ docs/design/ardot/__pycache__/
 **/*.test.*
 **/*.spec.*
 /.superpowers/
+/.agents/
 
 # Local credentials and review artifacts
 .env

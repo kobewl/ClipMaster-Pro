@@ -25,6 +25,7 @@ import {
 import { ShortcutInput } from "./ShortcutInput";
 import { ConfirmDialog } from "./ConfirmDialog";
 import { Icon } from "./Icon";
+import { ReleaseNotes } from "./ReleaseNotes";
 
 /**
  * 设置里展示的更新说明：去掉首尾空白，但**保留全部行**。
@@ -836,11 +837,7 @@ export function SettingsPanel({
                   />
                 </div>
               )}
-              {releaseNotes && (
-                <pre className="update-notes" aria-label="本版本更新说明">
-                  {releaseNotes}
-                </pre>
-              )}
+              {releaseNotes && <ReleaseNotes markdown={releaseNotes} />}
             </div>
           )}
           {updateError && (

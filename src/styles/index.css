@@ -574,9 +574,54 @@ button {
   color: var(--cm-fg-muted);
   font-size: 11px;
   line-height: 1.55;
-  white-space: pre-wrap;
-  word-break: break-word;
+  overflow-wrap: anywhere;
 }
+/* 更新说明按 Markdown 渲染：Tailwind preflight 清掉了标题字号和列表符号，这里按设置卡片的密度补回来。 */
+.update-notes > :first-child { margin-top: 0; }
+.update-notes > :last-child { margin-bottom: 0; }
+.update-notes :is(h1, h2, h3, h4, h5, h6) {
+  margin: 8px 0 3px;
+  color: var(--cm-fg);
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+.update-notes :is(h1, h2) { font-size: 12px; }
+.update-notes p { margin: 4px 0; }
+.update-notes :is(ul, ol) { margin: 3px 0; padding-left: 16px; }
+.update-notes ul { list-style: disc; }
+.update-notes ol { list-style: decimal; }
+.update-notes li + li { margin-top: 2px; }
+.update-notes li::marker { color: var(--cm-fg-faint); }
+.update-notes :is(strong, b) { color: var(--cm-fg); font-weight: 600; }
+.update-notes a {
+  color: var(--cm-accent-text);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.update-notes a:focus-visible { outline: 2px solid var(--cm-accent-ring); outline-offset: 1px; border-radius: 2px; }
+.update-notes code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10.5px;
+  background: var(--cm-surface2);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xs);
+  padding: 0 3px;
+}
+.update-notes pre {
+  margin: 4px 0;
+  padding: 6px 8px;
+  overflow-x: auto;
+  background: var(--cm-surface2);
+  border: 1px solid var(--cm-line);
+  border-radius: var(--cm-radius-xs);
+  white-space: pre;
+}
+.update-notes pre code { border: 0; padding: 0; background: none; }
+.update-notes table { border-collapse: collapse; margin: 4px 0; }
+.update-notes :is(th, td) { border: 1px solid var(--cm-line); padding: 2px 6px; text-align: left; }
+.update-notes hr { border: 0; border-top: 1px solid var(--cm-line); margin: 6px 0; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
 .button {

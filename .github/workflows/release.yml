@@ -34,6 +34,22 @@ jobs:
       - name: Scan tracked files for credentials
         run: python3 scripts/check-secrets.py
 
+      # 更新说明只认 CHANGELOG.md：找不到本 tag 对应的一节就直接失败，不发空说明的版本。
+      - name: Extract release notes from CHANGELOG.md
+        id: release_notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          NOTES_FILE="${RUNNER_TEMP}/release-notes.md"
+          python3 scripts/extract-changelog.py "${RELEASE_TAG}" --output "${NOTES_FILE}"
+          delimiter="CM_NOTES_$(openssl rand -hex 16)"
+          {
+            echo "body<<${delimiter}"
+            cat "${NOTES_FILE}"
+            echo "${delimiter}"
+          } >> "${GITHUB_OUTPUT}"
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -70,8 +86,8 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: ClipMaster Pro ${{ github.ref_name }}
-          releaseBody: |
-            macOS 安装包与更新包。请使用本 Release 中的 `.dmg` / `.app.tar.gz` 安装。
+          # 内容取自 CHANGELOG.md 中本版本的一节，同时写入 latest.json 的 notes。
+          releaseBody: ${{ steps.release_notes.outputs.body }}
           releaseDraft: true
           prerelease: false
 

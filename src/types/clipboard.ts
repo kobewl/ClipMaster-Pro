@@ -11,6 +11,10 @@ export interface ClipboardItem {
   last_copied_at: string;
   source_app: string | null;
   source_url: string | null;
+  /** 来源应用的 bundle id（复制时记录，用于取真实图标；旧记录为 null）。 */
+  source_bundle_id?: string | null;
+  /** 来源应用 `.app` 的绝对路径（复制时记录；旧记录为 null）。 */
+  source_app_path?: string | null;
   /**
    * 这条命中了查询里的哪些词（词序同查询词序）。
    *
@@ -18,6 +22,13 @@ export interface ClipboardItem {
    * 所以这里是可选的 —— 有值才画「命中 N/M 词」，浏览列表零残留。
    */
   matched_terms?: string[];
+}
+
+/** 请求一个来源图标：后端按 `.app` 路径 → bundle id → 应用名的顺序找应用。 */
+export interface SourceIconRequest {
+  name: string | null;
+  bundle_id: string | null;
+  app_path: string | null;
 }
 
 export interface ClipGroup {

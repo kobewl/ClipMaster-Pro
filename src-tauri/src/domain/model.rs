@@ -111,6 +111,12 @@ pub struct ClipboardItem {
     pub source_app: Option<String>,
     /// 复制来源 URL（浏览器复制时自动采集当前标签页 URL）。
     pub source_url: Option<String>,
+    /// 来源应用的 CFBundleIdentifier（如 "com.microsoft.VSCode"），用于取真实图标。
+    #[serde(default)]
+    pub source_bundle_id: Option<String>,
+    /// 复制时来源应用 `.app` 的绝对路径；仅本地使用，不进日志与模型输入。
+    #[serde(default)]
+    pub source_app_path: Option<String>,
     pub legacy_id: Option<String>,
 }
 
@@ -122,6 +128,10 @@ pub struct NewClipboardItem {
     pub fingerprint: String,
     pub source_app: Option<String>,
     pub source_url: Option<String>,
+    /// 来源应用的 CFBundleIdentifier。
+    pub source_bundle_id: Option<String>,
+    /// 来源应用 `.app` 的绝对路径。
+    pub source_app_path: Option<String>,
 }
 
 /// 面向前端的截断预览长度上限。

@@ -548,7 +548,7 @@ export default function App() {
 
       <PreviewDialog
         item={previewItem}
-        iconSrc={getSourceIconPath(previewItem?.source_app ?? null)}
+        iconSrc={getSourceIconPath(previewItem ?? null)}
         onCopy={async (id) => {
           try {
             await copyItem(id);

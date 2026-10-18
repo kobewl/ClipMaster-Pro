@@ -18,7 +18,7 @@ use crate::domain::error::ClipboardSourceError;
 use crate::domain::model::ContentType;
 use crate::domain::normalize::{compute_fingerprint, compute_fingerprint_bytes, strip_html_tags};
 use crate::domain::ports::{ClipboardEvent, ClipboardSource, ClipboardWriter};
-use crate::infrastructure::appicon::macos::frontmost_app_display_name;
+use crate::infrastructure::appicon::macos::frontmost_app_source;
 
 /// 待消费的 self-write 指纹队列（先进先出，上限 8 个）。
 ///
@@ -107,17 +107,23 @@ impl ClipboardHandler for EventHandler {
 struct SourceInfo {
     app_name: Option<String>,
     source_url: Option<String>,
+    bundle_id: Option<String>,
+    app_path: Option<String>,
 }
 
 fn get_source_info() -> SourceInfo {
-    // 前台应用名走 NSWorkspace 进程内查询：零子进程、零「自动化」权限依赖。
+    // 前台应用身份走 NSWorkspace 进程内查询：零子进程、零「自动化」权限依赖。
     // 旧 osascript 路径（System Events）实测每次复制要付 40ms+ 的子进程底价，
-    // 且授权被拒后来源永远为空。失败时返回 None，按「无来源」记录。
-    let app_name = frontmost_app_display_name();
+    // 且授权被拒后来源永远为空。失败时各字段为 None，按「无来源」记录。
+    // bundle id 与 `.app` 路径用来事后取真实图标，这里不渲染、不碰磁盘。
+    let (app_name, bundle_id, app_path) = match frontmost_app_source() {
+        Some(app) => (app.name, app.bundle_id, app.app_path),
+        None => (None, None, None),
+    };
     // 只有前台是受支持的浏览器时才会真正 spawn osascript 去查标签页 URL ——
     // 每个浏览器的 AppleScript 字典没有进程内替代，这条子进程保留。
     let source_url = app_name.as_deref().and_then(get_browser_url);
-    SourceInfo { app_name, source_url }
+    SourceInfo { app_name, source_url, bundle_id, app_path }
 }
 
 /// 各浏览器取「当前标签页 URL」的 AppleScript；None = 不是受支持的浏览器。
@@ -178,6 +184,8 @@ impl EventHandler {
             content_text: joined,
             source_app: source.app_name,
             source_url: source.source_url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         });
     }
 
@@ -191,6 +199,8 @@ impl EventHandler {
             content_text: text,
             source_app: source.app_name,
             source_url: source.source_url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         });
     }
 
@@ -204,6 +214,8 @@ impl EventHandler {
             content_text: html,
             source_app: source.app_name,
             source_url: source.source_url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         });
     }
 
@@ -251,6 +263,8 @@ impl EventHandler {
             content_text: file_path.to_string_lossy().to_string(),
             source_app: source.app_name,
             source_url: source.source_url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         });
     }
 

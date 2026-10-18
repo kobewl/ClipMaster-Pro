@@ -41,6 +41,16 @@ const RELAX_RECALL_CAP: u32 = 300;
 /// 重新核对这个乘积。
 const RERANK_WINDOW_CAP: u32 = 500;
 
+/// 一次采集的来源信息。用具名字段而不是一串位置参数：四个都是
+/// `Option<String>`，按位置传很容易互相写错。
+#[derive(Debug, Default)]
+struct CaptureSource {
+    app: Option<String>,
+    url: Option<String>,
+    bundle_id: Option<String>,
+    app_path: Option<String>,
+}
+
 pub struct HistoryService {
     repository: Arc<dyn ClipboardRepository>,
     writer: Arc<dyn ClipboardWriter>,
@@ -57,27 +67,39 @@ impl HistoryService {
     }
 
     pub async fn capture(&self, event: ClipboardEvent) -> Result<ClipboardItem, AppError> {
+        let source = CaptureSource {
+            app: event.source_app,
+            url: event.source_url,
+            bundle_id: event.source_bundle_id,
+            app_path: event.source_app_path,
+        };
         match event.content_type {
-            ContentType::Text => {
-                self.capture_text(event.content_text, event.source_app, event.source_url).await
-            }
-            ContentType::Image => {
-                self.capture_image(event.content_text, event.source_app, event.source_url).await
-            }
-            ContentType::Html => {
-                self.capture_html(event.content_text, event.source_app, event.source_url).await
-            }
-            ContentType::Files => {
-                self.capture_files(event.content_text, event.source_app, event.source_url).await
-            }
+            ContentType::Text => self.capture_text_from(event.content_text, source).await,
+            ContentType::Image => self.capture_image(event.content_text, source).await,
+            ContentType::Html => self.capture_html(event.content_text, source).await,
+            ContentType::Files => self.capture_files(event.content_text, source).await,
         }
     }
 
+    /// 只带应用名 / URL 收一条文本（没有 bundle 信息，图标按应用名兜底）。
     pub async fn capture_text(
         &self,
         content: String,
         source_app: Option<String>,
         source_url: Option<String>,
+    ) -> Result<ClipboardItem, AppError> {
+        let source = CaptureSource {
+            app: source_app,
+            url: source_url,
+            ..CaptureSource::default()
+        };
+        self.capture_text_from(content, source).await
+    }
+
+    async fn capture_text_from(
+        &self,
+        content: String,
+        source: CaptureSource,
     ) -> Result<ClipboardItem, AppError> {
         if content.is_empty() {
             return Err(AppError::Domain(DomainError::EmptyContent));
@@ -96,8 +118,10 @@ impl HistoryService {
             content_type: ContentType::Text,
             content_text: content,
             fingerprint,
-            source_app,
-            source_url,
+            source_app: source.app,
+            source_url: source.url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         }).await?;
 
         self.run_cleanup_after_capture().await?;
@@ -107,8 +131,7 @@ impl HistoryService {
     async fn capture_image(
         &self,
         image_path: String,
-        source_app: Option<String>,
-        source_url: Option<String>,
+        source: CaptureSource,
     ) -> Result<ClipboardItem, AppError> {
         if image_path.is_empty() {
             return Err(AppError::Domain(DomainError::EmptyContent));
@@ -121,8 +144,10 @@ impl HistoryService {
             content_type: ContentType::Image,
             content_text: image_path,
             fingerprint,
-            source_app,
-            source_url,
+            source_app: source.app,
+            source_url: source.url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         }).await?;
 
         self.run_cleanup_after_capture().await?;
@@ -134,8 +159,7 @@ impl HistoryService {
     async fn capture_html(
         &self,
         html: String,
-        source_app: Option<String>,
-        source_url: Option<String>,
+        source: CaptureSource,
     ) -> Result<ClipboardItem, AppError> {
         if html.trim().is_empty() {
             return Err(AppError::Domain(DomainError::EmptyContent));
@@ -154,8 +178,10 @@ impl HistoryService {
             content_type: ContentType::Html,
             content_text: html,
             fingerprint,
-            source_app,
-            source_url,
+            source_app: source.app,
+            source_url: source.url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         }).await?;
 
         self.run_cleanup_after_capture().await?;
@@ -166,8 +192,7 @@ impl HistoryService {
     async fn capture_files(
         &self,
         files_text: String,
-        source_app: Option<String>,
-        source_url: Option<String>,
+        source: CaptureSource,
     ) -> Result<ClipboardItem, AppError> {
         let paths: Vec<String> = files_text
             .lines()
@@ -185,8 +210,10 @@ impl HistoryService {
             content_type: ContentType::Files,
             content_text: joined,
             fingerprint,
-            source_app,
-            source_url,
+            source_app: source.app,
+            source_url: source.url,
+            source_bundle_id: source.bundle_id,
+            source_app_path: source.app_path,
         }).await?;
 
         self.run_cleanup_after_capture().await?;
@@ -401,6 +428,8 @@ impl HistoryService {
             fingerprint: item.fingerprint,
             source_app: item.source_app,
             source_url: item.source_url,
+            source_bundle_id: item.source_bundle_id,
+            source_app_path: item.source_app_path,
         }).await?;
         Ok(())
     }

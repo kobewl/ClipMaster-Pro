@@ -1,8 +1,8 @@
 //! AppKit 相关的四件事：渲染应用真实图标、模拟 ⌘V、把焦点还给上一个应用、
-//! 取前台应用的显示名。
+//! 取前台应用的身份（显示名 / bundle id / `.app` 路径）。
 //!
 //! 图标渲染由调用方通过 `AppHandle::run_on_main_thread` 调度到主线程执行，
-//! 避免 AppKit 在后台线程上出问题；前台应用名走的是官方标注线程安全的
+//! 避免 AppKit 在后台线程上出问题；前台应用身份走的是官方标注线程安全的
 //! `NSRunningApplication` 属性读取，可以在剪贴板 watcher 线程直接调用。
 
 use std::path::{Path, PathBuf};
@@ -19,6 +19,8 @@ use objc2_core_graphics::{
     CGEvent, CGEventFlags, CGEventSource, CGEventSourceStateID, CGEventTapLocation, CGKeyCode,
 };
 use objc2_foundation::{NSDictionary, NSString};
+
+use super::AppLocator;
 
 /// 唤起本应用窗口之前的那个前台应用（bundle identifier）。
 ///
@@ -67,6 +69,9 @@ fn find_app_bundle_path(app_name: &str) -> Option<String> {
 }
 
 /// 进程名 → `.app` 目录名的别名表。
+///
+/// 只给没有 bundle id / `.app` 路径的旧记录兜底：新记录在复制时就记下了
+/// 应用的真实位置，用不到这张表。
 ///
 /// 只收「进程名和目录名差得比较远、靠大小写匹配也找不到」的常见应用；
 /// 能靠可执行文件名对上的（WebStorm、PyCharm、GoLand…）不需要在这里登记。
@@ -145,17 +150,43 @@ fn find_running_app_path(app_name: &str) -> Option<String> {
     fuzzy
 }
 
-/// 渲染应用图标为 PNG 字节。**必须在主线程调用。**
+/// 按 [`super::resolve_app_path`] 约定的三种手段在 macOS 上找应用。
 ///
-/// 返回 `None` 表示系统里找不到这个应用。
+/// `path_for_bundle_id` / `path_for_name` 会碰 NSWorkspace，和图标渲染一起
+/// 放在主线程上调用。
+pub struct MacAppLocator;
+
+impl AppLocator for MacAppLocator {
+    fn bundle_exists(&self, path: &str) -> bool {
+        Path::new(path).is_dir()
+    }
+
+    fn path_for_bundle_id(&self, bundle_id: &str) -> Option<String> {
+        autoreleasepool(|_pool| {
+            let id = NSString::from_str(bundle_id);
+            // 未知 bundle id 时系统返回 nil，这里就是 None。
+            NSWorkspace::sharedWorkspace()
+                .URLForApplicationWithBundleIdentifier(&id)?
+                .path()
+                .map(|path| path.to_string())
+        })
+    }
+
+    fn path_for_name(&self, name: &str) -> Option<String> {
+        autoreleasepool(|_pool| find_app_bundle_path(name))
+    }
+}
+
+/// 渲染 `app_path` 处应用的图标为 PNG 字节。**必须在主线程调用。**
+///
+/// 只渲染、不解析：`.app` 路径由 [`super::resolve_app_path`] 先找好。
 ///
 /// 注意：系统给的图标表示（`NSISIconImageRep`）最小也是几十 px、最大到 2048px，
 /// 直接编码出来能到 1~2MB。所以这里出来的是原图，落盘时再用
 /// [`save_icon_png`] 缩到列表真正需要的尺寸。
-pub fn render_app_icon_png(app_name: &str) -> Option<Vec<u8>> {
+pub fn render_icon_png_at(app_path: &str) -> Option<Vec<u8>> {
     autoreleasepool(|_pool| {
-        let app_path = find_app_bundle_path(app_name)?;
-        let ns_path = NSString::from_str(&app_path);
+        let ns_path = NSString::from_str(app_path);
 
         let workspace = NSWorkspace::sharedWorkspace();
         let icon: Retained<NSImage> = workspace.iconForFile(&ns_path);
@@ -234,24 +265,43 @@ fn frontmost_application() -> Option<Retained<NSRunningApplication>> {
     NSWorkspace::sharedWorkspace().frontmostApplication()
 }
 
-/// 前台应用的显示名（AppKit 的 localizedName，如 "IntelliJ IDEA"、"Safari"）。
+/// 复制瞬间前台应用的身份：显示名 + bundle id + `.app` 路径。
+pub struct FrontmostApp {
+    /// AppKit 的 localizedName，如 "IntelliJ IDEA"、"Safari"。
+    pub name: Option<String>,
+    /// CFBundleIdentifier，如 "com.jetbrains.intellij"。
+    pub bundle_id: Option<String>,
+    /// `.app` 的绝对路径。仅本地使用，不要写进 info 及以上级别的日志。
+    pub app_path: Option<String>,
+}
+
+/// 读取前台应用的身份（显示名 / bundle id / `.app` 路径）。
 ///
 /// 剪贴板 watcher 线程直接调用：`NSRunningApplication` 的属性被苹果官方
 /// 头文件明确标注为线程安全（"properties are returned atomically"，
-/// 见 NSRunningApplication.h 第 56 行），不需要子进程，也不依赖
-/// 「自动化」权限 —— 旧 osascript 路径每次复制要付 40ms+ 的子进程底价，
-/// 且 System Events 授权被拒后来源永远是空。
+/// 见 NSRunningApplication.h 第 56 行，是对整个类的说明，bundleIdentifier /
+/// bundleURL 同样适用），不需要子进程，也不依赖「自动化」权限 ——
+/// 旧 osascript 路径每次复制要付 40ms+ 的子进程底价，
+/// 且 System Events 授权被拒后来源永远是空。这里只读三个属性，不碰磁盘。
 ///
-/// 注意：System Events 报的是**进程名**（`idea`），这里给的是**显示名**
-/// （`IntelliJ IDEA`）。图标匹配两条都认（见 `find_running_app_path` 同时比对
-/// localizedName 与可执行文件名），前端 emoji 兜底表也按显示名匹配，
-/// 显示名反而与 `.app` 目录名一致，是更稳的标识。
+/// bundle id 和路径是取真实图标的依据：进程名和 `.app` 目录名对不上、应用装在
+/// 非常规目录、复制后应用已退出，都不影响按它们找到图标。
 ///
-/// 失败返回 None，调用方按「无来源」记录，采集不受影响。
-pub fn frontmost_app_display_name() -> Option<String> {
-    let app = frontmost_application()?;
-    let name = app.localizedName()?.to_string();
-    if name.is_empty() { None } else { Some(name) }
+/// 没有前台应用时返回 None，调用方按「无来源」记录，采集不受影响。
+pub fn frontmost_app_source() -> Option<FrontmostApp> {
+    autoreleasepool(|_pool| {
+        let app = frontmost_application()?;
+        let non_empty = |value: String| if value.is_empty() { None } else { Some(value) };
+        Some(FrontmostApp {
+            name: app.localizedName().map(|n| n.to_string()).and_then(non_empty),
+            bundle_id: app.bundleIdentifier().map(|id| id.to_string()).and_then(non_empty),
+            app_path: app
+                .bundleURL()
+                .and_then(|url| url.path())
+                .map(|path| path.to_string())
+                .and_then(non_empty),
+        })
+    })
 }
 
 fn frontmost_bundle_id() -> Option<String> {

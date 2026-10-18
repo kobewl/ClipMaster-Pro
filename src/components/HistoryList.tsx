@@ -93,19 +93,13 @@ export function HistoryList({
     };
   }, []);
 
-  // 按应用名去重后批量解析来源图标（Rust 侧有磁盘缓存，这里只请求没查过的）。
+  // 批量解析来源图标：按 bundle id（旧记录按应用名）去重，只请求没查过的
+  // （去重在 prefetchSourceIcons 里做；Rust 侧另有磁盘缓存）。
   useEffect(() => {
-    const appNames = Array.from(
-      new Set(
-        items
-          .map((item) => item.source_app)
-          .filter((name): name is string => Boolean(name)),
-      ),
-    );
-    if (appNames.length === 0) return;
+    if (items.length === 0) return;
 
     let cancelled = false;
-    prefetchSourceIcons(appNames).then((hasNewIcon) => {
+    prefetchSourceIcons(items).then((hasNewIcon) => {
       if (!cancelled && hasNewIcon) bumpIconVersion();
     });
     return () => {
@@ -261,7 +255,7 @@ export function HistoryList({
           groups={groups}
           keyword={keyword}
           queryTermCount={queryTermCount}
-          iconSrc={getSourceIconPath(item.source_app)}
+          iconSrc={getSourceIconPath(item)}
           multiSelect={multiSelect}
           picked={selected.has(item.id)}
           onPaste={onPaste}

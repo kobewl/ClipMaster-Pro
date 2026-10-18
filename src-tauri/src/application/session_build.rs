@@ -588,6 +588,8 @@ mod tests {
             last_copied_at: copied_at,
             source_app: app.map(str::to_string),
             source_url: None,
+            source_bundle_id: None,
+            source_app_path: None,
             legacy_id: None,
         }
     }

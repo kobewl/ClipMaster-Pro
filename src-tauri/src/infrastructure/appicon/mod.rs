@@ -8,7 +8,12 @@
 //! 遇到表里没有的应用（比如 ZCode）只能退化成一个通用剪贴板图标，
 //! 用户看不出内容来自哪里。真实图标不存在这个问题。
 //!
-//! 图标只在第一次用到时渲染一次（一个应用名对应一个缓存文件），之后直接读盘。
+//! 找 `.app` 的顺序（见 [`resolve_app_path`]）：复制时记下的 `.app` 路径（仍在
+//! 磁盘上）→ 复制时记下的 bundle id（应用被挪过位置也能找到）→ 按应用名匹配
+//! （只给没有 bundle 信息的旧记录兜底）。全部失败才由前端退回 emoji。
+//!
+//! 图标只在第一次用到时渲染一次（一个 bundle id —— 旧记录则是一个应用名 ——
+//! 对应一个缓存文件），之后直接读盘。
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -26,6 +31,66 @@ pub fn cache_file_name(app_name: &str) -> String {
     format!("{}.png", &hex::encode(digest)[..32])
 }
 
+/// 要取图标的那个来源应用：复制时记下的应用名 / bundle id / `.app` 路径。
+/// 旧记录只有 `name`。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct IconSource {
+    pub name: Option<String>,
+    pub bundle_id: Option<String>,
+    pub app_path: Option<String>,
+}
+
+/// 「在系统里找应用」的三种手段。抽成 trait 是为了让 [`resolve_app_path`]
+/// 的先后顺序不依赖 AppKit 就能测；macOS 实现见 `macos::MacAppLocator`。
+pub trait AppLocator {
+    /// 这个路径上是否真有一个应用包（应用被删 / 被挪走后返回 false）。
+    fn bundle_exists(&self, path: &str) -> bool;
+    /// 按 bundle id 问系统要 `.app` 路径（LaunchServices）。
+    fn path_for_bundle_id(&self, bundle_id: &str) -> Option<String>;
+    /// 按应用名找 `.app` 路径（运行中的应用 → 常见目录 → 别名表）。
+    fn path_for_name(&self, name: &str) -> Option<String>;
+}
+
+fn non_empty(value: &Option<String>) -> Option<&str> {
+    value.as_deref().map(str::trim).filter(|v| !v.is_empty())
+}
+
+/// 把来源解析成 `.app` 的绝对路径。后一种手段只在前一种失败时才会被调用。
+///
+/// 1. 复制时记下的路径：必须以 `.app` 结尾且仍在磁盘上。`.app` 检查防止前端
+///    传来任意路径时去渲染一个普通文件 / 文件夹的图标。
+/// 2. bundle id：应用被挪过位置（或复制时跑在 App Translocation 的临时目录里）
+///    也能找到；系统给的路径同样要求仍在磁盘上，过期的登记记录直接跳过。
+/// 3. 应用名：没有 bundle 信息的旧记录走这条（含别名表）。
+pub fn resolve_app_path(source: &IconSource, locator: &impl AppLocator) -> Option<String> {
+    if let Some(path) = non_empty(&source.app_path) {
+        if path.to_lowercase().ends_with(".app") && locator.bundle_exists(path) {
+            return Some(path.to_string());
+        }
+    }
+    if let Some(bundle_id) = non_empty(&source.bundle_id) {
+        if let Some(path) = locator.path_for_bundle_id(bundle_id) {
+            if locator.bundle_exists(&path) {
+                return Some(path);
+            }
+        }
+    }
+    let name = non_empty(&source.name)?;
+    locator.path_for_name(name)
+}
+
+/// 来源 → 图标缓存文件名。`None` = 什么标识都没有，不必去取。
+///
+/// 有 bundle id 时按 bundle id 记（加 `bundle:` 前缀，免得和某个显示名恰好长得
+/// 像 bundle id 的应用撞名）：同一个应用不论显示名、安装位置怎么变都只缓存一份。
+/// 没有 bundle id 的旧记录仍按应用名记，与之前的缓存文件是同一个，已有缓存继续命中。
+pub fn icon_cache_file_name(source: &IconSource) -> Option<String> {
+    if let Some(bundle_id) = non_empty(&source.bundle_id) {
+        return Some(cache_file_name(&format!("bundle:{bundle_id}")));
+    }
+    non_empty(&source.name).map(cache_file_name)
+}
+
 /// 图标缓存目录：`$APPDATA/appicons`（与 `tauri.conf.json` 里 assetProtocol
 /// 的 scope 保持一致，否则前端读不到这些文件）。
 pub fn cache_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
@@ -38,6 +103,141 @@ pub fn cache_dir(app: &tauri::AppHandle) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::collections::{HashMap, HashSet};
+
+    /// 记录每次调用的假 locator：既给结果，也证明后面的手段有没有被跳过。
+    #[derive(Default)]
+    struct FakeLocator {
+        existing: HashSet<String>,
+        by_bundle: HashMap<String, String>,
+        by_name: HashMap<String, String>,
+        calls: RefCell<Vec<String>>,
+    }
+
+    impl FakeLocator {
+        fn exists(mut self, path: &str) -> Self {
+            self.existing.insert(path.into());
+            self
+        }
+        fn bundle(mut self, id: &str, path: &str) -> Self {
+            self.by_bundle.insert(id.into(), path.into());
+            self
+        }
+        fn name(mut self, name: &str, path: &str) -> Self {
+            self.by_name.insert(name.into(), path.into());
+            self
+        }
+        fn called(&self, prefix: &str) -> bool {
+            self.calls.borrow().iter().any(|call| call.starts_with(prefix))
+        }
+    }
+
+    impl AppLocator for FakeLocator {
+        fn bundle_exists(&self, path: &str) -> bool {
+            self.calls.borrow_mut().push(format!("exists:{path}"));
+            self.existing.contains(path)
+        }
+        fn path_for_bundle_id(&self, bundle_id: &str) -> Option<String> {
+            self.calls.borrow_mut().push(format!("bundle:{bundle_id}"));
+            self.by_bundle.get(bundle_id).cloned()
+        }
+        fn path_for_name(&self, name: &str) -> Option<String> {
+            self.calls.borrow_mut().push(format!("name:{name}"));
+            self.by_name.get(name).cloned()
+        }
+    }
+
+    fn source(name: Option<&str>, bundle_id: Option<&str>, app_path: Option<&str>) -> IconSource {
+        IconSource {
+            name: name.map(str::to_string),
+            bundle_id: bundle_id.map(str::to_string),
+            app_path: app_path.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn stored_path_that_exists_is_used_first() {
+        let locator = FakeLocator::default()
+            .exists("/Applications/Foo.app")
+            .exists("/Other/Foo.app")
+            .bundle("com.foo", "/Other/Foo.app")
+            .name("Foo", "/Other/Foo.app");
+        let found = resolve_app_path(
+            &source(Some("Foo"), Some("com.foo"), Some("/Applications/Foo.app")),
+            &locator,
+        );
+        assert_eq!(found.as_deref(), Some("/Applications/Foo.app"));
+        assert!(!locator.called("bundle:"), "路径可用时不该再问 bundle id");
+        assert!(!locator.called("name:"), "路径可用时不该再按名字找");
+    }
+
+    #[test]
+    fn missing_stored_path_falls_back_to_bundle_id() {
+        let locator = FakeLocator::default()
+            .exists("/Users/x/Apps/Foo.app")
+            .bundle("com.foo", "/Users/x/Apps/Foo.app")
+            .name("Foo", "/Elsewhere/Foo.app");
+        let found = resolve_app_path(
+            &source(Some("Foo"), Some("com.foo"), Some("/Applications/Foo.app")),
+            &locator,
+        );
+        assert_eq!(found.as_deref(), Some("/Users/x/Apps/Foo.app"));
+        assert!(!locator.called("name:"), "bundle id 找到了就不该再按名字找");
+    }
+
+    #[test]
+    fn bundle_id_result_must_exist_on_disk() {
+        let locator = FakeLocator::default()
+            .exists("/Applications/Foo.app")
+            .bundle("com.foo", "/Gone/Foo.app")
+            .name("Foo", "/Applications/Foo.app");
+        let found = resolve_app_path(&source(Some("Foo"), Some("com.foo"), None), &locator);
+        assert_eq!(found.as_deref(), Some("/Applications/Foo.app"));
+        assert!(locator.called("exists:/Gone/Foo.app"));
+    }
+
+    #[test]
+    fn no_path_no_bundle_falls_back_to_name() {
+        let locator = FakeLocator::default().name("idea", "/Applications/IntelliJ IDEA.app");
+        let found = resolve_app_path(&source(Some("idea"), None, None), &locator);
+        assert_eq!(found.as_deref(), Some("/Applications/IntelliJ IDEA.app"));
+    }
+
+    #[test]
+    fn non_app_stored_path_is_ignored() {
+        let locator = FakeLocator::default().exists("/etc/passwd");
+        let found = resolve_app_path(&source(None, None, Some("/etc/passwd")), &locator);
+        assert_eq!(found, None);
+        assert!(!locator.called("exists:/etc/passwd"), "非 .app 路径连查都不该查");
+    }
+
+    #[test]
+    fn empty_strings_are_treated_as_missing() {
+        let locator = FakeLocator::default();
+        let found = resolve_app_path(&source(Some(""), Some(""), Some("")), &locator);
+        assert_eq!(found, None);
+        assert!(locator.calls.borrow().is_empty(), "{:?}", locator.calls.borrow());
+    }
+
+    #[test]
+    fn icon_cache_file_name_prefers_bundle_id() {
+        let with_bundle = icon_cache_file_name(&source(Some("Safari"), Some("com.apple.Safari"), None));
+        let name_only = icon_cache_file_name(&source(Some("Safari"), None, None));
+        assert_ne!(with_bundle, name_only);
+        // 旧记录的缓存文件名不变，已有缓存继续命中。
+        assert_eq!(name_only, Some(cache_file_name("Safari")));
+        // 同一个 bundle id，不论显示名 / 路径，只缓存一份。
+        assert_eq!(
+            with_bundle,
+            icon_cache_file_name(&source(
+                Some("Safari 浏览器"),
+                Some("com.apple.Safari"),
+                Some("/Applications/Safari.app"),
+            ))
+        );
+        assert_eq!(icon_cache_file_name(&IconSource::default()), None);
+    }
 
     #[test]
     fn cache_file_name_is_stable_and_path_safe() {

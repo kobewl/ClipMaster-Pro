@@ -377,6 +377,8 @@ mod tests {
                 last_copied_at: copied,
                 source_app: self.source_app.map(str::to_string),
                 source_url: None,
+                source_bundle_id: None,
+                source_app_path: None,
                 legacy_id: None,
             }
         }

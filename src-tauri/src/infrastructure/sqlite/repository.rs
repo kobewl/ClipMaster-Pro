@@ -132,6 +132,8 @@ impl SqliteClipboardRepository {
             last_copied_at: parse_datetime(&last_copied_at_str),
             source_app: row.get("source_app")?,
             source_url: row.get("source_url")?,
+            source_bundle_id: row.get("source_bundle_id")?,
+            source_app_path: row.get("source_app_path")?,
             legacy_id: row.get("legacy_id")?,
         })
     }
@@ -253,9 +255,21 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 tx.execute(
                     "UPDATE clipboard_items
                      SET updated_at = ?1, last_copied_at = ?1,
-                         source_app = ?2, source_url = ?3, search_text = ?4
-                     WHERE id = ?5",
-                    params![now, item.source_app, item.source_url, search_text, existing_id],
+                         source_app = ?2, source_url = ?3,
+                         source_bundle_id = ?4, source_app_path = ?5,
+                         search_text = ?6
+                     WHERE id = ?7",
+                    // 四个来源字段描述的是同一次（最近一次）复制，必须一起覆盖：
+                    // 只换名字不换 bundle，会把 B 应用的名字配上 A 应用的图标。
+                    params![
+                        now,
+                        item.source_app,
+                        item.source_url,
+                        item.source_bundle_id,
+                        item.source_app_path,
+                        search_text,
+                        existing_id
+                    ],
                 )
                 .map_err(Self::map_db_err)?;
 
@@ -279,8 +293,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 "INSERT INTO clipboard_items
                     (id, content_type, content_text, fingerprint, search_text,
                      is_favorite, group_id, created_at, updated_at, last_copied_at,
-                     source_app, source_url, legacy_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL, ?6, ?6, ?6, ?7, ?8, NULL)",
+                     source_app, source_url, source_bundle_id, source_app_path, legacy_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, 0, NULL, ?6, ?6, ?6, ?7, ?8, ?9, ?10, NULL)",
                 params![
                     new_id.to_string(),
                     item.content_type.as_str(),
@@ -290,6 +304,8 @@ impl ClipboardRepository for SqliteClipboardRepository {
                     now,
                     item.source_app,
                     item.source_url,
+                    item.source_bundle_id,
+                    item.source_app_path,
                 ],
             )
             .map_err(Self::map_db_err)?;

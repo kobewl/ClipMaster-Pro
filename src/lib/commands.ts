@@ -15,6 +15,7 @@ import type {
   ListQuery,
   ListResult,
   PlannerSuggestionSet,
+  SourceIconRequest,
   UpdateStatus,
 } from "@/types/clipboard";
 
@@ -43,11 +44,11 @@ export const commands = {
     return invoke("paste_text", { text });
   },
   /**
-   * 解析来源应用的真实图标，返回 {应用名: PNG 绝对路径}。
-   * 系统里找不到的应用不会出现在结果里（前端退回 emoji）。
+   * 解析来源应用的真实图标。返回值与 `sources` 按位置一一对应：
+   * 第 i 项是第 i 个来源的 PNG 绝对路径，null = 找不到（前端退回 emoji）。
    */
-  getSourceIcons(apps: string[]): Promise<Record<string, string>> {
-    return invoke("get_source_icons", { apps });
+  getSourceIcons(sources: SourceIconRequest[]): Promise<(string | null)[]> {
+    return invoke("get_source_icons", { sources });
   },
   clearHistory(keepGrouped: boolean): Promise<number> {
     return invoke("clear_history", { keepGrouped });

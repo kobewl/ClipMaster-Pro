@@ -236,6 +236,8 @@ mod tests {
             last_copied_at: chrono::Utc::now(),
             source_app: None,
             source_url: None,
+            source_bundle_id: None,
+            source_app_path: None,
             legacy_id: None,
         };
         let (preview, blocked) = search_preview(&item);

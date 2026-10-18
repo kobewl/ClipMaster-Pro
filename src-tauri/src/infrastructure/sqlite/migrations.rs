@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 10;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -249,9 +249,24 @@ const MIGRATIONS: &[(i64, &str)] = &[
     DROP INDEX IF EXISTS idx_clipboard_items_list_order;
     "#,
     ),
+    // 复制时记录来源应用的 bundle id 与 .app 路径，用于取真实图标；
+    // 旧行保持 NULL，按应用名兜底。没有按它们查询的场景，不建索引。
+    (
+        10,
+        r#"
+    ALTER TABLE clipboard_items ADD COLUMN source_bundle_id TEXT;
+    ALTER TABLE clipboard_items ADD COLUMN source_app_path TEXT;
+    "#,
+    ),
 ];
 
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<()> {
+    apply_migrations(conn, MIGRATIONS)
+}
+
+/// 按顺序应用 `migrations` 里尚未执行过的版本。拆出来是为了让测试能先把库
+/// 停在某个旧版本，再验证升级到最新版本的路径。
+fn apply_migrations(conn: &mut Connection, migrations: &[(i64, &str)]) -> rusqlite::Result<()> {
     conn.execute_batch(
         "PRAGMA journal_mode = WAL;
          PRAGMA synchronous = NORMAL;
@@ -267,7 +282,7 @@ pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<()> {
     )?;
 
     let tx = conn.transaction()?;
-    for (version, sql) in MIGRATIONS {
+    for (version, sql) in migrations {
         let already_applied: bool = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version = ?1)",
             [version],
@@ -326,5 +341,66 @@ mod tests {
             })
             .expect("读版本号");
         assert_eq!(version, CURRENT_SCHEMA_VERSION);
+    }
+
+    /// 已经停在 v9 的库（真机升级的样子）跑完迁移后到达最新版本，旧行原样保留，
+    /// 新增的 bundle 列为 NULL（图标按应用名兜底）。
+    #[test]
+    fn migration_10_applies_on_v9_database_and_preserves_rows() {
+        use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
+
+        assert_eq!(MIGRATIONS[8].0, 9, "切片 [..9] 必须正好停在 v9");
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        apply_migrations(&mut conn, &MIGRATIONS[..9]).expect("迁移到 v9");
+
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+            .expect("读版本号");
+        assert_eq!(version, 9);
+        let has_bundle_column: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('clipboard_items') WHERE name = 'source_bundle_id'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("读列信息");
+        assert_eq!(has_bundle_column, 0, "v9 还没有 bundle 列");
+
+        let id = "22222222-2222-2222-2222-222222222222";
+        conn.execute(
+            "INSERT INTO clipboard_items
+                (id, content_type, content_text, fingerprint, search_text, is_favorite, group_id,
+                 created_at, updated_at, last_copied_at, source_app, source_url, legacy_id)
+             VALUES (?1, 'text', 'v9 时代的内容', 'fp-v9', 'v9 时代的内容', 0, NULL,
+                     '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00',
+                     '2026-01-01T00:00:00+00:00', 'Safari', 'https://example.com', NULL)",
+            [id],
+        )
+        .expect("写入 v9 行");
+
+        run_migrations(&mut conn).expect("升级到最新版本");
+
+        let version: i64 = conn
+            .query_row("SELECT MAX(version) FROM schema_migrations", [], |row| row.get(0))
+            .expect("读版本号");
+        assert_eq!(version, CURRENT_SCHEMA_VERSION);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
+            .expect("数行数");
+        assert_eq!(count, 1);
+
+        let item = conn
+            .query_row(
+                "SELECT * FROM clipboard_items WHERE id = ?1",
+                [id],
+                SqliteClipboardRepository::row_to_item,
+            )
+            .expect("按统一口径读回旧行");
+        assert_eq!(item.id.to_string(), id);
+        assert_eq!(item.content_text, "v9 时代的内容");
+        assert_eq!(item.source_app.as_deref(), Some("Safari"));
+        assert_eq!(item.source_url.as_deref(), Some("https://example.com"));
+        assert!(item.source_bundle_id.is_none());
+        assert!(item.source_app_path.is_none());
     }
 }

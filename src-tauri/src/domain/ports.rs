@@ -312,6 +312,10 @@ pub struct ClipboardEvent {
     pub content_text: String,
     pub source_app: Option<String>,
     pub source_url: Option<String>,
+    /// 来源应用的 CFBundleIdentifier。
+    pub source_bundle_id: Option<String>,
+    /// 来源应用 `.app` 的绝对路径（仅本地使用，不进日志）。
+    pub source_app_path: Option<String>,
 }
 
 pub trait ClipboardSource: Send {

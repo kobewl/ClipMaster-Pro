@@ -24,6 +24,10 @@ pub struct ClipboardItemDto {
     pub last_copied_at: String,
     pub source_app: Option<String>,
     pub source_url: Option<String>,
+    /// 来源应用的 bundle id；前端据此请求真实图标（旧记录为 null）。
+    pub source_bundle_id: Option<String>,
+    /// 来源应用 `.app` 的绝对路径（仅本机 webview 使用，旧记录为 null）。
+    pub source_app_path: Option<String>,
     /// 这条命中了查询里的哪些词（词序同查询词序）。`None` = 本次查询为空，
     /// 序列化时整字段省略 —— 空 query 的响应因此与加字段之前逐字节一致。
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -45,6 +49,8 @@ impl From<ClipboardItem> for ClipboardItemDto {
             last_copied_at: item.last_copied_at.to_rfc3339(),
             source_app: item.source_app,
             source_url: item.source_url,
+            source_bundle_id: item.source_bundle_id,
+            source_app_path: item.source_app_path,
             matched_terms: None,
         }
     }
@@ -84,6 +90,30 @@ fn file_names_summary(files_text: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join("、")
+}
+
+/// 请求一个来源图标：复制时记下的应用名 / bundle id / `.app` 路径。
+///
+/// 三个字段都可缺省：旧记录只有应用名，后端按名字兜底。
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct SourceIconRequestDto {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub bundle_id: Option<String>,
+    #[serde(default)]
+    pub app_path: Option<String>,
+}
+
+impl From<SourceIconRequestDto> for crate::infrastructure::appicon::IconSource {
+    fn from(dto: SourceIconRequestDto) -> Self {
+        Self {
+            name: dto.name,
+            bundle_id: dto.bundle_id,
+            app_path: dto.app_path,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -584,8 +614,47 @@ mod tests {
             last_copied_at: "2026-09-22T00:00:00+00:00".into(),
             source_app: None,
             source_url: None,
+            source_bundle_id: None,
+            source_app_path: None,
             matched_terms: None,
         }
+    }
+
+    /// bundle 字段总是序列化（缺失时为 null），前端据此请求真实图标。
+    #[test]
+    fn clipboard_item_dto_exposes_bundle_fields() {
+        let with = ClipboardItemDto::from(ClipboardItem {
+            source_bundle_id: Some("com.microsoft.VSCode".into()),
+            source_app_path: Some("/Applications/Visual Studio Code.app".into()),
+            ..sample_domain_item("示例", "2026-09-22T10:00:00Z")
+        });
+        let value = serde_json::to_value(&with).expect("序列化");
+        assert_eq!(value["source_bundle_id"], "com.microsoft.VSCode", "{value}");
+        assert_eq!(value["source_app_path"], "/Applications/Visual Studio Code.app", "{value}");
+
+        let without = ClipboardItemDto::from(sample_domain_item("示例", "2026-09-22T10:00:00Z"));
+        let value = serde_json::to_value(&without).expect("序列化");
+        let object = value.as_object().expect("对象");
+        assert!(object.get("source_bundle_id").is_some_and(|v| v.is_null()), "{value}");
+        assert!(object.get("source_app_path").is_some_and(|v| v.is_null()), "{value}");
+    }
+
+    /// 前端可能只给部分字段（旧记录只有应用名），缺的字段落成 None。
+    #[test]
+    fn source_icon_request_deserializes_partial_objects() {
+        let full: SourceIconRequestDto = serde_json::from_str(
+            r#"{"name":"Safari","bundle_id":"com.apple.Safari","app_path":"/Applications/Safari.app"}"#,
+        )
+        .expect("完整请求");
+        assert_eq!(full.name.as_deref(), Some("Safari"));
+        assert_eq!(full.bundle_id.as_deref(), Some("com.apple.Safari"));
+        assert_eq!(full.app_path.as_deref(), Some("/Applications/Safari.app"));
+
+        let partial: SourceIconRequestDto =
+            serde_json::from_str(r#"{"name":"Old"}"#).expect("只有名字的请求");
+        assert_eq!(partial.name.as_deref(), Some("Old"));
+        assert!(partial.bundle_id.is_none());
+        assert!(partial.app_path.is_none());
     }
 
     /// 空 query 的响应必须与加证据字段之前**逐字节一致**：
@@ -648,6 +717,8 @@ mod tests {
             last_copied_at: copied_at,
             source_app: Some("Safari".into()),
             source_url: None,
+            source_bundle_id: None,
+            source_app_path: None,
             legacy_id: None,
         }
     }

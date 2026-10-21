@@ -30,6 +30,8 @@ interface StatusBarProps {
   onOpenAgentFlow: () => void;
   /** 打开自然语言对话（主入口）。 */
   onOpenAgentChat: () => void;
+  /** 删除勾选的这批记录（App 层负责先弹二次确认）。 */
+  onDeleteSelected: () => void;
 }
 
 import { Icon } from "./Icon";
@@ -61,6 +63,7 @@ export function StatusBar({
   onSaveAgentSession,
   onOpenAgentFlow,
   onOpenAgentChat,
+  onDeleteSelected,
 }: StatusBarProps) {
   if (multiSelect) {
     return (
@@ -84,6 +87,20 @@ export function StatusBar({
         <div className="batch-actions">
           <button type="button" onClick={onCancelMultiSelect} className="batch-ghost">
             取消
+          </button>
+          <button
+            type="button"
+            onClick={onDeleteSelected}
+            disabled={selectedCount === 0}
+            title={
+              selectedCount === 0
+                ? "先勾选要删除的记录"
+                : "删除勾选的记录（会再确认一次）"
+            }
+            className="button button--secondary button--compact batch-danger"
+          >
+            <Icon name="trash" />
+            删除
           </button>
           <button
             type="button"

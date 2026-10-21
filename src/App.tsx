@@ -58,6 +58,8 @@ export default function App() {
   const [filterTimeRange, setFilterTimeRange] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [confirmClearOpen, setConfirmClearOpen] = useState(false);
+  /** 多选条「删除」的二次确认弹窗（与「清空未分组」同一套确认组件）。 */
+  const [confirmDeleteOpen, setConfirmDeleteOpen] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [toastVisible, setToastVisible] = useState(false);
@@ -93,6 +95,7 @@ export default function App() {
     loadMore,
     setItemGroup,
     deleteItem,
+    deleteItems,
     copyItem,
   } = useClipboardHistory({
     groupId: activeGroupId,
@@ -306,7 +309,7 @@ export default function App() {
     setAgentChatOpen(true);
   }
 
-  // Esc 的优先级：预览弹窗 → AI 归纳 → 问 AI → 会话工作台 → 多选 → 设置面板 →
+  // Esc 的优先级：预览弹窗 → AI 归纳 → 问 AI → 会话工作台 → 删除确认 → 多选 → 设置面板 →
   // 清空确认 → 清空搜索词。走完一档就停，不会一次把好几层都关掉。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
@@ -319,6 +322,8 @@ export default function App() {
         setAgentChatOpen(false);
       } else if (agentFlowOpen) {
         setAgentFlowOpen(false);
+      } else if (confirmDeleteOpen) {
+        setConfirmDeleteOpen(false);
       } else if (multiSelect) {
         exitMultiSelect();
       } else if (settingsOpen) {
@@ -331,7 +336,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, confirmClearOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen, agentChatOpen, agentFlowOpen]);
+  }, [settingsOpen, confirmClearOpen, confirmDeleteOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen, agentChatOpen, agentFlowOpen]);
 
   // 列表刷新（删除、换分组）后把已不存在的 id 从选择集里摘掉，
   // 否则底部会显示「已选 3 条」而列表里只有 2 条被勾上。
@@ -379,6 +384,27 @@ export default function App() {
     },
     [deleteItem, reloadGroups],
   );
+
+  /**
+   * 批量删除勾选的这批记录。删除本体在 hook 里逐条走单条命令，列表与
+   * 「共 N 条」由 `clipboard://deleted` 事件统一摘除（单一更新源，不会重复
+   * 扣计数）；删完退出多选（被删的都走了，继续留在多选里没有意义），
+   * 并同步刷新分组（删掉分组里的记录会影响分组的成员数）。
+   */
+  const handleDeleteSelected = useCallback(async () => {
+    setConfirmDeleteOpen(false);
+    if (selectedIds.size === 0) return;
+    const { deleted, failed } = await deleteItems([...selectedIds]);
+    reloadGroups();
+    exitMultiSelect();
+    if (deleted === 0) {
+      showToast("删除失败");
+    } else if (failed > 0) {
+      showToast(`已删除 ${deleted} 条，${failed} 条删除失败`);
+    } else {
+      showToast(`已删除 ${deleted} 条 ✓`);
+    }
+  }, [selectedIds, deleteItems, reloadGroups, exitMultiSelect, showToast]);
 
   const handleClear = useCallback(async () => {
     setConfirmClearOpen(false);
@@ -507,6 +533,7 @@ export default function App() {
           onRunAgentBatch={() => setAgentBatchOpen(true)}
           onSaveAgentSession={() => void handleSaveAgentSession()}
           onOpenAgentFlow={() => setAgentFlowOpen(true)}
+          onDeleteSelected={() => setConfirmDeleteOpen(true)}
           onOpenAgentChat={() => {
             if (multiSelect) {
               openAgentChat({
@@ -557,6 +584,15 @@ export default function App() {
         confirmLabel="清空"
         onConfirm={handleClear}
         onCancel={() => setConfirmClearOpen(false)}
+      />
+
+      <ConfirmDialog
+        open={confirmDeleteOpen}
+        title="删除选中记录"
+        description={`将删除勾选的 ${selectedIds.size} 条记录（含其中的图片与分组归属）。此操作不可撤销。`}
+        confirmLabel="删除"
+        onConfirm={() => void handleDeleteSelected()}
+        onCancel={() => setConfirmDeleteOpen(false)}
       />
 
       {agentBatchEverOpened && (

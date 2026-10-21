@@ -473,6 +473,13 @@ button {
   transition: background 110ms var(--cm-ease);
 }
 .batch-ghost:hover { background: var(--cm-hover); }
+/* 多选条「删除」：底子（边框 / 高度 / 禁用态）继承次级按钮，只把文字与图标换成
+   危险色；hover 填红底白字，与行内删除按钮（.card-action--danger）同一套语义。 */
+.batch-danger { display: inline-flex; align-items: center; justify-content: center; gap: 4px; color: var(--cm-danger); }
+.batch-danger svg { width: 12px; height: 12px; }
+.batch-danger:hover:not(:disabled) {
+  background: var(--cm-danger); border-color: var(--cm-danger); color: var(--cm-on-accent);
+}
 .button--compact { height: 30px; min-width: 58px; font-size: 12px; }
 .button:disabled { cursor: not-allowed; opacity: 0.45; transform: none; }
 

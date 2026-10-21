@@ -382,14 +382,36 @@ export function useClipboardHistory(options: Options) {
     [reload],
   );
 
+  /**
+   * 删除一条。列表与「共 N 条」的本地摘除由 `clipboard://deleted` 事件监听统一
+   * 负责（后端删完即广播，见上面第 3 条设计说明）；这里若再扣一遍，总数会被
+   * 扣两次，状态栏的「共 N 条」在下一次查询前就少报了。
+   */
   const deleteItem = useCallback(async (id: string) => {
     try {
       await commands.deleteClipboardItem(id);
-      setItems((prev) => prev.filter((item) => item.id !== id));
-      setTotal((prev) => Math.max(0, prev - 1));
     } catch (error) {
       setErrorMessage(toMessage(error, "删除失败"));
     }
+  }, []);
+
+  /**
+   * 多选批量删除：逐条走单条删除命令，每条一个事务、广播一次
+   * `clipboard://deleted`（本地摘除同样由事件监听完成）。单条失败（例如那条
+   * 刚好在别处已被清掉）不中断整批，最后把成败计数交回调用方汇报。
+   */
+  const deleteItems = useCallback(async (ids: readonly string[]) => {
+    let deleted = 0;
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await commands.deleteClipboardItem(id);
+        deleted += 1;
+      } catch {
+        failed += 1;
+      }
+    }
+    return { deleted, failed };
   }, []);
 
   const copyItem = useCallback(async (id: string) => {
@@ -418,6 +440,7 @@ export function useClipboardHistory(options: Options) {
     loadMore,
     setItemGroup,
     deleteItem,
+    deleteItems,
     copyItem,
   };
 }

@@ -1,13 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import DOMPurify from "dompurify";
 import { convertFileSrc } from "@tauri-apps/api/core";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
-import type { AgentAction, AgentResult, ClipboardItem } from "@/types/clipboard";
-import { isCommandError } from "@/types/clipboard";
-import { commands } from "@/lib/commands";
-import { createRequestId } from "@/lib/requestId";
+import type { ClipboardItem } from "@/types/clipboard";
 import { extractDomain, getAppIcon } from "@/lib/sourceIcons";
-import { AgentResultCard } from "./AgentResultCard";
 import { Icon } from "./Icon";
 import { ImageZoom } from "./ImageZoom";
 
@@ -18,10 +14,6 @@ interface Props {
   onCopy: (id: string) => void;
   onPaste: (id: string) => void;
   onClose: () => void;
-  /** AI 未配置时，从结果区直接跳到设置面板里的 AI 助手。 */
-  onOpenSettings: () => void;
-  /** 就这一条打开自然语言对话。 */
-  onAskAi?: (item: ClipboardItem) => void;
 }
 
 function formatFullTime(iso: string): string {
@@ -67,75 +59,16 @@ function htmlPlainLength(html: string): number {
  * 完整的 `content_text` 其实一直是传到前端的，只是界面里没地方显示它。
  * 这个弹窗就是那个地方 —— 顺带也解决了「图片只能看缩略图」的问题。
  */
-export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenSettings, onAskAi }: Props) {
+export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose }: Props) {
   const bodyRef = useRef<HTMLDivElement>(null);
-  const [agentResult, setAgentResult] = useState<AgentResult | null>(null);
-  const [agentError, setAgentError] = useState<string | null>(null);
-  /** 错误码单独记着：`ai_not_configured` 要在旁边给一个"去设置"的入口。 */
-  const [agentErrorCode, setAgentErrorCode] = useState<string | null>(null);
-  const [runningAction, setRunningAction] = useState<AgentAction | null>(null);
-  const [copiedResult, setCopiedResult] = useState(false);
-  /**
-   * 在途请求的号（没有在途请求时为 null）。
-   *
-   * 两个用途，都依赖"号在发起时就已经在前端手里"这一点：
-   * 1. 取消：按号定向取消，号对不上后端不会打断任何请求。
-   * 2. 过期响应守卫：换了条目/关了弹窗之后，迟到回来的结果不能再渲染 ——
-   *    否则上一条内容的结果会挂在新条目上，用户看到的是张冠李戴。
-   */
-  const activeRunRef = useRef<string | null>(null);
-  /**
-   * 当前配的服务名。面板标题原来硬编码 "DeepSeek"，用户把地址改成中转站
-   * 或本地 Ollama 之后就成了假信息 —— 内容发去了哪里必须如实显示。
-   */
-  const [providerLabel, setProviderLabel] = useState<string>("DeepSeek");
-
-  // 依赖 `item?.id` 而不是 `[]`：这个组件在 App 里是常驻挂载的，只跑一次的话，
-  // 用户在同一次会话里改完服务地址、回来再看，右上角仍写着旧服务名。
-  // 按条目刷新让"看哪条"与"发往哪里"两处始终同一次读取。
-  useEffect(() => {
-    commands
-      .getAgentConfig()
-      .then((info) => setProviderLabel(info.provider_label))
-      .catch(() => {
-        /* 读不到就保持默认文案，不影响 AI 操作本身（真正的错误会在点按钮时报出） */
-      });
-  }, [item?.id]);
 
   // 长文打开时从头开始看；不做滚动位置记忆，每次都是新的阅读。
   //
   // 依赖 `item?.id` 而不是 `item`：App.tsx 的 previewItem 是每次从刷新的 items
   // 数组里 find 出来的**同 id 新对象**，按对象身份依赖的话，用户在系统里复制
-  // 任何东西（列表刷新）都会把正在看的结果和进行中的状态一起清掉。
-  // 真正要重置的时机只有"换了另一条内容"（id 变）与"弹窗关掉"（id 变 undefined）。
+  // 任何东西（列表刷新）都会把滚动位置重置。
   useEffect(() => {
     if (item) bodyRef.current?.scrollTo({ top: 0 });
-    setAgentResult(null);
-    setAgentError(null);
-    setAgentErrorCode(null);
-    setRunningAction(null);
-    setCopiedResult(false);
-  }, [item?.id]);
-
-  /**
-   * 离开这条内容（换条目、关弹窗、卸载）时，把还在飞的请求取消掉。两条理由：
-   * 用户已经不打算看这次结果了 —— 让它在后台跑完等于白计费；而结果真回来
-   * 也没地方显示，只会变成串台隐患。
-   *
-   * 依赖同样是 `item?.id`（理由见上面的状态重置 effect）：**同一条目的列表刷新
-   * 不是"离开"**，绝不能因此取消在途请求 —— 那会在审计里留下假的 ai_cancelled。
-   *
-   * 先清 ref 再发取消：清理函数可能因为 id 切换而再次进入，ref 空了就不会
-   * 重复发一轮取消。
-   */
-  useEffect(() => {
-    return () => {
-      const requestId = activeRunRef.current;
-      if (!requestId) return;
-      activeRunRef.current = null;
-      // 取消失败不致命：请求会自然结束，过期响应守卫会挡住它的结果。
-      void commands.cancelAgentAction(requestId).catch(() => {});
-    };
   }, [item?.id]);
 
   const meta = useMemo(() => {
@@ -184,73 +117,7 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
     }
   }
 
-  async function handleAgentAction(action: AgentAction) {
-    if (!item || runningAction) return;
-    const requestId = createRequestId();
-    activeRunRef.current = requestId;
-    setRunningAction(action);
-    setAgentError(null);
-    setAgentErrorCode(null);
-    setCopiedResult(false);
-    try {
-      const result = await commands.runAgentAction(item.id, action, requestId);
-      // 过期响应守卫：换了条目（或已经取消）之后回来的结果不许渲染。
-      if (activeRunRef.current !== requestId) return;
-      setAgentResult(result);
-    } catch (error) {
-      // 失败路径同样要守卫：否则上一条内容的报错会挂在新条目上。
-      if (activeRunRef.current !== requestId) return;
-      if (isCommandError(error)) {
-        setAgentError(error.message);
-        setAgentErrorCode(error.code);
-      } else {
-        setAgentError("AI 操作失败，请稍后重试。");
-      }
-    } finally {
-      // 只有"还是这次请求"才收尾；否则说明它已经过期，状态归零由新条目负责。
-      if (activeRunRef.current === requestId) {
-        activeRunRef.current = null;
-        setRunningAction(null);
-      }
-    }
-  }
-
-  async function handleCopyAgentResult() {
-    if (!agentResult) return;
-    try {
-      await commands.copyTextToClipboard(agentResult.content);
-      setCopiedResult(true);
-    } catch {
-      setAgentError("复制 AI 结果失败。");
-    }
-  }
-
-  /**
-   * 取消进行中的请求。带上在途请求的号 —— 后端只取消号匹配的那一次。
-   * 后端会把那次请求以 `ai_cancelled` 结束，所以这里不用自己造错误文案：
-   * 正常错误路径会把「已取消本次请求。」显示出来（ref 里仍是这个号，
-   * 守卫不会把它挡掉）。
-   */
-  async function handleCancelAction() {
-    const requestId = activeRunRef.current;
-    if (!requestId) return;
-    try {
-      await commands.cancelAgentAction(requestId);
-    } catch {
-      // 取消失败不致命：请求会自然结束，错误路径会正常显示
-    }
-  }
-
   if (!item || !meta) return null;
-
-  const supportsAgent = !meta.isImage && !meta.isFiles;
-  const agentActions: Array<{ action: AgentAction; label: string }> = [
-    { action: "summarize", label: "总结" },
-    { action: "translate_zh", label: "翻译" },
-    { action: "explain", label: "解释" },
-    { action: "extract_tasks", label: "提取待办" },
-    { action: "format_json", label: "格式化 JSON" },
-  ];
 
   return (
     <div
@@ -331,73 +198,6 @@ export function PreviewDialog({ item, iconSrc, onCopy, onPaste, onClose, onOpenS
             <p className="preview-body__text">{item.content_text}</p>
           </div>
         )}
-
-        <section className="agent-panel" aria-label="ClipMaster Agent">
-          <div className="agent-panel__head">
-            <div>
-              <strong>✨ ClipMaster Agent</strong>
-              <span>结果是草稿，原始剪贴板内容不会被修改</span>
-            </div>
-            <span className="agent-panel__model">{providerLabel}</span>
-          </div>
-          {supportsAgent ? (
-            <div className="agent-panel__actions">
-              {onAskAi && (
-                <button
-                  type="button"
-                  className="agent-action agent-action--primary"
-                  disabled={runningAction !== null}
-                  onClick={() => onAskAi(item)}
-                >
-                  问 AI
-                </button>
-              )}
-              {agentActions.map(({ action, label }) => (
-                <button
-                  type="button"
-                  key={action}
-                  className="agent-action"
-                  // 进行中的那个按钮要留给用户按「取消」，所以它自己不能是禁用的；
-                  // 其余按钮在请求期间照旧全部禁用，避免连点发出第二个请求。
-                  disabled={runningAction !== null && runningAction !== action}
-                  onClick={() =>
-                    runningAction === action
-                      ? void handleCancelAction()
-                      : void handleAgentAction(action)
-                  }
-                >
-                  {runningAction === action ? "取消" : label}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <p className="agent-panel__notice">图片和文件理解将在后续版本以明确授权的方式提供。</p>
-          )}
-          {agentError && (
-            <p className="agent-panel__error" role="alert">
-              {agentError}
-              {(agentErrorCode === "ai_not_configured" || agentErrorCode === "ai_invalid_base_url") && (
-                <button
-                  type="button"
-                  className="agent-panel__link"
-                  onClick={() => {
-                    onClose();
-                    onOpenSettings();
-                  }}
-                >
-                  去设置
-                </button>
-              )}
-            </p>
-          )}
-          {agentResult && (
-            <AgentResultCard
-              result={agentResult}
-              copied={copiedResult}
-              onCopy={() => void handleCopyAgentResult()}
-            />
-          )}
-        </section>
 
         <footer className="preview-foot">
           <span className="preview-foot__hint">

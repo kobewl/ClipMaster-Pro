@@ -4,23 +4,16 @@ use std::sync::Arc;
 
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::application::agent_chat::AgentChatService;
-use crate::application::agent_service::{AgentService, REQUEST_COOLDOWN};
 use crate::application::capture_pipeline::CapturePipeline;
 use crate::application::group_service::GroupService;
 use crate::application::history_service::HistoryService;
-use crate::application::planner_service::PlannerService;
-use crate::application::session_service::SessionService;
 use crate::application::settings_service::SettingsService;
 use crate::domain::capture_policy::CaptureGate;
 use crate::domain::error::AppError;
 use crate::domain::ports::SettingsStore;
 use crate::domain::settings::AppSettings;
-use crate::infrastructure::sqlite::agent_run_store::SqliteAgentRunStore;
-use crate::infrastructure::sqlite::chat_store::SqliteChatStore;
 use crate::infrastructure::sqlite::group_repository::SqliteGroupRepository;
 use crate::infrastructure::sqlite::repository::SqliteClipboardRepository;
-use crate::infrastructure::sqlite::session_store::SqliteSessionStore;
 use crate::infrastructure::sqlite::settings_store::SqliteSettingsStore;
 
 #[cfg(target_os = "macos")]
@@ -32,23 +25,10 @@ use crate::infrastructure::clipboard::unsupported::{
     UnsupportedClipboardSource, UnsupportedClipboardWriter,
 };
 
-// 模型密钥的系统安全存储：macOS 钥匙串 / 其它平台明确不可用。
-#[cfg(target_os = "macos")]
-use crate::infrastructure::secret::macos::KeychainSecretStore as PlatformSecretStore;
-#[cfg(not(target_os = "macos"))]
-use crate::infrastructure::secret::unsupported::UnsupportedSecretStore as PlatformSecretStore;
-
 pub struct AppRuntime {
     pub history: Arc<HistoryService>,
-    pub agent: Arc<AgentService>,
     pub settings: Arc<SettingsService>,
     pub groups: Arc<GroupService>,
-    pub sessions: Arc<SessionService>,
-    /// Planner 建议。与 `agent` 共用**同一个** `AgentService` 实例：单飞闸门、
-    /// 启动冷却、按号取消、审计因此都是同一份状态（不新起 service、不新起并发）。
-    pub planner: Arc<PlannerService>,
-    /// 对话 Agent。与 `agent` 共用同一道单飞闸门，正文落在派生表。
-    pub chats: Arc<AgentChatService>,
     pub capture_pipeline: std::sync::Mutex<CapturePipeline>,
     /// 采集开关 + 排除名单的内存投影。watcher 与 pipeline 持有同一份克隆。
     pub capture_gate: CaptureGate,
@@ -112,7 +92,6 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         Arc::new(SqliteClipboardRepository::new(conn.clone()));
     let group_repository: Arc<dyn crate::domain::ports::GroupRepository> =
         Arc::new(SqliteGroupRepository::new(conn.clone()));
-    // 同一个对象当两种端口用：设置项和模型服务配置都存在 app_settings 表里。
     let settings_impl = Arc::new(SqliteSettingsStore::new(conn.clone()));
     let settings_store: Arc<dyn SettingsStore> = settings_impl.clone();
 
@@ -158,31 +137,8 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
         writer,
         settings_store.clone(),
     ));
-    let secrets: Arc<dyn crate::domain::ports::SecretStore> = Arc::new(PlatformSecretStore::new());
-    let run_store: Arc<dyn crate::domain::ports::AgentRunStore> =
-        Arc::new(SqliteAgentRunStore::new(conn.clone()));
-    // 唯一的构造点：单飞闸门在 AgentService 内部，冷却只在这里开启 ——
-    // 测试一律走 `new()` 默认的 0，不被节流干扰。
-    let agent = Arc::new(
-        AgentService::new(history.clone(), secrets, settings_impl, run_store)
-            .with_cooldown(REQUEST_COOLDOWN),
-    );
     let settings = Arc::new(SettingsService::new(settings_store.clone()));
     let groups = Arc::new(GroupService::new(group_repository));
-    // 会话派生数据：store 走同一把连接（外键 ON，级联与孤儿触发器才生效），
-    // service 同时拿到条目取数口（Task 3 的候选取数要用它）。
-    let session_store: Arc<dyn crate::domain::ports::AgentSessionStore> =
-        Arc::new(SqliteSessionStore::new(conn.clone()));
-    let sessions = Arc::new(SessionService::new(
-        repository.clone(),
-        session_store.clone(),
-    ));
-    // Planner 与 sessions 共用同一个 store（clone 出去），agent 也复用上面那一个
-    // 实例 —— 「复用同一道闸门」在接线上一眼可见，没有第二个构造点。
-    let planner = Arc::new(PlannerService::new(session_store, agent.clone()));
-    let chat_store: Arc<dyn crate::domain::ports::AgentChatStore> =
-        Arc::new(SqliteChatStore::new(conn.clone()));
-    let chats = Arc::new(AgentChatService::new(agent.clone(), chat_store));
 
     spawn_retention_cleanup_timer(history.clone(), settings_store.clone());
 
@@ -212,12 +168,8 @@ pub fn build_runtime(app_handle: &AppHandle) -> Result<AppRuntime, String> {
 
     Ok(AppRuntime {
         history,
-        agent,
         settings,
         groups,
-        sessions,
-        planner,
-        chats,
         capture_pipeline: std::sync::Mutex::new(capture_pipeline),
         capture_gate,
         settings_store,

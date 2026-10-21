@@ -1,15 +1,6 @@
-pub mod agent_chat;
-pub mod agent_prompt;
-pub mod agent_service;
-pub mod agent_tools;
 pub mod capture_pipeline;
 pub mod group_service;
 pub mod history_service;
-pub mod planner_build;
-pub mod planner_service;
 pub mod query_parse;
 pub mod rerank;
-pub mod sensitive_policy;
-pub mod session_build;
-pub mod session_service;
 pub mod settings_service;

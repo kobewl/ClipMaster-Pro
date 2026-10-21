@@ -118,9 +118,9 @@ impl SqliteClipboardRepository {
         RepositoryError::Database(err.to_string())
     }
 
-    /// 条目行的唯一映射口径。`pub(crate)` 而不是私有：会话详情要按同一口径把
-    /// `clipboard_items` 的行映射成 `ClipboardItem`（`session_store::find` 的
-    /// JOIN 取数），两份 row 映射迟早会漂移。
+    /// 条目行的唯一映射口径。`pub(crate)` 而不是私有：仓储之外的读模型
+    /// （如将来的对外查询接口）要按同一口径把 `clipboard_items` 的行映射成
+    /// `ClipboardItem`，两份 row 映射迟早会漂移。
     pub(crate) fn row_to_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<ClipboardItem> {
         let id_str: String = row.get("id")?;
         let content_type_str: String = row.get("content_type")?;
@@ -148,8 +148,8 @@ impl SqliteClipboardRepository {
 
 /// RFC3339 文本 → `DateTime<Utc>`，解析失败退回当前时刻。
 ///
-/// `pub(crate)`：会话的读模型（`session_store`）与条目行用同一套时间解析口径 ——
-/// 与 `row_to_item` 同一个理由，两份解析的退路不同就会让同一条记录在
+/// `pub(crate)`：与 `row_to_item` 同一个理由 —— 仓储之外的读模型与条目行
+/// 用同一套时间解析口径，两份解析的退路不同就会让同一条记录在
 /// 两个接口里显示不同时间。
 pub(crate) fn parse_datetime(value: &str) -> DateTime<Utc> {
     DateTime::parse_from_rfc3339(value)
@@ -785,74 +785,6 @@ impl ClipboardRepository for SqliteClipboardRepository {
                 deleted_count,
                 image_paths,
             })
-        })
-        .await
-        .map_err(|e| RepositoryError::Database(e.to_string()))?
-    }
-
-    /// 会话候选取数。与 `search` 的 `since` 同样按 `last_copied_at` 开窗：会话按
-    /// 「最近一次复制」成组，同一条内容被再复制一次就该回到工作记忆的顶端。
-    /// 排序与列表路径同一口径（`last_copied_at DESC`），rowid 兜平局时的稳定序。
-    async fn list_since(
-        &self,
-        since: &str,
-        limit: u32,
-    ) -> Result<Vec<ClipboardItem>, RepositoryError> {
-        let conn = self.conn.clone();
-        let since = since.to_string();
-        tokio::task::spawn_blocking(move || {
-            let conn = lock_conn(&conn);
-            // last_copied_at 是 RFC3339 UTC 文本（row_to_item 的解析口径），
-            // 同一写入路径生成，字典序即时间序。
-            let mut stmt = conn
-                .prepare(
-                    "SELECT clipboard_items.* FROM clipboard_items
-                     WHERE clipboard_items.last_copied_at >= ?1
-                     ORDER BY clipboard_items.last_copied_at DESC, clipboard_items.rowid DESC
-                     LIMIT ?2",
-                )
-                .map_err(Self::map_db_err)?;
-            let rows = stmt
-                .query_map(params![since, limit], Self::row_to_item)
-                .map_err(Self::map_db_err)?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(Self::map_db_err)
-        })
-        .await
-        .map_err(|e| RepositoryError::Database(e.to_string()))?
-    }
-
-    /// 按 id 批量取：一条 `IN` 查询而不是 N 次单查（用户一次可能选中 20 条）；
-    /// 只返回仍然存在的那些，顺序按 `last_copied_at ASC`（成员顺序口径，
-    /// 和 `session_build` 的排序同一套）。
-    async fn get_many(&self, ids: &[String]) -> Result<Vec<ClipboardItem>, RepositoryError> {
-        if ids.is_empty() {
-            return Ok(Vec::new());
-        }
-        let conn = self.conn.clone();
-        let ids = ids.to_vec();
-        tokio::task::spawn_blocking(move || {
-            let conn = lock_conn(&conn);
-            // 占位符按 id 个数动态生成（不加引号拼接字符串，参数照旧走绑定）。
-            let placeholders = (1..=ids.len())
-                .map(|index| format!("?{index}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let sql = format!(
-                "SELECT clipboard_items.* FROM clipboard_items
-                 WHERE clipboard_items.id IN ({placeholders})
-                 ORDER BY clipboard_items.last_copied_at ASC, clipboard_items.rowid ASC"
-            );
-            let mut stmt = conn.prepare(&sql).map_err(Self::map_db_err)?;
-            let params: Vec<&dyn rusqlite::types::ToSql> = ids
-                .iter()
-                .map(|id| id as &dyn rusqlite::types::ToSql)
-                .collect();
-            let rows = stmt
-                .query_map(params.as_slice(), Self::row_to_item)
-                .map_err(Self::map_db_err)?;
-            rows.collect::<Result<Vec<_>, _>>()
-                .map_err(Self::map_db_err)
         })
         .await
         .map_err(|e| RepositoryError::Database(e.to_string()))?

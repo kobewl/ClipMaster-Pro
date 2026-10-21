@@ -2,8 +2,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::commands::dto::{
     AppSettingsDto, ClipGroupDto, ClipboardItemDto, ClipboardItemIdPayload, CreateGroupDto,
-    ListQueryDto, ListResultDto, RunAgentActionBatchDto, RunAgentActionDto, SourceAppDto,
-    SourceIconRequestDto, UpdateGroupDto,
+    ListQueryDto, ListResultDto, SourceAppDto, SourceIconRequestDto, UpdateGroupDto,
 };
 use crate::domain::error::CommandError;
 use crate::domain::model::ContentType;
@@ -17,33 +16,6 @@ fn emit_or_warn<T: serde::Serialize + Clone>(app: &AppHandle, event: &str, paylo
 }
 
 const MAX_PAGE_SIZE: u32 = 500;
-
-/// Agent 的唯一前端入口：内容必须由已保存的条目 ID 取得，不能由 UI 直接上传。
-#[tauri::command]
-pub async fn run_agent_action(
-    runtime: State<'_, AppRuntime>,
-    request: RunAgentActionDto,
-) -> Result<crate::application::agent_service::AgentResult, CommandError> {
-    runtime
-        .agent
-        // 号由前端预置：它要在取消、关窗清理、过期响应守卫三处用的是同一个号。
-        .run_with_request_id(&request.item_id, request.action, request.request_id)
-        .await
-        .map_err(|err| CommandError::new(err.code(), err.to_string(), err.retryable()))
-}
-
-/// 多条内容一起跑一个动作（跨记录归纳）。
-#[tauri::command]
-pub async fn run_agent_action_batch(
-    runtime: State<'_, AppRuntime>,
-    request: RunAgentActionBatchDto,
-) -> Result<crate::application::agent_service::AgentResult, CommandError> {
-    runtime
-        .agent
-        .run_many_with_request_id(&request.item_ids, request.action, request.request_id)
-        .await
-        .map_err(|err| CommandError::new(err.code(), err.to_string(), err.retryable()))
-}
 
 /// 把前端的预设时间档换算成筛选起点（RFC3339 / UTC，与 last_copied_at 列的存储
 /// 格式一致 —— 字符串比较即时间比较）。None = 不限时间。

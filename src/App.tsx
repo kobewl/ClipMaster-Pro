@@ -6,7 +6,6 @@ import { HistoryList } from "@/components/HistoryList";
 import { Icon } from "@/components/Icon";
 import { StatusBar } from "@/components/StatusBar";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
-import type { AgentChatSeed } from "@/components/AgentChatDialog";
 import { useClipboardHistory } from "@/hooks/useClipboardHistory";
 import { useGroups } from "@/hooks/useGroups";
 import { useDebouncedValue } from "@/hooks/useDebouncedValue";
@@ -18,22 +17,13 @@ import type { AppSettings } from "@/types/clipboard";
 import { isCommandError } from "@/types/clipboard";
 import { applyTheme, isThemePreference } from "@/lib/theme";
 
-// 弹窗按需拆包：首屏只需要列表，设置 / 预览（含 DOMPurify）/ Agent 工作台
+// 弹窗按需拆包：首屏只需要列表，设置 / 预览（含 DOMPurify）
 // 等第一次打开时才加载各自的 chunk。ConfirmDialog 很小，保持静态 import。
 const SettingsPanel = lazy(() =>
   import("@/components/SettingsPanel").then((m) => ({ default: m.SettingsPanel })),
 );
 const PreviewDialog = lazy(() =>
   import("@/components/PreviewDialog").then((m) => ({ default: m.PreviewDialog })),
-);
-const AgentBatchDialog = lazy(() =>
-  import("@/components/AgentBatchDialog").then((m) => ({ default: m.AgentBatchDialog })),
-);
-const AgentFlowDialog = lazy(() =>
-  import("@/components/AgentFlowDialog").then((m) => ({ default: m.AgentFlowDialog })),
-);
-const AgentChatDialog = lazy(() =>
-  import("@/components/AgentChatDialog").then((m) => ({ default: m.AgentChatDialog })),
 );
 
 /**
@@ -67,12 +57,6 @@ export default function App() {
   const [previewId, setPreviewId] = useState<string | null>(null);
   /** 多选模式。 */
   const [multiSelect, setMultiSelect] = useState(false);
-  /** 多条目 AI 工作台是否打开。 */
-  const [agentBatchOpen, setAgentBatchOpen] = useState(false);
-  /** Flow 会话工作台是否打开。 */
-  const [agentFlowOpen, setAgentFlowOpen] = useState(false);
-  const [agentChatOpen, setAgentChatOpen] = useState(false);
-  const [agentChatSeed, setAgentChatSeed] = useState<AgentChatSeed | null>(null);
   const [selectedIds, setSelectedIds] = useState<ReadonlySet<string>>(() => new Set());
 
   const toastTimerRef = useRef<number | null>(null);
@@ -259,9 +243,6 @@ export default function App() {
   // 懒加载弹窗：第一次打开才挂载（并加载 chunk），之后常驻，见 useOpenedOnce。
   const settingsEverOpened = useOpenedOnce(settingsOpen);
   const previewEverOpened = useOpenedOnce(previewItem !== null);
-  const agentBatchEverOpened = useOpenedOnce(agentBatchOpen);
-  const agentFlowEverOpened = useOpenedOnce(agentFlowOpen);
-  const agentChatEverOpened = useOpenedOnce(agentChatOpen);
 
   const handleCopyMerged = useCallback(async () => {
     if (!canMerge) return;
@@ -287,41 +268,13 @@ export default function App() {
     }
   }, [canMerge, merged.text, exitMultiSelect, recoverFromPasteFailure]);
 
-  /**
-   * 把当前勾选的这批记录手动存成一个会话（Flow）。
-   *
-   * 存完**不打开工作台**：用户还在多选流程里，跳走等于把他打断。提示里告诉他
-   * 去哪儿看（状态栏「会话」），他自己决定什么时候去。
-   */
-  const handleSaveAgentSession = useCallback(async () => {
-    if (selectedIds.size < 2) return;
-    try {
-      await commands.createAgentSession([...selectedIds]);
-      exitMultiSelect();
-      showToast("已保存为会话（在状态栏「会话」里查看）");
-    } catch (error) {
-      showToast(isCommandError(error) ? error.message : "保存会话失败");
-    }
-  }, [selectedIds, exitMultiSelect, showToast]);
-
-  function openAgentChat(seed: AgentChatSeed | null) {
-    setAgentChatSeed(seed);
-    setAgentChatOpen(true);
-  }
-
-  // Esc 的优先级：预览弹窗 → AI 归纳 → 问 AI → 会话工作台 → 删除确认 → 多选 → 设置面板 →
+  // Esc 的优先级：预览弹窗 → 删除确认 → 多选 → 设置面板 →
   // 清空确认 → 清空搜索词。走完一档就停，不会一次把好几层都关掉。
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if (event.key !== "Escape") return;
       if (previewId !== null) {
         setPreviewId(null);
-      } else if (agentBatchOpen) {
-        setAgentBatchOpen(false);
-      } else if (agentChatOpen) {
-        setAgentChatOpen(false);
-      } else if (agentFlowOpen) {
-        setAgentFlowOpen(false);
       } else if (confirmDeleteOpen) {
         setConfirmDeleteOpen(false);
       } else if (multiSelect) {
@@ -336,7 +289,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [settingsOpen, confirmClearOpen, confirmDeleteOpen, searchInput, previewId, multiSelect, exitMultiSelect, agentBatchOpen, agentChatOpen, agentFlowOpen]);
+  }, [settingsOpen, confirmClearOpen, confirmDeleteOpen, searchInput, previewId, multiSelect, exitMultiSelect]);
 
   // 列表刷新（删除、换分组）后把已不存在的 id 从选择集里摘掉，
   // 否则底部会显示「已选 3 条」而列表里只有 2 条被勾上。
@@ -530,22 +483,7 @@ export default function App() {
           onCancelMultiSelect={exitMultiSelect}
           onCopyMerged={handleCopyMerged}
           onPasteMerged={handlePasteMerged}
-          onRunAgentBatch={() => setAgentBatchOpen(true)}
-          onSaveAgentSession={() => void handleSaveAgentSession()}
-          onOpenAgentFlow={() => setAgentFlowOpen(true)}
           onDeleteSelected={() => setConfirmDeleteOpen(true)}
-          onOpenAgentChat={() => {
-            if (multiSelect) {
-              openAgentChat({
-                itemIds: [...selectedIds],
-                startFresh: true,
-              });
-              return;
-            }
-            openAgentChat({
-              searchHint: debouncedSearch.trim() || undefined,
-            });
-          }}
         />
       </section>
 
@@ -595,50 +533,6 @@ export default function App() {
         onCancel={() => setConfirmDeleteOpen(false)}
       />
 
-      {agentBatchEverOpened && (
-        <Suspense fallback={null}>
-          <AgentBatchDialog
-            open={agentBatchOpen}
-            items={items.filter((item) => selectedIds.has(item.id))}
-            onClose={() => setAgentBatchOpen(false)}
-            onOpenSettings={() => {
-              setAgentBatchOpen(false);
-              setSettingsOpen(true);
-            }}
-          />
-        </Suspense>
-      )}
-
-      {/* 会话工作台：打开那一次会触发服务端重算（关键判断 10）。
-          `onOpenSettings` 照批量入口（:500-503）的写法：先关掉工作台再打开设置 ——
-          用户是从建议面板里那条「去设置」过来的，回来时不该还挂着那个面板。 */}
-      {agentFlowEverOpened && (
-        <Suspense fallback={null}>
-          <AgentFlowDialog
-            open={agentFlowOpen}
-            onClose={() => setAgentFlowOpen(false)}
-            onOpenSettings={() => {
-              setAgentFlowOpen(false);
-              setSettingsOpen(true);
-            }}
-          />
-        </Suspense>
-      )}
-
-      {agentChatEverOpened && (
-        <Suspense fallback={null}>
-          <AgentChatDialog
-            open={agentChatOpen}
-            seed={agentChatSeed}
-            onClose={() => setAgentChatOpen(false)}
-            onOpenSettings={() => {
-              setAgentChatOpen(false);
-              setSettingsOpen(true);
-            }}
-          />
-        </Suspense>
-      )}
-
       {previewEverOpened && (
         <Suspense fallback={null}>
           <PreviewDialog
@@ -658,11 +552,6 @@ export default function App() {
               handlePaste(id);
             }}
             onClose={() => setPreviewId(null)}
-            onOpenSettings={() => setSettingsOpen(true)}
-            onAskAi={(item) => {
-              setPreviewId(null);
-              openAgentChat({ itemIds: [item.id], startFresh: true });
-            }}
           />
         </Suspense>
       )}

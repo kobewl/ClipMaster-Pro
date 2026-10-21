@@ -22,14 +22,6 @@ interface StatusBarProps {
   onCancelMultiSelect: () => void;
   onCopyMerged: () => void;
   onPasteMerged: () => void;
-  /** 打开多条目 AI 工作台（把选中的这一批交给模型归纳）。 */
-  onRunAgentBatch: () => void;
-  /** 把这批选中的记录手动存成一个会话（Flow）。 */
-  onSaveAgentSession: () => void;
-  /** 打开 Flow 会话工作台。 */
-  onOpenAgentFlow: () => void;
-  /** 打开自然语言对话（主入口）。 */
-  onOpenAgentChat: () => void;
   /** 删除勾选的这批记录（App 层负责先弹二次确认）。 */
   onDeleteSelected: () => void;
 }
@@ -41,7 +33,7 @@ import { Icon } from "./Icon";
  *
  * 多选模式下它被「批量操作条」**接管**（而不是在列表上方浮一条）：
  * 悬浮条会盖住最后几行，而多选恰恰需要看着列表勾选。
- * 操作条比常态高 10px（32 → 42），为的是放得下三个按钮；
+ * 操作条比常态高 10px（32 → 42），为的是放得下按钮组；
  * 这点位移发生在一次明显的模式切换里，不会显得突兀。
  */
 export function StatusBar({
@@ -59,10 +51,6 @@ export function StatusBar({
   onCancelMultiSelect,
   onCopyMerged,
   onPasteMerged,
-  onRunAgentBatch,
-  onSaveAgentSession,
-  onOpenAgentFlow,
-  onOpenAgentChat,
   onDeleteSelected,
 }: StatusBarProps) {
   if (multiSelect) {
@@ -101,45 +89,6 @@ export function StatusBar({
           >
             <Icon name="trash" />
             删除
-          </button>
-          <button
-            type="button"
-            onClick={onSaveAgentSession}
-            disabled={selectedCount < 2}
-            title={
-              selectedCount < 2
-                ? "会话至少要 2 条记录"
-                : "把这批记录手动存成一个会话"
-            }
-            className="button button--secondary button--compact"
-          >
-            存为会话
-          </button>
-          <button
-            type="button"
-            onClick={onOpenAgentChat}
-            disabled={selectedCount === 0}
-            title={
-              selectedCount === 0
-                ? "先勾选要问的记录"
-                : "就这几条问 AI"
-            }
-            className="button button--secondary button--compact"
-          >
-            问 AI
-          </button>
-          <button
-            type="button"
-            onClick={onRunAgentBatch}
-            disabled={selectedCount === 0}
-            title={
-              selectedCount === 0
-                ? "先勾选要处理的记录"
-                : "把选中的这一批交给 AI 做跨记录归纳"
-            }
-            className="button button--secondary button--compact"
-          >
-            ✨ AI 归纳
           </button>
           <button
             type="button"
@@ -201,24 +150,6 @@ export function StatusBar({
             多选
           </button>
         )}
-        <button
-          type="button"
-          onClick={onOpenAgentChat}
-          title="用自然语言问剪贴板里的内容"
-          className="status-action"
-        >
-          <Icon name="sparkles" className="h-3 w-3" />
-          问 AI
-        </button>
-        <button
-          type="button"
-          onClick={onOpenAgentFlow}
-          title="查看按时间与来源归组的会话"
-          className="status-action"
-        >
-          <Icon name="clock" className="h-3 w-3" />
-          会话
-        </button>
         <button
           type="button"
           onClick={onClearHistory}

@@ -6,19 +6,11 @@ pub mod lifecycle;
 
 use tauri::Manager;
 
-use crate::commands::agent_commands::{
-    cancel_agent_action, clear_agent_derived_data, clear_agent_key, clear_agent_runs,
-    create_agent_session, delete_agent_chat, delete_agent_session, get_agent_chat,
-    get_agent_config, get_agent_run, get_agent_session, list_agent_chats, list_agent_runs,
-    list_agent_sessions, reset_agent_endpoint, save_agent_endpoint, save_agent_key,
-    send_agent_chat, suggest_session_actions, test_agent_connection,
-};
 use crate::commands::clipboard_commands::{
     clear_history, copy_clipboard_item, copy_text_to_clipboard, create_group,
     delete_clipboard_item, delete_group, get_settings, get_source_icons, list_clipboard_items,
-    list_groups, list_recent_source_apps, paste_clipboard_item, paste_text, run_agent_action,
-    run_agent_action_batch, set_capture_enabled, set_excluded_apps, set_item_group, update_group,
-    update_settings, update_shortcut,
+    list_groups, list_recent_source_apps, paste_clipboard_item, paste_text, set_capture_enabled,
+    set_excluded_apps, set_item_group, update_group, update_settings, update_shortcut,
 };
 use crate::commands::system_commands::{
     check_for_updates, download_and_install_update, get_autostart_enabled, set_autostart_enabled,
@@ -84,7 +76,7 @@ pub fn run() {
             // 的 `LSUIElement`（两处都要，原因写在那边）。
             //
             // 为什么这么做：本应用的入口是全局快捷键（⌘`）和菜单栏图标，Dock
-            // 图标是冗余的展示面。窗口在 agent 模式下仍能正常显示并获得焦点。
+            // 图标是冗余的展示面。窗口仍能正常显示并获得焦点。
             //
             // 退出方式随之改变：Dock 右键「退出」没有了，走菜单栏托盘的
             // 「退出 ClipMaster Pro」，或窗口聚焦时 ⌘Q。
@@ -163,33 +155,11 @@ pub fn run() {
             set_autostart_enabled,
             check_for_updates,
             download_and_install_update,
-            run_agent_action,
-            run_agent_action_batch,
-            cancel_agent_action,
-            get_agent_config,
-            save_agent_key,
-            clear_agent_key,
-            save_agent_endpoint,
-            reset_agent_endpoint,
-            test_agent_connection,
-            list_agent_runs,
-            clear_agent_runs,
-            get_agent_run,
-            list_agent_sessions,
-            get_agent_session,
-            create_agent_session,
-            delete_agent_session,
-            clear_agent_derived_data,
-            suggest_session_actions,
-            list_agent_chats,
-            get_agent_chat,
-            send_agent_chat,
-            delete_agent_chat,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
         .run(|app_handle, event| {
-            // macOS：隐藏 Dock 图标（应用只作为菜单栏 agent 存在）。
+            // macOS：隐藏 Dock 图标（应用只作为菜单栏常驻应用存在）。
             //
             // 为什么必须在这里、而不是 `setup` 里设：tao 在
             // `applicationDidFinishLaunching` 时会按它自己的默认值把应用设回

@@ -1,9 +1,6 @@
-pub mod agent_run_store;
-pub mod chat_store;
 pub mod group_repository;
 pub mod migrations;
 pub mod repository;
-pub mod session_store;
 pub mod settings_store;
 
 use std::path::Path;
@@ -16,7 +13,7 @@ use rusqlite::Connection;
 /// 持锁线程 panic 时，rusqlite `Transaction` 的 Drop 会回滚未提交的事务
 /// （Cargo.toml 没有 `panic = "abort"`，会正常 unwind），连接本身仍然可用。
 /// 如果不恢复，之后所有 DB 调用都会跟着 panic（或永久报错），一次偶发 panic
-/// 就让整个应用的历史、设置、会话全部不可用。所有 store 统一走这里。
+/// 就让整个应用的历史、设置、分组全部不可用。所有 store 统一走这里。
 pub(crate) fn lock_conn(conn: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     conn.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
 }

@@ -2,7 +2,7 @@
 
 use rusqlite::Connection;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 const MIGRATIONS: &[(i64, &str)] = &[
     (
@@ -268,6 +268,22 @@ const MIGRATIONS: &[(i64, &str)] = &[
     DROP INDEX IF EXISTS idx_clipboard_items_search_text;
     DROP INDEX IF EXISTS idx_clipboard_items_favorite_time;
     DROP INDEX IF EXISTS idx_clipboard_items_legacy_id;
+    "#,
+    ),
+    // 1.4.0 起移除内置 AI（问 AI / AI 归纳 / Flow 会话 / 对话）：删掉全部 AI 派生表。
+    // 数据都是派生的（原始剪贴板记录在 clipboard_items，不受影响）；先删子表再删
+    // 父表，外键约束（迁移执行时 foreign_keys=ON）不会拦截；表上的索引与触发器
+    // 随表一起消失。`app_settings` 里残留的 ai_base_url / ai_model 键也一并清掉。
+    (
+        12,
+        r#"
+    DROP TABLE IF EXISTS agent_run_items;
+    DROP TABLE IF EXISTS agent_runs;
+    DROP TABLE IF EXISTS agent_session_items;
+    DROP TABLE IF EXISTS agent_sessions;
+    DROP TABLE IF EXISTS agent_chat_messages;
+    DROP TABLE IF EXISTS agent_chats;
+    DELETE FROM app_settings WHERE key IN ('ai_base_url', 'ai_model');
     "#,
     ),
 ];
@@ -565,5 +581,73 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// 停在 v11 的库（真机升级的样子）跑完迁移 12：六张 AI 派生表全部消失，
+    /// `app_settings` 里的模型配置键被清掉，剪贴板历史原样保留。
+    #[test]
+    fn migration_12_drops_agent_tables_on_v11_database() {
+        assert_eq!(MIGRATIONS[10].0, 11, "切片 [..11] 必须正好停在 v11");
+        let mut conn = Connection::open_in_memory().expect("内存库");
+        apply_migrations(&mut conn, &MIGRATIONS[..11]).expect("迁移到 v11");
+
+        let agent_tables = [
+            "agent_runs",
+            "agent_run_items",
+            "agent_sessions",
+            "agent_session_items",
+            "agent_chats",
+            "agent_chat_messages",
+        ];
+        let table_exists = |conn: &Connection, name: &str| -> bool {
+            conn.query_row(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [name],
+                |row| row.get::<_, i64>(0),
+            )
+            .expect("查 sqlite_master")
+                > 0
+        };
+        for name in agent_tables {
+            assert!(table_exists(&conn, name), "v11 应该还有 {name}");
+        }
+
+        conn.execute(
+            "INSERT INTO app_settings (key, value) VALUES ('ai_base_url', 'https://example.com')",
+            [],
+        )
+        .expect("写入模型配置键");
+        conn.execute(
+            "INSERT INTO clipboard_items
+                (id, content_type, content_text, fingerprint, search_text, is_favorite, group_id,
+                 created_at, updated_at, last_copied_at, source_app, source_url, legacy_id)
+             VALUES ('44444444-4444-4444-4444-444444444444', 'text', 'v11 时代的内容',
+                     'fp-v11', 'v11 时代的内容', 0, NULL,
+                     '2026-01-01T00:00:00+00:00', '2026-01-01T00:00:00+00:00',
+                     '2026-01-01T00:00:00+00:00', 'Safari', NULL, NULL)",
+            [],
+        )
+        .expect("写入 v11 行");
+
+        run_migrations(&mut conn).expect("升级到最新版本");
+
+        for name in agent_tables {
+            assert!(
+                !table_exists(&conn, name),
+                "迁移 12 之后 {name} 应该已被删除"
+            );
+        }
+        let ai_keys: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM app_settings WHERE key LIKE 'ai_%'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("数配置键");
+        assert_eq!(ai_keys, 0, "模型配置键应该已被清掉");
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM clipboard_items", [], |row| row.get(0))
+            .expect("数行数");
+        assert_eq!(count, 1, "剪贴板历史必须原样保留");
     }
 }
